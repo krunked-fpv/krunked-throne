@@ -71,6 +71,8 @@ export interface InputManagerOptions {
   onUserInteraction?: (mode: InputDeviceMode) => void;
 }
 
+const TOUCH_COMPAT_MOUSE_WINDOW_MS = 450;
+
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
@@ -136,9 +138,10 @@ export class InputManager {
   private activeMenuTouchPointerId: number | null = null;
 
   // Dedup timestamps between PointerEvent and Mouse/TouchEvent
-  private lastPointerMouseMs = -1000;
-  private lastPointerTouchMs = -1000;
-  private lastMouseDownPointerMs = -1000;
+  private lastPointerMouseMs = -10000;
+  private lastPointerTouchMs = -10000;
+  private lastAnyTouchMs = -10000;
+  private lastMouseDownPointerMs = -10000;
 
   // Edge-triggered simulation latches (cleared on consumeSimInput / clearSimLatches)
   private firePressed = false;
@@ -525,15 +528,17 @@ export class InputManager {
   simulateTouchStartLogical(pointerId: number, logicalX: number, logicalY: number): void {
     const x = clamp(logicalX, 0, this.logicalWidth);
     const y = clamp(logicalY, 0, this.logicalHeight);
-    this.setDeviceMode('touch');
 
     if (this.gameplayActive) {
-      if (this.controlSettings.touchMode !== 'off') {
-        this.touch.handleGameplayTouchStart(pointerId, x, y);
+      if (this.controlSettings.touchMode === 'off') {
+        return;
       }
+      this.setDeviceMode('touch');
+      this.touch.handleGameplayTouchStart(pointerId, x, y);
       return;
     }
 
+    this.setDeviceMode('touch');
     // Menu tap / slider drag start
     this.pointerLogicalX = x;
     this.pointerLogicalY = y;
@@ -546,15 +551,17 @@ export class InputManager {
   simulateTouchMoveLogical(pointerId: number, logicalX: number, logicalY: number): void {
     const x = clamp(logicalX, 0, this.logicalWidth);
     const y = clamp(logicalY, 0, this.logicalHeight);
-    this.setDeviceMode('touch');
 
     if (this.gameplayActive) {
-      if (this.controlSettings.touchMode !== 'off') {
-        this.touch.handleGameplayTouchMove(pointerId, x, y);
+      if (this.controlSettings.touchMode === 'off') {
+        return;
       }
+      this.setDeviceMode('touch');
+      this.touch.handleGameplayTouchMove(pointerId, x, y);
       return;
     }
 
+    this.setDeviceMode('touch');
     if (this.activeMenuTouchPointerId === pointerId) {
       this.pointerLogicalX = x;
       this.pointerLogicalY = y;
@@ -607,6 +614,7 @@ export class InputManager {
     if (e.pointerType === 'touch') {
       e.preventDefault();
       this.lastPointerTouchMs = this.nowMsFn();
+      this.lastAnyTouchMs = this.lastPointerTouchMs;
       if (this.canvas && typeof this.canvas.setPointerCapture === 'function') {
         try {
           this.canvas.setPointerCapture(e.pointerId);
@@ -632,6 +640,7 @@ export class InputManager {
         e.preventDefault();
       }
       this.lastPointerTouchMs = this.nowMsFn();
+      this.lastAnyTouchMs = this.lastPointerTouchMs;
       this.simulateTouchMoveLogical(e.pointerId, pos.x, pos.y);
       return;
     }
@@ -643,6 +652,7 @@ export class InputManager {
   private onPointerUp(e: PointerEvent): void {
     if (e.pointerType === 'touch') {
       this.lastPointerTouchMs = this.nowMsFn();
+      this.lastAnyTouchMs = this.lastPointerTouchMs;
       if (this.canvas && typeof this.canvas.releasePointerCapture === 'function') {
         try {
           if (this.canvas.hasPointerCapture?.(e.pointerId)) {
@@ -662,6 +672,7 @@ export class InputManager {
 
   private onPointerCancel(e: PointerEvent): void {
     if (e.pointerType === 'touch') {
+      this.lastAnyTouchMs = this.nowMsFn();
       this.simulateTouchEnd(e.pointerId);
     } else {
       this.mouseButtonsHeld.clear();
@@ -671,6 +682,7 @@ export class InputManager {
   private onTouchStart(e: TouchEvent): void {
     e.preventDefault();
     const now = this.nowMsFn();
+    this.lastAnyTouchMs = now;
     if (now - this.lastPointerTouchMs < 25) {
       return; // Already handled by PointerEvent
     }
@@ -684,6 +696,7 @@ export class InputManager {
   private onTouchMove(e: TouchEvent): void {
     e.preventDefault();
     const now = this.nowMsFn();
+    this.lastAnyTouchMs = now;
     if (now - this.lastPointerTouchMs < 25) {
       return;
     }
@@ -696,6 +709,7 @@ export class InputManager {
 
   private onTouchEnd(e: TouchEvent): void {
     const now = this.nowMsFn();
+    this.lastAnyTouchMs = now;
     if (now - this.lastPointerTouchMs < 25) {
       return;
     }
@@ -709,6 +723,7 @@ export class InputManager {
     if (!this.canvas || isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
     if (now - this.lastPointerMouseMs < 6) return;
+    if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
     const pos = this.mapClientEvent(e.clientX, e.clientY);
     this.simulateMouseMoveLogical(pos.x, pos.y);
   }
@@ -717,6 +732,7 @@ export class InputManager {
     if (isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
     if (now - this.lastMouseDownPointerMs < 12) return;
+    if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
     if (this.canvas) {
       const pos = this.mapClientEvent(e.clientX, e.clientY);
       this.simulateMouseMoveLogical(pos.x, pos.y);
@@ -728,6 +744,7 @@ export class InputManager {
     if (isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
     if (now - this.lastPointerMouseMs < 6) return;
+    if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
     this.simulateMouseButton(e.button, false);
   }
 
@@ -837,7 +854,7 @@ export class InputManager {
       this.pointerLogicalX = clamp(scr.x, 0, camera.viewportWidth);
       this.pointerLogicalY = clamp(scr.y, 0, camera.viewportHeight);
     } else if (
-      this.deviceMode === 'touch' &&
+      this.isTouchOverlayVisible() &&
       playerWorldX !== undefined &&
       playerWorldY !== undefined
     ) {

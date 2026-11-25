@@ -449,6 +449,15 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
       ltResting = a(3) < -0.5 ? a(3) : 0;
       rtResting = a(4) < -0.5 ? a(4) : 0;
     }
+  } else if (isXboxOrLinuxXpadId(pad.id) && len >= 6) {
+    // Cold-boot Linux xpad/evdev Xbox pad where triggers report 0 until first touch/release (-1)
+    profile = 'linux-xpad';
+    ltAxis = 2;
+    rtAxis = 5;
+    ltResting = a(2) < -0.5 ? a(2) : 0;
+    rtResting = a(5) < -0.5 ? a(5) : 0;
+    rxAxis = 3;
+    ryAxis = 4;
   } else {
     // Generic non-standard: check if any single axis 2..5 is resting at -1
     if (a2Neg && len >= 5) {
@@ -458,9 +467,24 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
       ryAxis = 4;
       if (len >= 6) {
         rtAxis = 5;
-        rtResting = a(5);
+        rtResting = a(5) < -0.5 ? a(5) : 0;
       }
       profile = 'linux-xpad';
+    } else if (a5Neg && len >= 6) {
+      ltAxis = 2;
+      ltResting = a(2) < -0.5 ? a(2) : 0;
+      rtAxis = 5;
+      rtResting = a(5);
+      rxAxis = 3;
+      ryAxis = 4;
+      profile = 'linux-xpad';
+    } else if (a4Neg && len >= 6) {
+      ltAxis = 4;
+      ltResting = a(4);
+      rtAxis = 5;
+      rtResting = a(5) < -0.5 ? a(5) : 0;
+      rxAxis = 2;
+      ryAxis = 3;
     } else {
       rxAxis = len > 2 ? 2 : 0;
       ryAxis = len > 3 ? 3 : 1;
@@ -632,6 +656,34 @@ export class GamepadManager {
   private getCalibration(pad: GamepadLike): PadCalibration {
     const existing = this.calibrations.get(pad.index);
     if (existing && existing.padId === pad.id) {
+      // If pad booted cold with all-zero axes (ltAxis/rtAxis unresolved) and any axis 2..5
+      // later settles to -1.0, recalibrate immediately so triggers never lock R-stick!
+      if (existing.ltAxis === null && existing.rtAxis === null) {
+        const limit = Math.min(5, pad.axes.length - 1);
+        for (let i = 2; i <= limit; i++) {
+          const v = pad.axes[i];
+          if (typeof v === 'number' && Number.isFinite(v) && v < -0.75) {
+            const recalibrated = calibrateNonStandardPad(pad);
+            this.calibrations.set(pad.index, recalibrated);
+            return recalibrated;
+          }
+        }
+      }
+
+      // If single-axis recalibration guessed lt=2/rt=5 while axis 2 was still 0, and axis 4
+      // later settles to -1.0 alongside axis 5, switch cleanly to the 4/5 trigger layout
+      if (
+        existing.ltAxis === 2 &&
+        existing.ltResting > -0.5 &&
+        pad.axes.length >= 6 &&
+        (pad.axes[4] ?? 0) < -0.75 &&
+        (pad.axes[2] ?? 0) > -0.5
+      ) {
+        const recalibrated = calibrateNonStandardPad(pad);
+        this.calibrations.set(pad.index, recalibrated);
+        return recalibrated;
+      }
+
       // Dynamic late-calibration for Linux/Tesla pads that report 0 until first trigger release (-1)
       if (existing.ltAxis !== null) {
         const lv = pad.axes[existing.ltAxis] ?? 0;

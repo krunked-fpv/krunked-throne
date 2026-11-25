@@ -532,14 +532,170 @@ describe('input-controls: Invisible-Until-Touch State Machine & Floating Dual-St
     expect(input.getInputMode()).toBe('gamepad');
     expect(input.isTouchOverlayVisible()).toBe(false);
 
-    // Touch controls set to 'off' -> remains strictly invisible even after touch!
+    // Touch controls set to 'off' -> remains strictly invisible AND does not hijack mode/aim during gameplay!
+    pads = [];
+    input.simulateMouseMoveLogical(240, 80);
+    expect(input.getInputMode()).toBe('kbm');
     input.setControlSettings({ ...DEFAULT_CONTROL_SETTINGS, touchMode: 'off' });
     input.simulateTouchStartLogical(4, 70, 170);
-    expect(input.getInputMode()).toBe('touch');
+    expect(input.getInputMode()).toBe('kbm');
     expect(input.isTouchOverlayVisible()).toBe(false);
+    const kbmFrame = input.consumeSimInput(cam, 160, 120);
+    expect(kbmFrame.aimWorldX).toBeCloseTo(240, 3);
+    expect(kbmFrame.aimWorldY).toBeCloseTo(80, 3);
     const spyOff = createSpyCanvasContext();
     input.renderTouchOverlay(spyOff.ctx, LOGICAL_WIDTH_4_3, LOGICAL_HEIGHT, true, 1);
     expect(spyOff.calls.length).toBe(0);
+
+    // Even if touchMode is toggled 'off' while already in 'touch' mode, gameplay aim falls back cleanly to cursor!
+    input.setControlSettings({ ...DEFAULT_CONTROL_SETTINGS, touchMode: 'auto' });
+    input.simulateTouchStartLogical(5, 70, 170);
+    expect(input.getInputMode()).toBe('touch');
+    input.setControlSettings({ ...DEFAULT_CONTROL_SETTINGS, touchMode: 'off' });
+    expect(input.isTouchOverlayVisible()).toBe(false);
+    const fallbackFrame = input.consumeSimInput(cam, 160, 120);
+    expect(Number.isFinite(fallbackFrame.aimWorldX)).toBe(true);
+    expect(Number.isFinite(fallbackFrame.aimWorldY)).toBe(true);
+  });
+
+  it('calibrates cold-boot Linux xpad and generic non-standard pads transitioning [0..0] -> [-1] without locking right stick', () => {
+    // 1. Cold-boot Linux xpad Xbox controller starting at [0,0,0,0,0,0,0,0]
+    let pads: Array<GamepadLike | null> = [
+      makePad({
+        index: 0,
+        id: 'Microsoft X-Box One pad (Vendor: 045e Product: 02ea)',
+        mapping: '',
+        axes: [0, 0, 0, 0, 0, 0, 0, 0],
+        buttonCount: 11,
+      }),
+    ];
+    const gm = new GamepadManager({ getGamepads: () => pads });
+    const cold = gm.poll();
+    expect(cold.profile).toBe('linux-xpad');
+    expect(cold.fireHeld).toBe(false);
+    expect(cold.activeHeld).toBe(false);
+    expect(cold.aimActive).toBe(false);
+
+    // LT & RT settle to -1.0 after first touch -> MUST NOT lock right stick left or fire!
+    pads[0] = makePad({
+      index: 0,
+      id: 'Microsoft X-Box One pad (Vendor: 045e Product: 02ea)',
+      mapping: '',
+      axes: [0, 0, -1, 0, 0, -1, 0, 0],
+      buttonCount: 11,
+    });
+    const settled = gm.poll();
+    expect(settled.aimActive).toBe(false);
+    expect(settled.fireHeld).toBe(false);
+    expect(settled.activeHeld).toBe(false);
+
+    // Pull RT (axes[5]=0.6) & push R-stick up (axes[4]=-0.95) -> works cleanly!
+    pads[0] = makePad({
+      index: 0,
+      id: 'Microsoft X-Box One pad (Vendor: 045e Product: 02ea)',
+      mapping: '',
+      axes: [0, 0, -1, 0, -0.95, 0.6, 0, 0],
+      buttonCount: 11,
+    });
+    const live = gm.poll();
+    expect(live.fireHeld).toBe(true);
+    expect(live.aimActive).toBe(true);
+    expect(live.aimDirY).toBeCloseTo(-1, 3);
+
+    // 2. Cold-boot generic unknown non-standard pad starting at [0,0,0,0,0,0] then settling triggers to -1
+    let genPads: Array<GamepadLike | null> = [
+      makePad({
+        index: 0,
+        id: 'Generic USB Controller',
+        mapping: '',
+        axes: [0, 0, 0, 0, 0, 0],
+        buttonCount: 12,
+      }),
+    ];
+    const gmGen = new GamepadManager({ getGamepads: () => genPads });
+    expect(gmGen.poll().fireHeld).toBe(false);
+
+    // Triggers on axes[2] & axes[5] settle to -1.0 -> auto-recalibrates immediately!
+    genPads[0] = makePad({
+      index: 0,
+      id: 'Generic USB Controller',
+      mapping: '',
+      axes: [0, 0, -1, 0, 0, -1],
+      buttonCount: 12,
+    });
+    const genSettled = gmGen.poll();
+    expect(genSettled.profile).toBe('linux-xpad');
+    expect(genSettled.aimActive).toBe(false);
+    expect(genSettled.fireHeld).toBe(false);
+    expect(genSettled.activeHeld).toBe(false);
+
+    // Pull RT (axes[5]=0.8) -> fires cleanly!
+    genPads[0] = makePad({
+      index: 0,
+      id: 'Generic USB Controller',
+      mapping: '',
+      axes: [0, 0, -1, 0.85, 0, 0.8],
+      buttonCount: 12,
+    });
+    const genLive = gmGen.poll();
+    expect(genLive.fireHeld).toBe(true);
+    expect(genLive.aimDirX).toBeCloseTo(1, 3);
+  });
+
+  it('suppresses delayed compatibility MouseEvents after touch while allowing real mouse PointerEvents immediately', () => {
+    let now = 1000;
+    const input = new InputManager(DEFAULT_KEYBINDINGS, {
+      controls: { ...DEFAULT_CONTROL_SETTINGS },
+      nowMs: () => now,
+    });
+    input.setLogicalSize(LOGICAL_WIDTH_4_3, LOGICAL_HEIGHT);
+    input.setGameplayActive(true);
+
+    // Minimal mock canvas + listener registry to exercise DOM event handlers directly in Node
+    const canvasListeners = new Map<string, (e: unknown) => void>();
+    const mockCanvas = {
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 320, height: 240 }),
+      addEventListener: (type: string, fn: (e: unknown) => void) => canvasListeners.set(type, fn),
+      removeEventListener: (type: string) => canvasListeners.delete(type),
+    } as unknown as HTMLCanvasElement;
+    input.attach(mockCanvas);
+
+    // Real touch PointerEvent enters touch mode
+    canvasListeners.get('pointerdown')?.({
+      pointerType: 'touch',
+      pointerId: 7,
+      clientX: 60,
+      clientY: 160,
+      button: 0,
+      preventDefault: () => {},
+    });
+    expect(input.getInputMode()).toBe('touch');
+
+    // Delayed compatibility MouseEvent 120ms later (no sourceCapabilities on Safari/Firefox) MUST NOT exit touch mode
+    now += 120;
+    canvasListeners.get('mousedown')?.({
+      clientX: 60,
+      clientY: 160,
+      button: 0,
+    });
+    expect(input.getInputMode()).toBe('touch');
+
+    // Real mouse PointerEvent immediately switches back to 'kbm' even within 450ms!
+    now += 10;
+    canvasListeners.get('pointerdown')?.({
+      pointerType: 'mouse',
+      pointerId: 1,
+      clientX: 160,
+      clientY: 120,
+      button: 0,
+      preventDefault: () => {},
+    });
+    expect(input.getInputMode()).toBe('kbm');
+    expect(input.isTouchOverlayVisible()).toBe(false);
+
+    input.detach();
   });
 
   it('drives floating left move stick with gentle follow, right aim+fire stick with 52% threshold, aim persistence, and edge ghost triggers', () => {
