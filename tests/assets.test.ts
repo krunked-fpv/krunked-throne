@@ -5,12 +5,15 @@ import { createFallbackBundle, createFallbackManifest, loadManifestNode } from '
 import { AREAS, CROWNS, ENEMIES, MUTANTS, MUTATIONS, ULTRAS, WEAPONS } from '@/data';
 import {
   BitmapFontRenderer,
+  CameraController,
+  GameRenderer,
   NT_COLOR_TOKENS,
   measureText,
   parseMarkupLines,
   stripMarkup,
   wrapMarkupText,
 } from '@/render';
+import type { SimEvent } from '@/contracts';
 
 const CORE_FONTS = ['fntChat', 'fntL', 'fntM0', 'fntM1', 'fntM1x', 'fntSmall'] as const;
 
@@ -69,6 +72,55 @@ describe('assets: Procedural Fallback Manifest Integrity', () => {
     expect(bundle.sourceMode).toBe('fallback');
     expect(bundle.getSprite('sprMutant1Idle')).toBeDefined();
     expect(bundle.getFont('fntM1')).toBeDefined();
+
+    // High-contrast enemy projectile sprites & new combat feedback sound keys
+    expect(manifest.sprites.sprEnemyBullet1!.width).toBeGreaterThanOrEqual(11);
+    expect(manifest.sprites.sprScorpionBullet!.width).toBeGreaterThanOrEqual(11);
+    expect(manifest.sprites.sprIDPDBullet!.width).toBeGreaterThanOrEqual(11);
+    expect(manifest.sprites.sprThrone2Bullet!.width).toBeGreaterThanOrEqual(16);
+    for (const snd of [
+      'sndEmpty',
+      'sndUltraEmpty',
+      'sndEnemyAlert',
+      'sndHitConfirm',
+      'sndCorpseImpact',
+      'sndMeleeDeflect',
+    ]) {
+      expect(manifest.sounds[snd], `Missing fallback sound ${snd}`).toBeDefined();
+    }
+  });
+
+  it('supports CameraController boss focus bias with exact transform invertibility and GameRenderer combat FX events', () => {
+    const cam = new CameraController();
+    cam.setViewport(320, 240);
+    cam.snapTo(100, 100);
+    cam.setFocusBias(220, 160, 0.35);
+    cam.update(100, 100, 100, 100, 1 / 30, { screenShakeScale: 0, pixelSnap: false });
+    expect(cam.targetX).toBeCloseTo(142, 3);
+    expect(cam.targetY).toBeCloseTo(121, 3);
+
+    const scr = cam.worldToScreen(175.5, 132.25);
+    const back = cam.screenToWorld(scr.x, scr.y);
+    expect(back.x).toBeCloseTo(175.5, 6);
+    expect(back.y).toBeCloseTo(132.25, 6);
+
+    cam.clearFocusBias();
+    cam.update(100, 100, 100, 100, 1 / 30, { screenShakeScale: 0, pixelSnap: false });
+    expect(cam.targetX).toBeCloseTo(100, 3);
+
+    const bundle = createFallbackBundle();
+    const renderer = new GameRenderer(bundle);
+    const fxEvents = [
+      { type: 'enemy_alert', entityId: 9, x: 140, y: 120, defId: 'bandit' },
+      { type: 'hit_confirm', x: 140, y: 120, damage: 10, killed: true, crit: true },
+      { type: 'corpse_impact', x: 145, y: 124, speed: 6.2, killed: true },
+      { type: 'melee_deflect', x: 112, y: 104, angle: 0.25 },
+      { type: 'ammo_empty', x: 100, y: 100, ammoType: 'bullet' },
+      { type: 'level_up', level: 2, isUltra: false },
+      { type: 'particle', kind: 'explosion', x: 160, y: 130, vx: 0, vy: 0, color: '#ffaa33', size: 32, life: 10 },
+      { type: 'particle', kind: 'wall_spark', x: 130, y: 115, vx: 2, vy: -1, color: '#e8d8b0', size: 2, life: 5 },
+    ] as unknown as SimEvent[];
+    expect(() => renderer.consumeEvents(fxEvents)).not.toThrow();
   });
 });
 

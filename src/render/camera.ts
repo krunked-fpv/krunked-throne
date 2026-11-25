@@ -40,10 +40,27 @@ export class CameraController {
 
   private shakePhase = 0;
   private initialized = false;
+  private focusBiasX = 0;
+  private focusBiasY = 0;
+  private focusBiasWeight = 0;
 
   setViewport(width: number, height: number): void {
     this.viewportWidth = Math.max(1, Math.round(width));
     this.viewportHeight = Math.max(1, Math.round(height));
+  }
+
+  /**
+   * Temporarily biases camera tracking toward a world focal point (e.g. Boss Intro beat)
+   * without breaking player look-ahead or worldToScreen/screenToWorld invertibility.
+   */
+  setFocusBias(worldX: number, worldY: number, weight: number): void {
+    this.focusBiasX = worldX;
+    this.focusBiasY = worldY;
+    this.focusBiasWeight = Math.max(0, Math.min(0.65, weight));
+  }
+
+  clearFocusBias(): void {
+    this.focusBiasWeight = 0;
   }
 
   snapTo(worldX: number, worldY: number): void {
@@ -58,6 +75,7 @@ export class CameraController {
     this.trauma = 0;
     this.shakeOffsetX = 0;
     this.shakeOffsetY = 0;
+    this.focusBiasWeight = 0;
     this.initialized = true;
   }
 
@@ -129,8 +147,15 @@ export class CameraController {
     this.lookAheadX = lead.x;
     this.lookAheadY = lead.y;
 
-    this.targetX = playerX + lead.x;
-    this.targetY = playerY + lead.y;
+    const baseTargetX = playerX + lead.x;
+    const baseTargetY = playerY + lead.y;
+    if (this.focusBiasWeight > 0.001) {
+      this.targetX = baseTargetX + (this.focusBiasX - baseTargetX) * this.focusBiasWeight;
+      this.targetY = baseTargetY + (this.focusBiasY - baseTargetY) * this.focusBiasWeight;
+    } else {
+      this.targetX = baseTargetX;
+      this.targetY = baseTargetY;
+    }
 
     if (!this.initialized) {
       this.x = this.targetX;

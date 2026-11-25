@@ -3,6 +3,8 @@ import type { SimEvent } from '@/contracts';
 import {
   AudioEngine,
   PAUSE_DUCKING_FACTOR,
+  RAD_STREAK_MAX,
+  RAD_STREAK_WINDOW_MS,
   calculateSpatial,
   classifySound,
   playSynthSound,
@@ -176,5 +178,98 @@ describe('audio: Music Routing, Pause Ducking & Headless Fallback', () => {
     expect(engine.getStats().currentMusic).toBe('musGameOver');
     engine.applySettings({ masterVolume: 0.5, muted: true });
     expect(engine.settings.muted).toBe(true);
+  });
+
+  it('classifies empty/alert/boss_intro/hit_confirm cues, climbs rad pickup streak pitch, and consumes additive combat hooks', () => {
+    expect(classifySound('sndEmpty')).toBe('empty');
+    expect(classifySound('sndUltraEmpty')).toBe('empty');
+    expect(classifySound('sndEnemyAlert')).toBe('alert');
+    expect(classifySound('sndBossIntro')).toBe('boss_intro');
+    expect(classifySound('sndBigBanditIntro')).toBe('boss_intro');
+    expect(classifySound('sndNothingStart')).toBe('boss_intro');
+    expect(classifySound('sndHitConfirm')).toBe('hit_confirm');
+    expect(classifySound('sndCorpseImpact')).toBe('hit');
+    expect(classifySound('sndMeleeDeflect')).toBe('melee');
+
+    let now = 2000;
+    const engine = new AudioEngine({
+      cooldownMs: 35,
+      timeProvider: () => now,
+    });
+
+    // Rapid rad pickup streak climbs pitch monotonically and caps cleanly
+    expect(engine.playSfx('sndRadPickup', 0, 0, { pitchJitter: 0 })).toBe(true);
+    expect(engine.getRadStreakCount()).toBe(0);
+    const pitch0 = engine.getLastPitchRate();
+
+    let prevPitch = pitch0;
+    for (let i = 1; i <= RAD_STREAK_MAX + 3; i++) {
+      now += 60;
+      expect(engine.playSfx('sndRadPickup', 0, 0, { pitchJitter: 0 })).toBe(true);
+      const curPitch = engine.getLastPitchRate();
+      if (i <= RAD_STREAK_MAX) {
+        expect(curPitch).toBeGreaterThan(prevPitch);
+      } else {
+        expect(curPitch).toBeCloseTo(prevPitch, 5);
+      }
+      prevPitch = curPitch;
+    }
+    expect(engine.getRadStreakCount()).toBe(RAD_STREAK_MAX);
+
+    // Idle gap beyond RAD_STREAK_WINDOW_MS resets rad streak back to 0
+    now += RAD_STREAK_WINDOW_MS + 50;
+    expect(engine.playSfx('sndRadPickup', 0, 0, { pitchJitter: 0 })).toBe(true);
+    expect(engine.getRadStreakCount()).toBe(0);
+    expect(engine.getLastPitchRate()).toBeCloseTo(1.0, 5);
+
+    // Additive combat hooks (from @encounters) trigger voices cleanly without throwing
+    now += 100;
+    const extendedEvents = [
+      { type: 'enemy_alert', entityId: 7, x: 40, y: 10, defId: 'bandit' },
+      { type: 'hit_confirm', x: 30, y: 10, damage: 12, killed: true, crit: true },
+      { type: 'corpse_impact', x: 25, y: 12, speed: 7.5, killed: false },
+      { type: 'melee_deflect', x: 12, y: 8, angle: 0.4 },
+      { type: 'ammo_empty', x: 0, y: 0, ammoType: 'shell' },
+    ] as unknown as SimEvent[];
+    const beforeVoices = engine.getStats().activeVoices;
+    expect(() => engine.consumeEvents(extendedEvents, 0, 0)).not.toThrow();
+    expect(engine.getStats().activeVoices).toBeGreaterThan(beforeVoices);
+  });
+
+  it('wires a master dynamics compressor limiter when supported by AudioContext', () => {
+    const connected: Array<{ from: string; to: string }> = [];
+    const makeParam = () => ({
+      value: 0,
+      setValueAtTime: () => {},
+      linearRampToValueAtTime: () => {},
+      cancelScheduledValues: () => {},
+    });
+    const makeNode = (tag: string) => ({
+      tag,
+      gain: makeParam(),
+      threshold: makeParam(),
+      knee: makeParam(),
+      ratio: makeParam(),
+      attack: makeParam(),
+      release: makeParam(),
+      connect(dest: { tag?: string }) {
+        connected.push({ from: tag, to: dest.tag ?? 'destination' });
+      },
+    });
+    let gainIdx = 0;
+    const mockCtx = {
+      state: 'running',
+      currentTime: 0,
+      destination: { tag: 'destination' },
+      createGain: () => makeNode(`gain_${gainIdx++}`),
+      createDynamicsCompressor: () => makeNode('limiter'),
+    } as unknown as AudioContext;
+
+    const engine = new AudioEngine({ context: mockCtx });
+    expect(engine.getStats().unlocked).toBe(true);
+    // gain_0 = masterGain -> destination; limiter -> gain_0; sfx/music/ambience -> limiter
+    expect(connected).toContainEqual({ from: 'limiter', to: 'gain_0' });
+    expect(connected).toContainEqual({ from: 'gain_1', to: 'limiter' });
+    engine.dispose();
   });
 });

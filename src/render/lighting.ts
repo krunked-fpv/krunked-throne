@@ -74,6 +74,7 @@ export class LightingPass {
     playerX: number,
     playerY: number,
     interpAlpha: number = 1,
+    extraLights?: readonly DynamicLight[],
   ): DynamicLight[] {
     const lights: DynamicLight[] = [];
     const alpha = Math.max(0, Math.min(1, interpAlpha));
@@ -223,6 +224,13 @@ export class LightingPass {
       }
     }
 
+    // 8. Transient render-side blast & muzzle flash lights
+    if (extraLights) {
+      for (let i = 0; i < extraLights.length; i++) {
+        lights.push(extraLights[i]!);
+      }
+    }
+
     return lights;
   }
 
@@ -237,12 +245,13 @@ export class LightingPass {
     playerX: number,
     playerY: number,
     interpAlpha: number = 1,
+    extraLights?: readonly DynamicLight[],
   ): void {
     const darkness = Math.max(0, Math.min(0.9, state.map.darkness));
     const w = camera.viewportWidth;
     const h = camera.viewportHeight;
 
-    const lights = this.collectLights(state, playerX, playerY, interpAlpha);
+    const lights = this.collectLights(state, playerX, playerY, interpAlpha, extraLights);
 
     // 1. Subtle additive bloom glows via cached offscreen glow stamps
     mainCtx.save();
