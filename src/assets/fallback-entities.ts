@@ -2237,46 +2237,57 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
       px(ctx, cx, cy, '#ffffff');
     }
   };
-  const drawSlash = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, core: string): void => {
-    // High-contrast Vlambeer-style swooping crescent arc with blazing pure-white leading edge & energetic sparks!
+  const drawSlash = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    f: number,
+    outer: string,
+    core: string,
+    trailRim = '#10141f',
+  ): void => {
+    // High-contrast Vlambeer-style swooping crescent arc: blazing pure-white outer leading rim +
+    // vivid saturated mid-core + dark trailing contrast lip so melee swings pop sharply even on bright Desert sand!
     const cy = y + Math.floor(h / 2);
     const halfSpan = Math.floor(h * 0.46);
-    const maxThick = f === 0 ? Math.max(5, Math.floor(w * 0.28)) : f === 1 ? Math.max(3, Math.floor(w * 0.19)) : 2;
+    const maxThick = f === 0 ? Math.max(6, Math.floor(w * 0.32)) : f === 1 ? Math.max(4, Math.floor(w * 0.23)) : 2;
 
     for (let dy = -halfSpan; dy <= halfSpan; dy++) {
       const ny = dy / (halfSpan + 0.5);
       const curve = 1 - ny * ny;
-      const taper = Math.pow(Math.max(0, curve), 0.65);
-      const thick = Math.max(1, Math.round(maxThick * taper));
-      const leadX = x + Math.floor(w * 0.30) + Math.round(curve * w * 0.52);
+      const taper = Math.pow(Math.max(0, curve), 0.58);
+      const thick = Math.max(2, Math.round(maxThick * taper));
+      const leadX = x + Math.floor(w * 0.26) + Math.round(curve * w * 0.56);
       const trailX = leadX - thick;
 
-      // Crisp 1px dark contrast rim ONLY on trailing concave edge (keeps leading edge blazing pure white!)
-      if (f < 2 && thick >= 2) {
-        rect(ctx, trailX - 1, cy + dy, 1, 1, '#120a18');
+      // Crisp dark contrast lip behind concave trailing edge so bright plasma pops on sunlit sand
+      if (f < 2) {
+        rect(ctx, trailX - 1, cy + dy, 1, 1, trailRim);
       }
-      // Vivid saturated outer arc energy sweep
+      // Vivid saturated energy body (e.g. #48ff88 emerald / #7ce0ff cyan)
       rect(ctx, trailX, cy + dy, thick, 1, outer);
-      // Blazing bright white-hot cutting leading edge
-      const edgeW = f === 0 ? Math.max(2, Math.ceil(thick * 0.48)) : Math.max(1, Math.ceil(thick * 0.5));
-      rect(ctx, leadX - edgeW + 1, cy + dy, edgeW, 1, core);
-      if (taper > 0.45 && f < 2) {
-        px(ctx, leadX + 1, cy + dy, '#ffffff');
+      // Blazing pure-white leading cutting rim (thick and luminous right along the outer arc!)
+      const whiteW = f === 0 ? Math.max(2, Math.ceil(thick * 0.52)) : Math.max(2, Math.ceil(thick * 0.55));
+      rect(ctx, leadX - whiteW + 1, cy + dy, whiteW, 1, core);
+      if (taper > 0.25) {
+        rect(ctx, leadX, cy + dy, f === 0 ? 2 : 1, 1, '#ffffff');
       }
     }
 
-    // Dynamic energetic pixel sparks & plasma flecks flying off the leading arc!
+    // Dynamic blazing white & colored plasma sparks bursting off the leading crescent
     const sparkOffsets: ReadonlyArray<[number, number, boolean]> =
       f === 0
-        ? [[0.84, -0.32, true], [0.88, 0.24, true], [0.68, -0.44, false], [0.70, 0.42, false], [0.92, -0.05, true]]
+        ? [[0.86, -0.30, true], [0.90, 0.22, true], [0.68, -0.44, true], [0.70, 0.42, false], [0.93, -0.04, true]]
         : f === 1
-          ? [[0.88, -0.26, true], [0.82, 0.34, false], [0.62, -0.42, true], [0.65, 0.44, true]]
-          : [[0.86, -0.18, false], [0.78, 0.28, true], [0.58, -0.38, false]];
+          ? [[0.88, -0.26, true], [0.84, 0.32, true], [0.64, -0.42, true], [0.66, 0.44, false]]
+          : [[0.86, -0.18, true], [0.80, 0.28, true], [0.60, -0.38, false]];
     for (const [fx, fy, isWhite] of sparkOffsets) {
       const sx = x + Math.round(w * fx);
       const sy = cy + Math.round(h * fy);
-      if (sx >= x + 1 && sx < x + w - 1 && sy >= y + 1 && sy < y + h - 1) {
-        rect(ctx, sx, sy, isWhite ? 2 : 1, 1, isWhite ? '#ffffff' : outer);
+      if (sx >= x + 1 && sx < x + w - 2 && sy >= y + 1 && sy < y + h - 2) {
+        rect(ctx, sx, sy, isWhite ? 2 : 1, isWhite ? 2 : 1, isWhite ? '#ffffff' : outer);
       }
     }
   };
@@ -2447,19 +2458,19 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     drawPixelLine(ctx, cx, cy - r, cx, cy + r, '#d9f9ff', 1);
   });
 
-  const slashList: Array<[string, number, string, string]> = [
-    ['sprSlash', 24, '#70c4ff', '#ffffff'],
-    ['sprHeavySlash', 28, '#ffbe38', '#ffffff'],
-    ['sprMegaSlash', 32, '#ff6d29', '#ffffff'],
-    ['sprEnergySlash', 26, '#38ff99', '#ffffff'],
-    ['sprHeavyEnergySlash', 30, '#38ff99', '#ffffff'],
-    ['sprLightningSlash', 26, '#4de8ff', '#ffffff'],
-    ['sprBloodSlash', 26, '#ff2647', '#ffe8ec'],
-    ['sprUltraSlash', 30, '#4dff70', '#ffffff'],
+  const slashList: Array<[string, number, string, string, string]> = [
+    ['sprSlash', 24, '#7ce0ff', '#ffffff', '#182b47'],
+    ['sprHeavySlash', 28, '#ffbe38', '#ffffff', '#47250e'],
+    ['sprMegaSlash', 32, '#ff6d29', '#ffffff', '#4a180d'],
+    ['sprEnergySlash', 26, '#48ff88', '#ffffff', '#0b4222'],
+    ['sprHeavyEnergySlash', 30, '#48ff88', '#ffffff', '#0b4222'],
+    ['sprLightningSlash', 26, '#4de8ff', '#ffffff', '#0d2d4a'],
+    ['sprBloodSlash', 26, '#ff2647', '#ffe8ec', '#4a0b17'],
+    ['sprUltraSlash', 30, '#48ff88', '#ffffff', '#0b4222'],
   ];
-  for (const [name, s, outer, core] of slashList) {
+  for (const [name, s, outer, core, trailRim] of slashList) {
     b.addSprite(name, s, s, Math.floor(s / 2), Math.floor(s / 2), 3, (ctx, x, y, sw, sh, f) =>
-      drawSlash(ctx, x, y, sw, sh, f, outer, core),
+      drawSlash(ctx, x, y, sw, sh, f, outer, core, trailRim),
     );
   }
 

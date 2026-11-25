@@ -782,8 +782,8 @@ export function registerFallbackFonts(b: FallbackAtlasBuilder): Record<string, F
       tpag: medFontRect,
       scaleX: 2,
       scaleY: 2,
-      lineHeight: 16,
-      ascender: 14,
+      lineHeight: 8,
+      ascender: 7,
       glyphs: medGlyphs,
     },
     fntM0: {
