@@ -11,6 +11,7 @@
  */
 
 import type {
+  AmmoType,
   AssetManifest,
   AudioSettings,
   SimEvent,
@@ -22,6 +23,14 @@ import {
   resolveMusicRoute,
   PAUSE_DUCKING_FACTOR,
 } from './music-router';
+
+type ExtendedAudioSimEvent =
+  | SimEvent
+  | { type: 'enemy_alert'; entityId: number; x: number; y: number; defId: string }
+  | { type: 'hit_confirm'; x: number; y: number; damage: number; killed: boolean; crit?: boolean; melee?: boolean }
+  | { type: 'corpse_impact'; x: number; y: number; speed: number; targetId?: number; killed?: boolean }
+  | { type: 'melee_deflect'; x: number; y: number; angle: number }
+  | { type: 'ammo_empty'; x: number; y: number; ammoType: AmmoType };
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   masterVolume: 0.8,
@@ -36,6 +45,9 @@ export const MAX_GLOBAL_VOICES = 24;
 export const DEFAULT_COOLDOWN_MS = 35;
 export const DEFAULT_FALLOFF_PX = 360;
 export const DEFAULT_PITCH_JITTER = 0.08; // ±8%
+export const RAD_STREAK_WINDOW_MS = 460;
+export const RAD_STREAK_MAX = 14;
+export const RAD_STREAK_STEP = 0.045;
 
 export interface SpatialResult {
   volume: number; // 0..1
@@ -112,6 +124,7 @@ interface ActiveVoice {
 
 interface WebAudioNodes {
   ctx: AudioContext;
+  limiter: DynamicsCompressorNode | null;
   masterGain: GainNode;
   sfxGain: GainNode;
   musicGain: GainNode;
@@ -144,9 +157,12 @@ export class AudioEngine {
   private suppressedByCooldownCount = 0;
   private suppressedByPolyphonyCount = 0;
 
-  // Active voice & cooldown tracking
+  // Active voice, cooldown & rad pickup streak tracking
   private activeVoices: ActiveVoice[] = [];
   private lastTriggerTimeMs = new Map<string, number>();
+  private radStreakCount = 0;
+  private lastRadPickupMs = -Infinity;
+  private lastPitchRate = 1.0;
 
   // Buffer cache
   private bufferCache = new Map<string, AudioBuffer>();
@@ -213,20 +229,36 @@ export class AudioEngine {
       const masterGain = ctx.createGain();
       masterGain.connect(ctx.destination);
 
+      // Clean soft limiter / dynamics compressor on master bus so intense firefights
+      // sound huge & cohesive without harsh digital clipping!
+      let limiter: DynamicsCompressorNode | null = null;
+      let mixTarget: AudioNode = masterGain;
+      if (typeof ctx.createDynamicsCompressor === 'function') {
+        limiter = ctx.createDynamicsCompressor();
+        limiter.threshold.setValueAtTime(-9, ctx.currentTime);
+        limiter.knee.setValueAtTime(12, ctx.currentTime);
+        limiter.ratio.setValueAtTime(6, ctx.currentTime);
+        limiter.attack.setValueAtTime(0.003, ctx.currentTime);
+        limiter.release.setValueAtTime(0.12, ctx.currentTime);
+        limiter.connect(masterGain);
+        mixTarget = limiter;
+      }
+
       const sfxGain = ctx.createGain();
-      sfxGain.connect(masterGain);
+      sfxGain.connect(mixTarget);
 
       const musicGain = ctx.createGain();
-      musicGain.connect(masterGain);
+      musicGain.connect(mixTarget);
 
       const musicDuckingGain = ctx.createGain();
       musicDuckingGain.connect(musicGain);
 
       const ambienceGain = ctx.createGain();
-      ambienceGain.connect(masterGain);
+      ambienceGain.connect(mixTarget);
 
       this.webAudio = {
         ctx,
+        limiter,
         masterGain,
         sfxGain,
         musicGain,
@@ -452,9 +484,17 @@ export class AudioEngine {
     await Promise.all(keys.map((k) => this.loadSound(k)));
   }
 
+  public getRadStreakCount(): number {
+    return this.radStreakCount;
+  }
+
+  public getLastPitchRate(): number {
+    return this.lastPitchRate;
+  }
+
   /**
-   * Plays a sound effect with spatial panning, pitch jitter, polyphony cap,
-   * micro-cooldown gate, and fallback procedural synth.
+   * Plays a sound effect with spatial panning, pitch jitter, ascending rad pickup pitch streak,
+   * polyphony cap, micro-cooldown gate, and fallback procedural synth.
    */
   public playSfx(
     soundKey: string,
@@ -464,6 +504,7 @@ export class AudioEngine {
       listenerX?: number;
       listenerY?: number;
       pitchJitter?: number;
+      pitchBase?: number;
       volume?: number;
       falloffPx?: number;
     } = {}
@@ -504,16 +545,31 @@ export class AudioEngine {
     // Mark successful trigger for cooldown
     this.lastTriggerTimeMs.set(soundKey, nowMs);
 
-    // 4. Calculate effective volume & pitch jitter
+    // 4. Calculate effective volume, rad streak climb & pitch jitter
     const eventVolume = options.volume ?? 1.0;
     const effectiveVolume = spatial.volume * eventVolume;
 
+    let streakBoost = 1.0;
+    const lowerKey = soundKey.toLowerCase();
+    const isRadPickup = lowerKey === 'sndradpickup' || lowerKey === 'sndpickuprad';
+    if (isRadPickup) {
+      if (nowMs - this.lastRadPickupMs <= RAD_STREAK_WINDOW_MS) {
+        this.radStreakCount = Math.min(RAD_STREAK_MAX, this.radStreakCount + 1);
+      } else {
+        this.radStreakCount = 0;
+      }
+      this.lastRadPickupMs = nowMs;
+      streakBoost = 1.0 + this.radStreakCount * RAD_STREAK_STEP;
+    }
+
     const jitterAmount = options.pitchJitter ?? DEFAULT_PITCH_JITTER;
-    const pitchMultiplier = 1.0 + (Math.random() - 0.5) * 2 * jitterAmount;
+    const pitchBase = (options.pitchBase ?? 1.0) * streakBoost;
+    const pitchMultiplier = pitchBase * (1.0 + (Math.random() - 0.5) * 2 * jitterAmount);
+    this.lastPitchRate = pitchMultiplier;
 
     // 5. Sound playback (Web Audio Buffer vs Synth Fallback vs Headless)
     const voiceId = this.nextVoiceId++;
-    const defaultDurationMs = 250;
+    const defaultDurationMs = isRadPickup ? 160 : 250;
     let stopFn = () => {};
 
     if (this.webAudio) {
@@ -833,11 +889,12 @@ export class AudioEngine {
    * Consumes an array of SimEvents emitted by the simulation fixed-step tick.
    */
   public consumeEvents(
-    events: SimEvent[],
+    events: readonly SimEvent[],
     listenerX: number = 0,
     listenerY: number = 0
   ): void {
-    for (const event of events) {
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i] as ExtendedAudioSimEvent;
       switch (event.type) {
         case 'sfx': {
           this.playSfx(event.sound, event.x, event.y, {
@@ -869,6 +926,7 @@ export class AudioEngine {
         }
 
         case 'area_change': {
+          this.radStreakCount = 0;
           this.routeContext({
             areaCode: event.areaCode,
             biome: event.biome,
@@ -894,6 +952,57 @@ export class AudioEngine {
             listenerX,
             listenerY,
             volume: 1.0,
+          });
+          break;
+        }
+
+        case 'enemy_alert': {
+          this.playSfx('sndEnemyAlert', event.x, event.y, {
+            listenerX,
+            listenerY,
+            pitchJitter: 0.1,
+            volume: 0.72,
+          });
+          break;
+        }
+
+        case 'hit_confirm': {
+          this.playSfx('sndHitConfirm', event.x, event.y, {
+            listenerX,
+            listenerY,
+            pitchJitter: 0.05,
+            pitchBase: event.killed ? 1.18 : event.crit ? 1.28 : 1.0,
+            volume: event.killed || event.crit ? 0.85 : 0.62,
+          });
+          break;
+        }
+
+        case 'corpse_impact': {
+          this.playSfx('sndCorpseImpact', event.x, event.y, {
+            listenerX,
+            listenerY,
+            pitchJitter: 0.1,
+            volume: Math.min(1, 0.55 + event.speed * 0.05),
+          });
+          break;
+        }
+
+        case 'melee_deflect': {
+          this.playSfx('sndMeleeDeflect', event.x, event.y, {
+            listenerX,
+            listenerY,
+            pitchJitter: 0.08,
+            volume: 0.9,
+          });
+          break;
+        }
+
+        case 'ammo_empty': {
+          this.playSfx('sndEmpty', event.x, event.y, {
+            listenerX,
+            listenerY,
+            pitchJitter: 0.04,
+            volume: 0.88,
           });
           break;
         }

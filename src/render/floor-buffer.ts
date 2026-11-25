@@ -347,17 +347,21 @@ export class FloorBuffer {
           frame: decal.frame ?? 0,
           scaleX: scale,
           scaleY: scale,
-          alpha: 0.78,
+          alpha: 0.82,
           pixelSnap: true,
         });
         if (!drew) {
           const r = Math.max(4, Math.round(10 * scale));
           ctx.save();
-          ctx.globalAlpha = 0.55;
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = '#2d2326';
+          ctx.fillRect(x - r - 1, y - Math.round(r * 0.75), r * 2 + 2, Math.round(r * 1.5));
+          ctx.globalAlpha = 0.65;
           ctx.fillStyle = decal.color || '#181316';
-          ctx.fillRect(x - r, y - Math.round(r * 0.7), r * 2, Math.round(r * 1.4));
-          ctx.fillStyle = '#0e0a0d';
-          ctx.fillRect(x - Math.round(r * 0.6), y - Math.round(r * 0.4), Math.round(r * 1.2), Math.round(r * 0.8));
+          ctx.fillRect(x - r, y - Math.round(r * 0.65), r * 2, Math.round(r * 1.3));
+          ctx.globalAlpha = 0.82;
+          ctx.fillStyle = '#0c080b';
+          ctx.fillRect(x - Math.round(r * 0.55), y - Math.round(r * 0.35), Math.round(r * 1.1), Math.round(r * 0.7));
           ctx.restore();
         }
         break;
@@ -365,18 +369,49 @@ export class FloorBuffer {
 
       case 'blood': {
         ctx.save();
-        ctx.fillStyle = decal.color || '#961a24';
-        ctx.globalAlpha = 0.85;
-        const r = Math.max(2, Math.round(3 * scale));
-        ctx.fillRect(x - r, y - Math.max(1, Math.floor(r * 0.7)), r * 2, Math.max(2, Math.round(r * 1.4)));
-        // Deterministic satellite droplets
+        const baseColor = decal.color || '#961a24';
+        const r = Math.max(2, Math.round(3.2 * scale));
         const ang = decal.angle || 0;
-        const dx1 = Math.round(Math.cos(ang) * (r + 2));
-        const dy1 = Math.round(Math.sin(ang) * (r + 2));
-        const dx2 = Math.round(Math.cos(ang + 2.2) * (r + 1));
-        const dy2 = Math.round(Math.sin(ang + 2.2) * (r + 1));
-        ctx.fillRect(x + dx1, y + dy1, 2, 2);
-        ctx.fillRect(x + dx2, y + dy2, 1, 1);
+        const cosA = Math.cos(ang);
+        const sinA = Math.sin(ang);
+
+        // Dark grounded rim stain
+        ctx.fillStyle = '#3b090f';
+        ctx.globalAlpha = 0.55;
+        ctx.fillRect(
+          x - r - 1,
+          y - Math.max(1, Math.floor(r * 0.75)),
+          r * 2 + 2,
+          Math.max(3, Math.round(r * 1.5)),
+        );
+
+        // Core splatter pool
+        ctx.fillStyle = baseColor;
+        ctx.globalAlpha = 0.88;
+        ctx.fillRect(
+          x - r,
+          y - Math.max(1, Math.floor(r * 0.65)),
+          r * 2,
+          Math.max(2, Math.round(r * 1.3)),
+        );
+
+        // Directional spray streak & deterministic satellite droplets along impact vector
+        for (let k = 1; k <= 4; k++) {
+          const spread = (k % 2 === 0 ? 1 : -1) * (0.28 * k);
+          const dist = r + k * 2.1 * Math.max(0.8, scale * 0.75);
+          const dx = Math.round(Math.cos(ang + spread) * dist);
+          const dy = Math.round(Math.sin(ang + spread) * dist);
+          const sz = k <= 2 ? 2 : 1;
+          ctx.fillRect(x + dx, y + dy, sz, sz);
+        }
+        // Forward smear blotch along primary spray direction
+        const sx = Math.round(cosA * (r + 1));
+        const sy = Math.round(sinA * (r + 1));
+        ctx.fillRect(x + sx - 1, y + sy - 1, Math.max(2, Math.round(r * 0.8)), 2);
+        // Subtle glossy crimson wet highlight
+        ctx.fillStyle = '#cf2938';
+        ctx.globalAlpha = 0.45;
+        ctx.fillRect(x - Math.max(1, Math.floor(r * 0.4)), y - Math.max(1, Math.floor(r * 0.3)), Math.max(1, Math.floor(r * 0.8)), 1);
         ctx.restore();
         break;
       }
@@ -415,13 +450,26 @@ export class FloorBuffer {
           });
           if (drew) return;
         }
+        const col = (decal.color || '#e3b842').toLowerCase();
+        const isShotgunShell = col === '#c83e37' || col === '#d94538';
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(decal.angle || 0);
-        ctx.fillStyle = '#1c1610';
-        ctx.fillRect(-2, -1, 4, 3);
-        ctx.fillStyle = decal.color || '#e3b842';
-        ctx.fillRect(-1, -1, 3, 2);
+        if (isShotgunShell) {
+          ctx.fillStyle = '#120d10';
+          ctx.fillRect(-3, -2, 6, 4);
+          ctx.fillStyle = '#d9382e';
+          ctx.fillRect(-2, -1, 3, 2);
+          ctx.fillStyle = '#f2c744';
+          ctx.fillRect(1, -1, 1, 2);
+        } else {
+          ctx.fillStyle = '#16110e';
+          ctx.fillRect(-2, -1, 5, 3);
+          ctx.fillStyle = decal.color || '#e6c04c';
+          ctx.fillRect(-1, 0, 3, 1);
+          ctx.fillStyle = '#fff5b8';
+          ctx.fillRect(-1, 0, 1, 1);
+        }
         ctx.restore();
         break;
       }
@@ -435,5 +483,26 @@ export class FloorBuffer {
         break;
       }
     }
+  }
+
+  /**
+   * Stamps a compact directional skid smear onto the persistent floor buffer
+   * (used for high-velocity flying corpses skidding across the arena).
+   */
+  bakeSkidMark(x: number, y: number, vx: number, vy: number, color: string = '#6e141c'): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const spd = Math.hypot(vx, vy);
+    if (spd < 0.2) return;
+    const nx = vx / spd;
+    const ny = vy / spd;
+    const ix = Math.round(x);
+    const iy = Math.round(y);
+    ctx.save();
+    ctx.globalAlpha = 0.42;
+    ctx.fillStyle = color;
+    ctx.fillRect(ix - 1, iy, 3, 2);
+    ctx.fillRect(Math.round(ix - nx * 2.5), Math.round(iy - ny * 2.5), 2, 1);
+    ctx.restore();
   }
 }

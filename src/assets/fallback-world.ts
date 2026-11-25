@@ -57,10 +57,10 @@ const BIOME_THEMES: readonly BiomeTheme[] = [
   },
   {
     code: 1, pattern: 'desert',
-    floorBase: '#cf9e61', floorHi: '#e8c182', floorMid: '#bd8a4f', floorDark: '#996a38', floorCrack: '#704724',
-    accent: '#f5d69b',
-    wallTop: '#a65e3d', wallTopHi: '#d4885e', wallTopDark: '#753c24',
-    wallBot: '#6e3b27', wallBotHi: '#9c583b', wallBotDark: '#472318', wallOut: '#24120e',
+    floorBase: '#c9975c', floorHi: '#d9ac71', floorMid: '#ba884e', floorDark: '#996a38', floorCrack: '#6e4523',
+    accent: '#ebd09a',
+    wallTop: '#9c5636', wallTopHi: '#cf8258', wallTopDark: '#6b351f',
+    wallBot: '#693622', wallBotHi: '#965236', wallBotDark: '#421e14', wallOut: '#21100c',
   },
   {
     code: 2, pattern: 'sewers',
@@ -167,39 +167,32 @@ function drawBiomeFloor(ctx: DrawCtx, x: number, y: number, w: number, h: number
 
   switch (t.pattern) {
     case 'desert': {
-      // Sunlit undulating sand wind-ripples with warm troughs, pebbles & dry cracks
-      const offset = (frame * 3) & 7;
-      for (let row = 0; row < h; row++) {
-        const phase = (row + offset) % 6;
-        if (phase === 0) {
-          const sx = (frame * 2 + row) & 3;
-          rect(ctx, x + sx, y + row, 6, 1, t.floorHi);
-          rect(ctx, x + sx + 8, y + row, 5, 1, t.floorHi);
-          px(ctx, x + sx + 2, y + row, t.accent);
-        } else if (phase === 1) {
-          rect(ctx, x + 1, y + row, 7, 1, t.floorMid);
-          rect(ctx, x + 10, y + row, 5, 1, t.floorMid);
-        }
-      }
-      const p1x = (hash2d(frame, 1, t.code) % 11) + 2;
-      const p1y = (hash2d(frame, 2, t.code) % 11) + 2;
-      rect(ctx, x + p1x, y + p1y, 2, 1, t.floorDark);
-      px(ctx, x + p1x, y + p1y - 1, t.accent);
-      if (frame === 1) {
+      // Calm warm wasteland sand with organic wind-swept patches, tiny pebbles & dry cracks
+      // (restrained contrast so enemies, shadows, casings & bullets pop sharply!)
+      const driftY = (frame * 4 + 2) % 12;
+      rect(ctx, x + ((frame * 3) % 5), y + driftY, 9, 2, t.floorHi);
+      rect(ctx, x + ((frame * 5 + 6) % 8), y + ((driftY + 7) % 14), 7, 2, t.floorMid);
+      if (frame === 0) {
+        rect(ctx, x + 3, y + 4, 4, 1, t.floorHi);
+        rect(ctx, x + 10, y + 11, 2, 1, t.floorDark);
+        px(ctx, x + 10, y + 10, t.accent);
+      } else if (frame === 1) {
+        rect(ctx, x + 9, y + 3, 5, 1, t.floorMid);
         rect(ctx, x + 2, y + 12, 3, 1, t.floorDark);
         px(ctx, x + 3, y + 11, t.floorHi);
       } else if (frame === 2) {
-        // Branching sun-baked desert crack
+        // Subtle branching sun-baked desert crack
         rect(ctx, x + 3, y + 6, 3, 1, t.floorCrack);
         rect(ctx, x + 6, y + 7, 3, 1, t.floorCrack);
         rect(ctx, x + 9, y + 8, 2, 1, t.floorCrack);
         px(ctx, x + 7, y + 6, t.floorCrack);
         rect(ctx, x + 4, y + 5, 2, 1, t.floorHi);
-      } else if (frame === 3) {
-        // Bleached sandstone chip / pebble cluster
-        rect(ctx, x + 10, y + 11, 3, 2, t.floorDark);
-        rect(ctx, x + 10, y + 10, 2, 1, t.accent);
-        px(ctx, x + 4, y + 3, t.floorDark);
+      } else {
+        // Bleached sandstone pebble cluster
+        rect(ctx, x + 10, y + 10, 3, 2, t.floorDark);
+        rect(ctx, x + 10, y + 9, 2, 1, t.accent);
+        px(ctx, x + 4, y + 3, t.floorMid);
+        px(ctx, x + 5, y + 4, t.floorDark);
       }
       break;
     }
@@ -451,67 +444,99 @@ function drawBiomeFloorExplo(ctx: DrawCtx, x: number, y: number, w: number, h: n
 }
 
 function drawBiomeWallTop(ctx: DrawCtx, x: number, y: number, w: number, h: number, frame: number, t: BiomeTheme): void {
+  // Cohesive seamless roof cap surface — outer 2.5D perimeter bevels & sunlit highlights
+  // are applied dynamically by GameRenderer.renderWalls() using wallMask so adjacent walls
+  // fuse into organic canyon/fortress silhouettes instead of a repeating 16x16 brick grid!
   rect(ctx, x, y, w, h, t.wallTop);
-  // Crisp beveled 2.5D roof rim
-  rect(ctx, x, y, w, 2, t.wallTopHi);
-  rect(ctx, x, y, 2, h, t.wallTopHi);
-  rect(ctx, x, y + h - 2, w, 2, t.wallTopDark);
-  rect(ctx, x + w - 1, y + 1, 1, h - 1, t.wallTopDark);
 
   if (t.pattern === 'scrapyard' || t.pattern === 'labs' || t.pattern === 'hq') {
-    rect(ctx, x + 3, y + 3, 10, 10, t.wallTopDark);
-    rect(ctx, x + 4, y + 4, 8, 8, t.wallTop);
-    px(ctx, x + 3, y + 3, t.wallTopHi);
-    px(ctx, x + 12, y + 3, t.wallTopHi);
-    px(ctx, x + 3, y + 12, t.wallTopHi);
-    px(ctx, x + 12, y + 12, t.wallTopHi);
+    // Clean industrial deck roof plating with subtle recessed seams & rivets
+    rect(ctx, x, y, w, 1, t.wallTopDark);
+    rect(ctx, x, y, 1, h, t.wallTopDark);
+    rect(ctx, x + 2, y + 2, 12, 12, t.wallTop);
+    px(ctx, x + 2, y + 2, t.wallTopHi);
+    px(ctx, x + 13, y + 2, t.wallTopHi);
+    px(ctx, x + 2, y + 13, t.wallTopDark);
+    px(ctx, x + 13, y + 13, t.wallTopDark);
     if (frame === 1) {
-      rect(ctx, x + 5, y + 7, 6, 2, t.accent);
+      rect(ctx, x + 4, y + 7, 7, 2, t.wallTopDark);
+      rect(ctx, x + 5, y + 7, 5, 1, t.accent);
       px(ctx, x + 6, y + 7, '#ffffff');
+    } else if (frame === 2) {
+      rect(ctx, x + 3, y + 4, 10, 1, t.wallTopHi);
+      rect(ctx, x + 3, y + 11, 10, 1, t.wallTopDark);
     } else if (frame === 3 && t.pattern === 'scrapyard') {
-      rect(ctx, x + 5, y + 5, 5, 3, t.accent);
+      rect(ctx, x + 4, y + 5, 6, 3, t.accent);
+      rect(ctx, x + 6, y + 6, 3, 2, t.wallTopDark);
     }
   } else if (t.pattern === 'palace' || t.pattern === 'mansion' || t.pattern === 'crib') {
-    // Gold-inlaid obsidian roof cap with specular gold stud
-    rect(ctx, x + 2, y + 2, 12, 1, t.accent);
-    rect(ctx, x + 2, y + 13, 12, 1, t.accent);
-    rect(ctx, x + 3, y + 4, 10, 8, t.wallTopDark);
-    rect(ctx, x + 4, y + 5, 8, 6, t.wallTop);
+    // Gilded obsidian palace roof cap with subtle inlay & recessed stone center
+    rect(ctx, x + 2, y + 2, 12, 12, t.wallTopDark);
+    rect(ctx, x + 3, y + 3, 10, 10, t.wallTop);
+    rect(ctx, x + 3, y + 3, 10, 1, t.wallTopHi);
     if (frame % 2 === 0) {
       rect(ctx, x + 7, y + 7, 2, 2, t.accent);
       px(ctx, x + 7, y + 7, '#fff6b0');
+    } else {
+      rect(ctx, x + 4, y + 12, 8, 1, t.accent);
     }
   } else if (t.pattern === 'caves' || t.pattern === 'cursed') {
-    // Protruding faceted crystal cluster on roof cap
-    rect(ctx, x + 3 + (frame & 1), y + 3, 4, 6, t.wallTopHi);
-    rect(ctx, x + 8, y + 6, 5, 6, t.wallTopDark);
-    rect(ctx, x + 5, y + 4, 3, 4, t.accent);
-    px(ctx, x + 5, y + 4, '#ffffff');
+    // Rough dark cavern rock with protruding faceted crystal clusters
+    rect(ctx, x + 2, y + 2, 6, 5, t.wallTopDark);
+    rect(ctx, x + 9, y + 8, 5, 5, t.wallTopDark);
+    if (frame === 1 || frame === 3) {
+      rect(ctx, x + 4 + (frame & 1), y + 4, 4, 5, t.wallTopHi);
+      rect(ctx, x + 5 + (frame & 1), y + 5, 3, 3, t.accent);
+      px(ctx, x + 5 + (frame & 1), y + 5, '#ffffff');
+    } else {
+      rect(ctx, x + 3, y + 3, 5, 2, t.wallTopHi);
+      px(ctx, x + 11, y + 5, t.accent);
+    }
   } else if (t.pattern === 'frozen') {
-    // Snow-capped frosted stone roof with sparkling glints
-    rect(ctx, x + 2, y + 2, 12, 6, '#d4eafc');
-    rect(ctx, x + 3, y + 3, 9, 3, '#ffffff');
-    rect(ctx, x + 3, y + 10, 8, 2, t.wallTopDark);
-    px(ctx, x + 11, y + 4, '#ffffff');
+    // Wind-drifted snow-covered urban parapet with sparkling frost glints
+    rect(ctx, x + 1, y + 1, 14, 7, '#cde6fa');
+    rect(ctx, x + 2, y + 2, 10, 3, '#eef8ff');
+    rect(ctx, x + 3, y + 10, 9, 3, t.wallTopDark);
+    if (frame % 2 === 0) {
+      px(ctx, x + 10, y + 3, '#ffffff');
+      px(ctx, x + 4, y + 12, t.wallTopHi);
+    }
   } else {
-    // Weathered stone strata, bevel highlights & hairline cracks
-    rect(ctx, x + 3, y + 4 + (frame & 1), 6, 2, t.wallTopDark);
-    rect(ctx, x + 8, y + 9, 5, 2, t.wallTopDark);
-    rect(ctx, x + 4, y + 3 + (frame & 1), 5, 1, t.wallTopHi);
-    if (frame === 1) {
-      rect(ctx, x + 5, y + 8, 2, 1, t.floorCrack);
-      px(ctx, x + 7, y + 9, t.floorCrack);
+    // Organic weathered wasteland canyon/mesa rock cap (varied across 4 frames, zero waffle grid!)
+    if (frame === 0) {
+      rect(ctx, x + 2, y + 3, 7, 3, t.wallTopHi);
+      rect(ctx, x + 3, y + 6, 6, 2, t.wallTopDark);
+      rect(ctx, x + 10, y + 10, 4, 3, t.wallTopDark);
+      px(ctx, x + 4, y + 3, t.accent);
+    } else if (frame === 1) {
+      // Sun-baked rock fracture & mesa ridge
+      rect(ctx, x + 4, y + 4, 5, 1, t.wallTopDark);
+      rect(ctx, x + 8, y + 5, 3, 1, t.wallTopDark);
+      rect(ctx, x + 10, y + 6, 2, 2, t.wallTopDark);
+      rect(ctx, x + 3, y + 10, 8, 2, t.wallTopHi);
+      px(ctx, x + 5, y + 10, t.accent);
     } else if (frame === 2) {
-      rect(ctx, x + 10, y + 4, 2, 3, t.accent);
+      // Weathered strata ledge + dry crevice
+      rect(ctx, x + 1, y + 7, 11, 2, t.wallTopDark);
+      rect(ctx, x + 2, y + 5, 9, 2, t.wallTopHi);
+      rect(ctx, x + 11, y + 3, 3, 2, t.wallTopDark);
+      px(ctx, x + 12, y + 12, t.wallTopDark);
+    } else {
+      // Scattered canyon rubble flecks & shaded plateau pockets
+      rect(ctx, x + 3, y + 2, 5, 2, t.wallTopDark);
+      rect(ctx, x + 8, y + 8, 6, 3, t.wallTopHi);
+      rect(ctx, x + 9, y + 11, 5, 2, t.wallTopDark);
+      px(ctx, x + 10, y + 8, t.accent);
     }
   }
 }
 
 function drawBiomeWallBot(ctx: DrawCtx, x: number, y: number, w: number, h: number, frame: number, t: BiomeTheme): void {
-  // 2.5D front-facing weathered masonry / riveted steel / gilded obsidian facade
+  // 2.5D front-facing weathered canyon cliff / riveted steel / gilded obsidian facade
   rect(ctx, x, y, w, h, t.wallBot);
   // Deep shadow overhang lip directly beneath roof cap
   rect(ctx, x, y, w, 2, t.wallBotDark);
+  rect(ctx, x, y + 2, w, 1, t.wallBotHi);
 
   if (t.pattern === 'scrapyard' || t.pattern === 'labs' || t.pattern === 'hq') {
     // Ribbed steel bulkhead panels with bright bevels, corner bolts & rust/caution trim
@@ -519,19 +544,16 @@ function drawBiomeWallBot(ctx: DrawCtx, x: number, y: number, w: number, h: numb
     rect(ctx, x + 9, y + 3, 6, 10, t.wallBotHi);
     rect(ctx, x + 2, y + 4, 4, 8, t.wallBot);
     rect(ctx, x + 10, y + 4, 4, 8, t.wallBot);
-    // Bright top-left panel bolts
     px(ctx, x + 2, y + 4, t.wallTopHi);
     px(ctx, x + 10, y + 4, t.wallTopHi);
     px(ctx, x + 5, y + 10, t.wallBotDark);
     px(ctx, x + 13, y + 10, t.wallBotDark);
     if (t.pattern === 'labs' && frame % 2 === 1) {
-      // Lab yellow-black caution stripe along lower facade
       rect(ctx, x + 1, y + 11, 14, 2, '#171a1f');
       rect(ctx, x + 2, y + 11, 2, 2, '#f2c738');
       rect(ctx, x + 6, y + 11, 2, 2, '#f2c738');
       rect(ctx, x + 10, y + 11, 2, 2, '#f2c738');
     } else if (t.pattern === 'scrapyard' && frame % 2 === 1) {
-      // Rust streak dripping down steel bulkhead
       rect(ctx, x + 3, y + 5, 2, 6, t.accent);
       px(ctx, x + 4, y + 10, '#8c3b1a');
     } else if (frame % 2 === 1) {
@@ -539,7 +561,7 @@ function drawBiomeWallBot(ctx: DrawCtx, x: number, y: number, w: number, h: numb
       px(ctx, x + 4, y + 7, '#ffffff');
     }
   } else if (t.pattern === 'palace' || t.pattern === 'mansion' || t.pattern === 'crib') {
-    // Ornate carved obsidian wall with gold molding stripe + royal crimson tapestry trim on frame 2!
+    // Ornate carved obsidian wall with gold molding stripe + royal crimson tapestry trim on frame 2
     rect(ctx, x, y + 3, w, 2, t.accent);
     rect(ctx, x + 2, y + 3, 6, 1, '#fff6b0');
     rect(ctx, x + 1, y + 6, 6, 7, t.wallBotHi);
@@ -547,10 +569,34 @@ function drawBiomeWallBot(ctx: DrawCtx, x: number, y: number, w: number, h: numb
     rect(ctx, x + 2, y + 7, 4, 5, t.wallBot);
     rect(ctx, x + 10, y + 7, 4, 5, t.wallBot);
     if (frame === 2 && t.pattern === 'palace') {
-      // Ornate royal crimson banner trim framed in gold
       rect(ctx, x + 5, y + 5, 6, 8, t.accent);
       rect(ctx, x + 6, y + 6, 4, 6, '#b82236');
       px(ctx, x + 7, y + 8, '#ffe36b');
+    }
+  } else if (t.pattern === 'desert' || t.pattern === 'campfire' || t.pattern === 'oasis') {
+    // Sculpted layered sandstone canyon cliff strata with varied rock fissures (no boxy slots!)
+    const splitA = 5 + (frame % 3);
+    const splitB = 10 + ((frame + 1) % 3);
+    rect(ctx, x, y + 3, w, 4, t.wallBotHi);
+    rect(ctx, x, y + 5, w, 2, t.wallBot);
+    rect(ctx, x + splitA, y + 3, 1, 5, t.wallBotDark);
+    rect(ctx, x, y + 7, w, 1, t.wallBotDark);
+    rect(ctx, x + 1, y + 8, w - 2, 2, t.wallBotHi);
+    rect(ctx, x, y + 10, w, 4, t.wallBot);
+    rect(ctx, x + splitB, y + 8, 1, 6, t.wallBotDark);
+    // Sunlit eroded rock edge flecks
+    rect(ctx, x + ((frame * 4 + 1) % 10), y + 3, 4, 1, t.wallTopHi);
+    rect(ctx, x + ((frame * 5 + 3) % 9), y + 8, 4, 1, t.wallTopHi);
+    if (frame === 2) {
+      // Diagonal canyon fracture fissure
+      px(ctx, x + 4, y + 5, t.wallBotDark);
+      px(ctx, x + 5, y + 6, t.wallBotDark);
+      rect(ctx, x + 6, y + 7, 1, 3, t.wallBotDark);
+      px(ctx, x + 7, y + 10, t.wallBotDark);
+    } else if (frame === 3) {
+      // Protruding desert shale ledge
+      rect(ctx, x + 3, y + 10, 6, 2, t.wallBotDark);
+      rect(ctx, x + 3, y + 9, 5, 1, t.wallTopHi);
     }
   } else {
     // Staggered weathered stone/brick courses with crisp top bevels & hairline cracks
@@ -568,17 +614,15 @@ function drawBiomeWallBot(ctx: DrawCtx, x: number, y: number, w: number, h: numb
     rect(ctx, x + 6, y + 9, 6, 4, t.wallBot);
     px(ctx, x + 5, y + 8, t.wallTopHi);
 
-    // Subtle weathered brick cracks on frame 2
     if (frame === 2) {
       rect(ctx, x + 7, y + 9, 1, 2, t.wallBotDark);
       px(ctx, x + 8, y + 11, t.wallBotDark);
     }
 
-    // Biome hanging accents: moss/water sheen in sewers, vines in jungle, icicles in frozen, crystal facets in caves
     if (t.pattern === 'sewers' && frame % 2 === 1) {
       rect(ctx, x + 4, y + 2, 2, 6, t.accent);
       rect(ctx, x + 11, y + 2, 2, 4, t.accent);
-      px(ctx, x + 4, y + 7, '#a6f0db'); // water drip sheen
+      px(ctx, x + 4, y + 7, '#a6f0db');
     } else if (t.pattern === 'jungle' && frame % 2 === 1) {
       rect(ctx, x + 3, y + 2, 2, 7, t.accent);
       rect(ctx, x + 11, y + 2, 2, 5, t.accent);
@@ -1096,15 +1140,23 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
     px(ctx, x + 4 + (f & 1), y + 4, '#c7ff8c');
   });
 
-  // Floor blast scorch decals
+  // Floor blast scorch craters (multi-ring ash + charred pit + radial fissures)
   b.addSprite('sprScorch', 24, 20, 12, 10, 2, (ctx, x, y, _w, _h, f) => {
-    fillPixelEllipse(ctx, x + 12, y + 10, 10, 7, '#1c161a');
-    fillPixelEllipse(ctx, x + 12, y + 10, 6, 4, '#0d090c');
-    rect(ctx, x + 2 + f, y + 9, 4, 2, '#1c161a');
-    rect(ctx, x + 18 - f, y + 8, 4, 2, '#1c161a');
+    fillPixelEllipse(ctx, x + 12, y + 10, 11, 8, '#2b2226');
+    fillPixelEllipse(ctx, x + 12, y + 10, 9, 6, '#1a1418');
+    fillPixelEllipse(ctx, x + 12, y + 10, 5, 3, '#0b080a');
+    // Radial blast fissures
+    rect(ctx, x + 1 + f, y + 9, 4, 1, '#140f12');
+    rect(ctx, x + 19 - f, y + 9, 4, 1, '#140f12');
+    rect(ctx, x + 11, y + 2 + f, 2, 3, '#140f12');
+    rect(ctx, x + 11, y + 15 - f, 2, 3, '#140f12');
+    // Subtle crater rim dust highlights
+    px(ctx, x + 7 + f, y + 5, '#473c3f');
+    px(ctx, x + 16 - f, y + 14, '#473c3f');
   });
   b.addSprite('sprScorchmark', 14, 12, 7, 6, 2, (ctx, x, y, _w, _h, f) => {
-    fillPixelEllipse(ctx, x + 7, y + 6, 5, 4, '#1c161a');
-    fillPixelEllipse(ctx, x + 7 + (f & 1), y + 6, 3, 2, '#0d090c');
+    fillPixelEllipse(ctx, x + 7, y + 6, 6, 4, '#292024');
+    fillPixelEllipse(ctx, x + 7, y + 6, 4, 3, '#171115');
+    fillPixelEllipse(ctx, x + 7 + (f & 1), y + 6, 2, 1, '#0a0709');
   });
 }

@@ -1937,26 +1937,61 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     const cx = x + Math.floor(w / 2);
     const cy = y + Math.floor(h / 2);
     const r = Math.max(2, Math.floor(Math.min(w, h) / 2) - 1);
-    fillPixelEllipse(ctx, cx, cy, r, r, INK);
+    fillPixelEllipse(ctx, cx, cy, r, r, '#09060d');
     fillPixelEllipse(ctx, cx, cy, Math.max(1, r - 1), Math.max(1, r - 1), outer);
     fillPixelEllipse(ctx, cx, cy, Math.max(1, r - 2), Math.max(1, r - 2), f % 2 === 0 ? mid : core);
     px(ctx, cx - 1, cy - 1, core);
+    if (r >= 4) {
+      px(ctx, cx, cy, '#ffffff');
+    }
+  };
+  const drawEnemyOrb = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, mid: string, core: string): void => {
+    // Ultra-readable Nuclear Throne danger orb: crisp deep-black contour + bright saturated rim
+    // + pulsing hot luminous core that pops cleanly on EVERY biome floor (Desert, Snow, Caves, Palace)
+    const cx = x + Math.floor(w / 2);
+    const cy = y + Math.floor(h / 2);
+    const r = Math.max(3, Math.floor(Math.min(w, h) / 2) - 1);
+    fillPixelEllipse(ctx, cx, cy, r + 1, r + 1, '#09050e');
+    fillPixelEllipse(ctx, cx, cy, r, r, outer);
+    fillPixelEllipse(ctx, cx, cy, Math.max(2, r - 1), Math.max(2, r - 1), mid);
+    const coreR = Math.max(1, r - (f % 2 === 0 ? 2 : 1) - (r >= 5 ? 1 : 0));
+    fillPixelEllipse(ctx, cx, cy, coreR, coreR, core);
+    px(ctx, cx - 1, cy - 1, '#ffffff');
+    if (f % 2 === 1) {
+      px(ctx, cx, cy, '#ffffff');
+    }
   };
   const drawSlash = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, core: string): void => {
     const cy = y + Math.floor(h / 2);
     const thick = Math.max(2, 5 - f);
-    for (let dy = -Math.floor(h * 0.42); dy <= Math.floor(h * 0.42); dy++) {
-      const ny = dy / (h * 0.45);
+    for (let dy = -Math.floor(h * 0.44); dy <= Math.floor(h * 0.44); dy++) {
+      const ny = dy / (h * 0.46);
       const bend = Math.round((1 - ny * ny) * (w * 0.42));
-      const bx = x + Math.floor(w * 0.25) + bend;
-      rect(ctx, bx - 1, cy + dy, thick + 2, 1, outer);
+      const bx = x + Math.floor(w * 0.24) + bend;
+      // Dark contrast lip behind crescent so melee swings read sharply even over bright snow/sand
+      rect(ctx, bx - 2, cy + dy, thick + 3, 1, '#0d0914');
+      rect(ctx, bx - 1, cy + dy, thick + 1, 1, outer);
       rect(ctx, bx, cy + dy, Math.max(1, thick - 1), 1, core);
     }
   };
   const drawExplosion = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, mid: string, core: string): void => {
     const cx = x + Math.floor(w / 2);
     const cy = y + Math.floor(h / 2);
-    const r = Math.floor(Math.min(w, h) * (0.3 + f * 0.06));
+    const r = Math.floor(Math.min(w, h) * (0.3 + f * 0.065));
+    if (f === 0) {
+      // Frame 0: blazing hot initial detonation flash
+      fillPixelEllipse(ctx, cx, cy, r + 1, r + 1, outer);
+      fillPixelEllipse(ctx, cx, cy, Math.max(2, r - 1), Math.max(2, r - 1), '#ffffff');
+      return;
+    }
+    if (f >= 3) {
+      // Frame 3: expanding charcoal smoke rim + fading ember heart
+      fillPixelEllipse(ctx, cx, cy, r, r, '#241d22');
+      fillPixelEllipse(ctx, cx - 2, cy - 1, Math.max(2, r - 2), Math.max(2, r - 2), outer);
+      fillPixelEllipse(ctx, cx + 1, cy + 1, Math.max(1, r - 4), Math.max(1, r - 4), mid);
+      return;
+    }
+    fillPixelEllipse(ctx, cx, cy, r + 1, r + 1, '#1c1216');
     fillPixelEllipse(ctx, cx, cy, r, r, outer);
     fillPixelEllipse(ctx, cx - 2, cy - 1, Math.max(2, r - 2), Math.max(2, r - 2), mid);
     fillPixelEllipse(ctx, cx + 1, cy + 1, Math.max(1, r - 4), Math.max(1, r - 4), core);
@@ -2021,23 +2056,32 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     ['sprPopoPlasma', 14, '#1b479e', '#4da6ff', '#e0faff'],
     ['sprLightningBall', 12, '#1e669e', '#59d9ff', '#ffffff'],
     ['sprBloodBall', 12, '#5e0f18', '#e02438', '#ff8f99'],
-    ['sprEnemyBullet', 9, '#9e1924', '#ff3847', '#ffffff'],
-    ['sprEnemyBullet1', 9, '#9e1924', '#ff3847', '#ffffff'],
-    ['sprEnemyBullet4', 11, '#8c1f6e', '#ff47b8', '#ffffff'],
-    ['sprIDPDBullet', 9, '#1b4a9e', '#4aa8ff', '#ffffff'],
-    ['sprScorpionBullet', 9, '#247528', '#78ff52', '#ffffff'],
-    ['sprSalamanderBullet', 10, '#bd3214', '#ff8526', '#fff499'],
-    ['sprGuardianBullet', 12, '#1c6e38', '#5eff87', '#ffffff'],
-    ['sprBigGuardianBullet', 16, '#185c2f', '#5eff87', '#ffffff'],
-    ['sprExploGuardianBullet', 13, '#5c6e18', '#d9ff47', '#ffffff'],
-    ['sprHorrorBullet', 10, '#19752a', '#6eff78', '#ffffff'],
-    ['sprLHBouncer', 10, '#1c479e', '#66d9ff', '#ffffff'],
-    ['sprThrone2Bullet', 14, '#146b28', '#52ff73', '#ffffff'],
     ['sprBulletHit', 10, '#e67824', '#ffe047', '#ffffff'],
   ];
   for (const [name, s, outer, mid, core] of orbList) {
     b.addSprite(name, s, s, Math.floor(s / 2), Math.floor(s / 2), 2, (ctx, x, y, sw, sh, f) =>
       drawOrb(ctx, x, y, sw, sh, f, outer, mid, core),
+    );
+  }
+
+  // High-contrast enemy & boss orbs (black outer contour + saturated danger ring + pulsing hot core)
+  const enemyOrbList: Array<[string, number, string, string, string]> = [
+    ['sprEnemyBullet', 11, '#b81124', '#ff3b45', '#fff8d4'],
+    ['sprEnemyBullet1', 11, '#b81124', '#ff3b45', '#fff8d4'],
+    ['sprEnemyBullet4', 12, '#8c1275', '#ff47d6', '#fff0ff'],
+    ['sprIDPDBullet', 11, '#123e9e', '#38b6ff', '#ebfbff'],
+    ['sprScorpionBullet', 11, '#126e24', '#69ff47', '#f0ffd6'],
+    ['sprSalamanderBullet', 12, '#b8250e', '#ff801f', '#fff7bd'],
+    ['sprGuardianBullet', 13, '#106630', '#4dff80', '#f0fff4'],
+    ['sprBigGuardianBullet', 17, '#0f5928', '#52ff88', '#ffffff'],
+    ['sprExploGuardianBullet', 14, '#596e0e', '#e0ff38', '#ffffff'],
+    ['sprHorrorBullet', 11, '#147528', '#6eff78', '#f0fff0'],
+    ['sprLHBouncer', 11, '#15429e', '#5ce1ff', '#ffffff'],
+    ['sprThrone2Bullet', 16, '#0f6624', '#4dff75', '#ffffff'],
+  ];
+  for (const [name, s, outer, mid, core] of enemyOrbList) {
+    b.addSprite(name, s, s, Math.floor(s / 2), Math.floor(s / 2), 2, (ctx, x, y, sw, sh, f) =>
+      drawEnemyOrb(ctx, x, y, sw, sh, f, outer, mid, core),
     );
   }
 
