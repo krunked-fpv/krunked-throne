@@ -37,6 +37,13 @@ function ntLocalAssetsPlugin(): Plugin {
       return;
     }
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      // Avoid noisy browser console 404 when optional local Steam manifest has not been extracted
+      if (path.relative(assetsRoot, resolved) === 'manifest.json') {
+        res.statusCode = 204;
+        res.setHeader('Cache-Control', 'no-cache');
+        res.end();
+        return;
+      }
       res.statusCode = 404;
       res.end('Not Found');
       return;
