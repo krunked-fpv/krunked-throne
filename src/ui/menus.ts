@@ -24,8 +24,35 @@ import { SpriteRenderer } from '@/render/sprites';
 import {
   ALL_CROWN_IDS,
   DEFAULT_UI_DATA_PROVIDER,
+  resolveWeaponLabel,
+  resolveWeaponSpriteName,
+  selectLoadingTip,
   type UiDataProvider,
 } from './data-provider';
+import { computeUltraIconFrame } from './hud';
+
+const MAIN_PATH_AREAS = [
+  '1-1', '1-2', '1-3',
+  '2-1',
+  '3-1', '3-2', '3-3',
+  '4-1',
+  '5-1', '5-2', '5-3',
+  '6-1',
+  '7-1', '7-2', '7-3',
+] as const;
+
+function resolveRunProgressIndex(areaCode: string): number {
+  const direct = (MAIN_PATH_AREAS as readonly string[]).indexOf(areaCode);
+  if (direct >= 0) return direct;
+  if (areaCode === '0-1') return MAIN_PATH_AREAS.length - 1;
+  if (areaCode === '1-?') return 2;
+  if (areaCode === '2-?') return 3;
+  if (areaCode === '3-?') return 5;
+  if (areaCode === '4-?') return 7;
+  if (areaCode === '5-?') return 10;
+  if (areaCode === 'hq-1') return 13;
+  return 0;
+}
 
 export interface HitRegion {
   id: string;
@@ -385,6 +412,7 @@ export class MenuSystem {
       case 'campfire': {
         const curIdx = Math.max(0, mutants.findIndex((m) => m.id === ctx.save.selectedMutant));
         const selectedId = ctx.save.selectedMutant;
+        const hasGold = Boolean(ctx.save.mutants[selectedId]?.goldenWeapon) || selectedId === 'yv';
 
         // Instant shoulder/face shortcuts work cleanly from either focus row
         if (input.prevTab) {
@@ -441,7 +469,9 @@ export class MenuSystem {
                 });
                 break;
               case 2:
-                actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
+                if (hasGold) {
+                  actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
+                }
                 break;
               case 3:
                 actions.push({
@@ -449,7 +479,7 @@ export class MenuSystem {
                   mutant: selectedId,
                   skin: ctx.save.selectedSkins[selectedId] ?? 'a',
                   crown: ctx.save.selectedCrown,
-                  useGoldenWeapon: ctx.save.useGoldenWeapon,
+                  useGoldenWeapon: hasGold && ctx.save.useGoldenWeapon,
                 });
                 break;
               case 4:
@@ -462,7 +492,7 @@ export class MenuSystem {
               mutant: selectedId,
               skin: ctx.save.selectedSkins[selectedId] ?? 'a',
               crown: ctx.save.selectedCrown,
-              useGoldenWeapon: ctx.save.useGoldenWeapon,
+              useGoldenWeapon: hasGold && ctx.save.useGoldenWeapon,
             });
           }
           actions.push({ type: 'ui_sfx', sound: 'sndClick' });
@@ -673,7 +703,7 @@ export class MenuSystem {
         } else if (this.focusedIndex === 2) {
           actions.push({
             type: 'update_render',
-            partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 7 },
+            partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 9 },
           });
         } else if (this.focusedIndex === 3) {
           actions.push({ type: 'update_render', partial: { showFps: !save.render.showFps } });
@@ -998,7 +1028,12 @@ export class MenuSystem {
         this.sprites.draw(ctx, 'sprLogoGlow', cx, logoY, { alpha: glowPulse, pixelSnap: true });
       }
       const logoSpr = this.sprites.getSprite('sprLogo');
-      const logoFrame = computeTitleLogoFrame(timeSec, logoSpr?.frames.length ?? 8);
+      let logoFrame = computeTitleLogoFrame(timeSec, logoSpr?.frames.length ?? 8);
+      // In Steam data.win, sprLogo frame 0 is a 1x1 blank placeholder; skip straight to frame 1 when tiny
+      const f0 = logoSpr?.frames[logoFrame];
+      if (logoFrame === 0 && f0 && f0.srcW <= 2 && f0.srcH <= 2 && (logoSpr?.frames.length ?? 0) > 1) {
+        logoFrame = 1;
+      }
       this.sprites.draw(ctx, 'sprLogo', cx, logoY, {
         frame: logoFrame,
         pixelSnap: true,
@@ -1194,63 +1229,201 @@ export class MenuSystem {
     const skin = save.selectedSkins[selected.id] ?? 'a';
     const crown = this.data.getCrown(save.selectedCrown);
     const mProg = save.mutants[selected.id];
+    const hasGold = Boolean(mProg?.goldenWeapon) || selected.id === 'yv';
+    const goldActive = hasGold && save.useGoldenWeapon;
 
     // Dark campfire night wasteland background
     ctx.fillStyle = '#141018';
     ctx.fillRect(0, 0, width, height);
 
-    // Warm flickering firelight pool around campfire (spaced cleanly clear of right info card)
+    // Live Big Portrait bounds (left) & Mutant Details bounds (right)
     const isWide = width >= 380;
-    const infoW = isWide ? 138 : 128;
-    const infoX = width - infoW - (isWide ? 8 : 4);
-    const fireX = isWide ? Math.round(width * 0.5) - 10 : 146;
-    const fireY = 92;
-    const flicker = Math.sin(timeSec * 13) * 4 + Math.cos(timeSec * 23) * 2;
-    const fireGrad = ctx.createRadialGradient(fireX, fireY, 6, fireX, fireY, 96 + flicker);
-    fireGrad.addColorStop(0, 'rgba(255, 145, 45, 0.42)');
-    fireGrad.addColorStop(0.5, 'rgba(180, 70, 25, 0.16)');
-    fireGrad.addColorStop(1, 'rgba(20, 16, 24, 0)');
-    ctx.fillStyle = fireGrad;
-    ctx.fillRect(0, 0, width, height);
-
-    // Ground circle around fire (sized cleanly so right mutant card never overlaps campfire ring)
-    const groundRx = isWide ? 56 : 38;
-    ctx.fillStyle = '#33251e';
-    ctx.beginPath();
-    ctx.ellipse(fireX, fireY + 8, groundRx, 24, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Animated Campfire sprite
-    const drewFire = this.sprites.draw(ctx, 'sprCampfire', fireX, fireY, {
-      frame: Math.floor(timeSec * 8),
-      pixelSnap: true,
-    });
-    if (!drewFire) {
-      ctx.fillStyle = '#5c3c24';
-      ctx.fillRect(fireX - 9, fireY + 3, 18, 5);
-      ctx.fillStyle = '#ff6a26';
-      ctx.fillRect(fireX - 6, fireY - 6 - (Math.floor(timeSec * 8) % 2), 12, 10);
-      ctx.fillStyle = '#ffe047';
-      ctx.fillRect(fireX - 3, fireY - 3, 6, 5);
-    }
-
-    // Selected mutant idle sprite sitting/standing beside the campfire
-    const idleSpr =
-      skin === 'b' && selected.sprites.bIdle && this.sprites.hasSprite(selected.sprites.bIdle)
-        ? selected.sprites.bIdle
-        : selected.sprites.idle;
-    this.sprites.draw(ctx, idleSpr, fireX - 24, fireY + 8, {
-      frame: Math.floor(timeSec * 6),
-      scaleX: 1.5,
-      scaleY: 1.5,
-      pixelSnap: true,
-    });
-
-    // Live Big Portrait (left side, using pixel-verified 2-frame-per-mutant A/B indexing)
     const portX = 8;
     const portY = 24;
     const portW = 74;
     const portH = 92;
+    const infoW = isWide ? 138 : 128;
+    const infoX = width - infoW - (isWide ? 8 : 4);
+    const clearingLeft = portX + portW + 4;
+    const clearingRight = infoX - 4;
+    const fireX = Math.round((clearingLeft + clearingRight) * 0.5);
+    const fireY = 82;
+
+    // Warm flickering firelight pool around campfire (spaced cleanly clear of portrait & details card)
+    const flicker = Math.sin(timeSec * 13) * 4 + Math.cos(timeSec * 23) * 2;
+    const fireGrad = ctx.createRadialGradient(fireX, fireY, 6, fireX, fireY, (isWide ? 106 : 86) + flicker);
+    fireGrad.addColorStop(0, 'rgba(255, 145, 45, 0.44)');
+    fireGrad.addColorStop(0.5, 'rgba(180, 70, 25, 0.18)');
+    fireGrad.addColorStop(1, 'rgba(20, 16, 24, 0)');
+    ctx.fillStyle = fireGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Ground dirt clearing & stone campfire ring (strictly inside clearingLeft..clearingRight)
+    const groundRx = isWide ? 76 : 43;
+    const groundRy = isWide ? 38 : 34;
+    ctx.fillStyle = '#261b18';
+    ctx.beginPath();
+    ctx.ellipse(fireX, fireY + 6, groundRx + 4, groundRy + 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#36261f';
+    ctx.beginPath();
+    ctx.ellipse(fireX, fireY + 6, groundRx, groundRy, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Depth-sorted iconic Nuclear Throne campfire scene: all 12 mutants around the flickering fire!
+    const seatRx = isWide ? 64 : 36;
+    const seatRy = isWide ? 32 : 29;
+    const sceneItems: Array<{ y: number; draw: () => void }> = [];
+
+    // Campfire centerpiece item
+    sceneItems.push({
+      y: fireY + 2,
+      draw: () => {
+        const drewFire = this.sprites.draw(ctx, 'sprCampfire', fireX, fireY, {
+          frame: Math.floor(timeSec * 8),
+          pixelSnap: true,
+        });
+        if (!drewFire) {
+          ctx.fillStyle = '#5c3c24';
+          ctx.fillRect(fireX - 9, fireY + 3, 18, 5);
+          ctx.fillStyle = '#ff6a26';
+          ctx.fillRect(fireX - 6, fireY - 6 - (Math.floor(timeSec * 8) % 2), 12, 10);
+          ctx.fillStyle = '#ffe047';
+          ctx.fillRect(fireX - 3, fireY - 3, 6, 5);
+        }
+        // Rising flickering embers above flame
+        for (let e = 0; e < 6; e++) {
+          const phase = (timeSec * (0.9 + (e % 3) * 0.25) + e * 0.19) % 1;
+          const ex = Math.round(fireX + Math.sin(timeSec * 4 + e * 2.1) * (4 + phase * 6));
+          const ey = Math.round(fireY - 4 - phase * 24);
+          ctx.save();
+          ctx.globalAlpha = (1 - phase) * 0.9;
+          ctx.fillStyle = e % 2 === 0 ? '#ffe047' : '#ff7b32';
+          ctx.fillRect(ex, ey, 2, 2);
+          ctx.restore();
+        }
+      },
+    });
+
+    // All 12 mutants seated around the campfire — selected mutant stands up animated with weapon & crown!
+    const totalMutants = mutants.length;
+    for (let i = 0; i < totalMutants; i++) {
+      const m = mutants[i]!;
+      const mSkin = save.selectedSkins[m.id] ?? 'a';
+      const isSel = m.id === selected.id;
+      const angle = -Math.PI * 0.5 + (i / totalMutants) * Math.PI * 2 + 0.26;
+      const pullIn = isSel ? 0.88 : 1;
+      const mx = Math.round(fireX + Math.cos(angle) * seatRx * pullIn);
+      const my = Math.round(fireY + 6 + Math.sin(angle) * seatRy * pullIn);
+      const faceLeft = mx > fireX;
+
+      // Make each sitting mutant around the fire directly clickable
+      this.regions.push({
+        id: `camp_sit_${m.id}`,
+        x: mx - 8,
+        y: my - 9,
+        w: 16,
+        h: 18,
+        onActivate: () => ({ type: 'select_mutant', mutant: m.id }),
+      });
+
+      sceneItems.push({
+        y: my,
+        draw: () => {
+          // Ground shadow oval under mutant
+          ctx.fillStyle = isSel ? 'rgba(255, 224, 71, 0.28)' : 'rgba(8, 6, 12, 0.45)';
+          ctx.beginPath();
+          ctx.ellipse(mx, my + 6, isSel ? 8 : 6, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          if (isSel) {
+            ctx.strokeStyle = '#ffe047';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.ellipse(mx, my + 6, 8, 3, 0, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+
+          let sprName: string;
+          if (isSel) {
+            sprName =
+              mSkin === 'b' && m.sprites.bIdle && this.sprites.hasSprite(m.sprites.bIdle)
+                ? m.sprites.bIdle
+                : m.sprites.idle;
+          } else {
+            const bSit = mSkin === 'b' ? m.sprites.bSit : undefined;
+            if (bSit && this.sprites.hasSprite(bSit)) {
+              sprName = bSit;
+            } else if (m.sprites.sit && this.sprites.hasSprite(m.sprites.sit)) {
+              sprName = m.sprites.sit;
+            } else {
+              sprName =
+                mSkin === 'b' && m.sprites.bIdle && this.sprites.hasSprite(m.sprites.bIdle)
+                  ? m.sprites.bIdle
+                  : m.sprites.idle;
+            }
+          }
+
+          // Normalize scale so oversized Steam sprites (e.g. 48x48 Horror) match the campfire ring cleanly
+          const sDef = this.sprites.getSprite(sprName);
+          const refH = sDef ? Math.max(16, sDef.height) : 24;
+          const targetH = isSel ? 24 : 18;
+          const normScale = Math.max(0.45, Math.min(1.25, targetH / refH));
+          const standLift = isSel ? Math.round(Math.sin(timeSec * 5) * 1) - 3 : 0;
+
+          // Selected Crown floating behind the standing mutant!
+          if (isSel && crown.id !== 'none') {
+            const crX = mx + (faceLeft ? 7 : -7);
+            const crY = my + standLift - 8 + Math.sin(timeSec * 4.2) * 1.5;
+            const drewLoadoutCrown = this.sprites.hasSprite('sprLoadoutCrown')
+              ? this.sprites.drawInBox(ctx, 'sprLoadoutCrown', crown.crownIndex, crX - 6, crY - 6, 12, 12)
+              : false;
+            if (!drewLoadoutCrown) {
+              this.sprites.draw(ctx, crown.spriteIdle, crX, crY, {
+                frame: Math.floor(timeSec * 4),
+                pixelSnap: true,
+              });
+            }
+          }
+
+          this.sprites.draw(ctx, sprName, mx, my + standLift, {
+            frame: isSel ? Math.floor(timeSec * 6) : Math.floor(timeSec * 2 + i),
+            flipX: faceLeft,
+            scaleX: normScale,
+            scaleY: normScale,
+            alpha: isSel ? 1 : 0.88,
+            pixelSnap: true,
+          });
+
+          // Starting or Golden weapon held by the standing selected mutant
+          if (isSel) {
+            const startWepId =
+              goldActive && mProg?.goldenWeapon ? mProg.goldenWeapon : m.startingWeapon;
+            const wepSpr = resolveWeaponSpriteName(startWepId, this.data);
+            const dir = faceLeft ? -1 : 1;
+            this.sprites.draw(ctx, wepSpr, mx + dir * 5, my + standLift + 2, {
+              frame: 0,
+              rotation: faceLeft ? Math.PI : 0,
+              flipY: faceLeft,
+              scaleX: 0.85,
+              scaleY: 0.85,
+              pixelSnap: true,
+            });
+          }
+        },
+      });
+    }
+
+    sceneItems.sort((a, b) => a.y - b.y);
+    for (let i = 0; i < sceneItems.length; i++) {
+      sceneItems[i]!.draw();
+    }
+
+    const idleSpr =
+      skin === 'b' && selected.sprites.bIdle && this.sprites.hasSprite(selected.sprites.bIdle)
+        ? selected.sprites.bIdle
+        : selected.sprites.idle;
+
+    // Live Big Portrait (left side, using pixel-verified 2-frame-per-mutant A/B indexing)
     ctx.fillStyle = 'rgba(12, 10, 18, 0.72)';
     ctx.fillRect(portX, portY, portW, portH);
     ctx.strokeStyle = skin === 'b' ? '#ffe047' : '#524863';
@@ -1390,7 +1563,6 @@ export class MenuSystem {
       },
     );
 
-    const hasGold = Boolean(mProg?.goldenWeapon) || selected.id === 'yv';
     this.drawButton(
       ctx,
       'camp_golden',
@@ -1398,11 +1570,11 @@ export class MenuSystem {
       rowY,
       68,
       18,
-      save.useGoldenWeapon ? '@yGOLD: ON' : hasGold ? 'GOLD: OFF' : '@dGOLD: OFF',
-      () => ({ type: 'toggle_golden', enabled: !save.useGoldenWeapon }),
+      hasGold ? (goldActive ? '@yGOLD: ON' : 'GOLD: OFF') : '@dGOLD: NONE',
+      () => (hasGold ? { type: 'toggle_golden', enabled: !save.useGoldenWeapon } : null),
       {
         font: 'fntSmall',
-        accent: '#ffe047',
+        accent: hasGold ? '#ffe047' : '#5a5268',
         focused: inActions && this.campfireActionIndex === 2,
       },
     );
@@ -1426,7 +1598,7 @@ export class MenuSystem {
         mutant: selected.id,
         skin,
         crown: save.selectedCrown,
-        useGoldenWeapon: save.useGoldenWeapon,
+        useGoldenWeapon: goldActive,
       }),
       {
         font: 'fntSmall',
@@ -1530,10 +1702,23 @@ export class MenuSystem {
         : mutInputMode === 'touch'
           ? '@dTAP A MUTATION TO SELECT'
           : '@dCHOOSE ONE  (CLICK OR KEYS 1-' + Math.max(1, list.length) + ')';
-    this.fonts.draw(ctx, mutPrompt, width * 0.5, 36, 'fntSmall', {
+    this.fonts.draw(ctx, mutPrompt, width * 0.5, 34, 'fntSmall', {
       align: 'center',
       outline: true,
     });
+
+    // Context badge for Horror's 5th choice or Crown of Destiny's single forced choice
+    if (list.length >= 5) {
+      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', width * 0.5, 44, 'fntSmall', {
+        align: 'center',
+        outline: true,
+      });
+    } else if (list.length === 1 && simState?.crown === 'destiny') {
+      this.fonts.draw(ctx, '@pCROWN OF DESTINY', width * 0.5, 44, 'fntSmall', {
+        align: 'center',
+        outline: true,
+      });
+    }
 
     if (list.length === 0) return;
 
@@ -1542,7 +1727,7 @@ export class MenuSystem {
     const gap = list.length >= 5 ? 6 : 10;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const cardY = 58;
+    const cardY = 60;
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
 
@@ -1629,35 +1814,58 @@ export class MenuSystem {
         align: 'center',
       });
     }
+
+    // Compact bottom tray of already-acquired mutations so players can review synergies while choosing
+    const owned = simState?.player.mutations ?? [];
+    if (owned.length > 0) {
+      const iconStep = 12;
+      const shown = Math.min(owned.length, 16);
+      const rowW = shown * iconStep;
+      const oxStart = Math.round((width - rowW) * 0.5);
+      const oy = height - 13;
+      for (let i = 0; i < shown; i++) {
+        const oDef = this.data.getMutation(owned[i]!);
+        const ix = oxStart + i * iconStep;
+        const drew = oDef
+          ? this.sprites.drawInBox(ctx, oDef.hudSprite || 'sprSkillIconHUD', oDef.iconFrame, ix, oy, 10, 10)
+          : false;
+        if (!drew) {
+          ctx.fillStyle = '#4de862';
+          ctx.fillRect(ix, oy, 9, 9);
+        }
+      }
+    }
   }
 
   private renderUltraSelect(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, simState } = mctx;
+    const { width, height, simState, save } = mctx;
     const list = simState?.pendingUltras ?? [];
+    const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
 
     ctx.fillStyle = 'rgba(10, 9, 14, 0.92)';
     ctx.fillRect(0, 0, width, height);
 
-    this.fonts.draw(ctx, '@yULTRA MUTATION', width * 0.5, 16, 'fntL', {
+    this.fonts.draw(ctx, '@yULTRA MUTATION', width * 0.5, 14, 'fntL', {
       align: 'center',
       outline: true,
     });
-    this.fonts.draw(ctx, '@gLEVEL ULTRA REACHED - CHOOSE YOUR PATH', width * 0.5, 36, 'fntSmall', {
+    this.fonts.draw(ctx, '@gLEVEL ULTRA REACHED - CHOOSE YOUR PATH', width * 0.5, 34, 'fntSmall', {
       align: 'center',
       outline: true,
     });
 
     if (list.length === 0) return;
 
-    const cardW = 122;
-    const cardH = 112;
-    const gap = 18;
+    // Generous card dimensions so multi-line Ultra descriptions (e.g. CONFISCATE) never overflow borders
+    const cardW = 136;
+    const cardH = 136;
+    const gap = 16;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const cardY = 62;
+    const cardY = 54;
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
 
@@ -1686,22 +1894,28 @@ export class MenuSystem {
         outline: true,
       });
 
+      const iconSprName = def?.sprite || 'sprEGSkillIcon';
+      const iconSprDef = this.sprites.getSprite(iconSprName);
+      const ultraFrame = def
+        ? computeUltraIconFrame(mutant.raceIndex, def.slot, iconSprDef?.frames.length ?? 24)
+        : 0;
       const drewIcon = def
-        ? this.sprites.drawInBox(ctx, def.sprite || 'sprEGSkillIcon', def.iconIndex, x + Math.floor((cardW - 34) / 2), y + 20, 34, 42)
+        ? this.sprites.drawInBox(ctx, iconSprName, ultraFrame, x + Math.floor((cardW - 34) / 2), y + 18, 34, 38)
         : false;
       if (!drewIcon) {
         ctx.fillStyle = '#ffe047';
-        ctx.fillRect(x + 44, y + 24, 34, 34);
+        ctx.fillRect(x + Math.floor((cardW - 32) / 2), y + 20, 32, 32);
       }
 
       const title = def ? def.name : ultraId.toUpperCase();
-      this.fonts.draw(ctx, title, x + cardW * 0.5, y + 68, 'fntM1', {
+      this.fonts.draw(ctx, title, x + cardW * 0.5, y + 60, 'fntM1', {
         align: 'center',
+        maxWidth: cardW - 10,
         color: '#ffe047',
         outline: true,
       });
       if (def) {
-        this.fonts.draw(ctx, def.description, x + cardW * 0.5, y + 84, 'fntSmall', {
+        this.fonts.draw(ctx, def.description, x + cardW * 0.5, y + 76, 'fntSmall', {
           align: 'center',
           maxWidth: cardW - 12,
           outline: true,
@@ -1720,46 +1934,50 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // 4. PAUSE OVERLAY
+  // 4. PAUSE OVERLAY (NT-FAITHFUL ACTIONS + LOADOUT / MUTATIONS / CROWN PANEL)
   // --------------------------------------------------------------------------
 
   private renderPauseOverlay(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, simState } = mctx;
+    const { width, height, simState, save } = mctx;
     const cx = Math.round(width * 0.5);
 
     ctx.fillStyle = 'rgba(8, 6, 14, 0.78)';
     ctx.fillRect(0, 0, width, height);
 
-    const panelW = 168;
-    const panelH = 164;
+    const panelW = Math.min(300, width - 20);
+    const panelH = 188;
     const px = cx - Math.floor(panelW / 2);
     const py = Math.round((height - panelH) * 0.5);
 
-    ctx.fillStyle = 'rgba(18, 14, 24, 0.94)';
+    ctx.fillStyle = 'rgba(18, 14, 24, 0.95)';
     ctx.fillRect(px, py, panelW, panelH);
     ctx.strokeStyle = '#ffe047';
     ctx.lineWidth = 1;
     ctx.strokeRect(px + 0.5, py + 0.5, panelW - 1, panelH - 1);
 
-    this.fonts.draw(ctx, 'PAUSED', cx, py + 10, 'fntL', {
+    this.fonts.draw(ctx, 'PAUSED', cx, py + 6, 'fntL', {
       align: 'center',
       color: '#ffffff',
       outline: true,
     });
 
     if (simState) {
-      const info = `@y${simState.loop > 0 ? `L${simState.loop} ` : ''}${simState.areaCode}  @wKILLS: ${simState.stats.kills}  @gLV ${simState.player.level}`;
-      this.fonts.draw(ctx, info, cx, py + 32, 'fntSmall', { align: 'center', outline: true });
+      const mins = Math.floor((simState.stats.timeTicks / 30) / 60);
+      const secs = Math.floor((simState.stats.timeTicks / 30) % 60);
+      const timeStr = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+      const info = `@y${simState.loop > 0 ? `L${simState.loop} ` : ''}${simState.areaCode}  @wKILLS: ${simState.stats.kills}  @gLV ${simState.player.level}  @d${timeStr}`;
+      this.fonts.draw(ctx, info, cx, py + 26, 'fntSmall', { align: 'center', outline: true });
     }
 
-    const btnW = 128;
-    const btnH = 20;
-    const bx = cx - Math.floor(btnW / 2);
+    // Left Column: Primary Pause Action Buttons
+    const btnW = 114;
+    const btnH = 19;
+    const bx = px + 10;
 
-    this.drawButton(ctx, 'pause_resume', bx, py + 48, btnW, btnH, 'RESUME', () => ({ type: 'resume' }), {
+    this.drawButton(ctx, 'pause_resume', bx, py + 42, btnW, btnH, 'RESUME', () => ({ type: 'resume' }), {
       accent: '#52e864',
       focused: this.focusedIndex === 0,
       font: 'fntSmall',
@@ -1768,7 +1986,7 @@ export class MenuSystem {
       ctx,
       'pause_options',
       bx,
-      py + 73,
+      py + 65,
       btnW,
       btnH,
       'OPTIONS',
@@ -1782,7 +2000,7 @@ export class MenuSystem {
         : pauseMode === 'touch'
           ? 'RESTART'
           : 'RESTART [R]';
-    this.drawButton(ctx, 'pause_restart', bx, py + 98, btnW, btnH, restartLabel, () => ({ type: 'restart' }), {
+    this.drawButton(ctx, 'pause_restart', bx, py + 88, btnW, btnH, restartLabel, () => ({ type: 'restart' }), {
       accent: '#ff8a38',
       focused: this.focusedIndex === 2,
       font: 'fntSmall',
@@ -1791,13 +2009,154 @@ export class MenuSystem {
       ctx,
       'pause_campfire',
       bx,
-      py + 123,
+      py + 111,
       btnW,
       btnH,
       'CAMPFIRE',
       () => ({ type: 'open_screen', screen: 'campfire' }),
       { accent: '#ff4242', focused: this.focusedIndex === 3, font: 'fntSmall' },
     );
+
+    // Right Column: Active Weapons, Crown & Hoverable Mutations / Ultra Tray
+    const rx = bx + btnW + 10;
+    const rw = px + panelW - rx - 10;
+    let tooltipTitle = '';
+    let tooltipDesc = '';
+
+    if (simState) {
+      const player = simState.player;
+      const mutant = this.data.getMutant(player.mutant);
+
+      // Weapons sub-box
+      ctx.fillStyle = 'rgba(10, 8, 16, 0.85)';
+      ctx.fillRect(rx, py + 42, rw, 44);
+      ctx.strokeStyle = '#4a4358';
+      ctx.strokeRect(rx + 0.5, py + 42.5, rw - 1, 43);
+
+      this.fonts.draw(ctx, '@dWEAPONS', rx + 4, py + 45, 'fntSmall', { shadow: true });
+      for (let s = 0; s < 2; s++) {
+        const slot = player.weapons[s];
+        const wy = py + 55 + s * 14;
+        if (slot) {
+          const wDef = this.data.getWeapon(slot.weaponId);
+          const wSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
+          this.sprites.drawInBox(ctx, wSpr, 0, rx + 4, wy, 20, 10, { maxScale: 1 });
+          const wCol = slot.cursed ? '#d47aff' : wDef?.golden ? '#ffe047' : s === player.activeSlot ? '#ffffff' : '#9ca0ad';
+          const wName = resolveWeaponLabel(slot.weaponId, this.data);
+          const trimmed = wName.length > 16 ? `${wName.slice(0, 15).trimEnd()}.` : wName;
+          this.fonts.draw(ctx, trimmed, rx + 27, wy + 2, 'fntSmall', { color: wCol, shadow: true });
+        } else {
+          this.fonts.draw(ctx, '@d(EMPTY SLOT)', rx + 27, wy + 2, 'fntSmall', { shadow: false });
+        }
+      }
+
+      // Active Crown & Mutant strip
+      const crownDef = this.data.getCrown(simState.crown);
+      const crownY = py + 90;
+      ctx.fillStyle = 'rgba(10, 8, 16, 0.85)';
+      ctx.fillRect(rx, crownY, rw, 15);
+      ctx.strokeStyle = '#4a4358';
+      ctx.strokeRect(rx + 0.5, crownY + 0.5, rw - 1, 14);
+      if (crownDef.id !== 'none') {
+        this.sprites.drawInBox(ctx, crownDef.spriteIdle, 0, rx + 3, crownY + 2, 12, 11);
+        this.fonts.draw(ctx, `@p${crownDef.name.replace('CROWN OF ', 'CRN: ')}`, rx + 18, crownY + 4, 'fntSmall', {
+          shadow: true,
+        });
+      } else {
+        this.fonts.draw(ctx, `@y${mutant.name}  @dNO CROWN`, rx + 5, crownY + 4, 'fntSmall', {
+          shadow: true,
+        });
+      }
+
+      // Mutations + Ultra interactive tray
+      const mutY = py + 109;
+      ctx.fillStyle = 'rgba(10, 8, 16, 0.85)';
+      ctx.fillRect(rx, mutY, rw, 29);
+      ctx.strokeStyle = '#4a4358';
+      ctx.strokeRect(rx + 0.5, mutY + 0.5, rw - 1, 28);
+
+      const muts = player.mutations;
+      if (muts.length === 0 && !player.ultra) {
+        this.fonts.draw(ctx, '@dNO MUTATIONS YET', rx + 5, mutY + 11, 'fntSmall');
+      } else {
+        const iconStep = 13;
+        const cols = Math.max(1, Math.floor((rw - 6) / iconStep));
+        for (let i = 0; i < muts.length; i++) {
+          const def = this.data.getMutation(muts[i]!);
+          const col = i % cols;
+          const row = Math.floor(i / cols);
+          if (row >= 2) break;
+          const mx = rx + 4 + col * iconStep;
+          const my = mutY + 3 + row * 12;
+          const rid = `pause_mut_${i}`;
+          const hovered = this.hoveredId === rid;
+          if (hovered && def) {
+            tooltipTitle = `@g${def.name}`;
+            tooltipDesc = def.description;
+          }
+          if (hovered) {
+            ctx.fillStyle = 'rgba(82, 232, 100, 0.32)';
+            ctx.fillRect(mx - 1, my - 1, 12, 12);
+          }
+          const drew = def
+            ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 10, 10)
+            : false;
+          if (!drew) {
+            ctx.fillStyle = '#4de862';
+            ctx.fillRect(mx, my, 10, 10);
+          }
+          this.regions.push({ id: rid, x: mx - 1, y: my - 1, w: 12, h: 12, onActivate: () => null });
+        }
+        if (player.ultra) {
+          const uDef = this.data.getUltra(player.ultra);
+          const idx = muts.length;
+          const col = idx % cols;
+          const row = Math.min(1, Math.floor(idx / cols));
+          const ux = rx + 4 + col * iconStep;
+          const uy = mutY + 3 + row * 12;
+          const rid = 'pause_ultra';
+          const hovered = this.hoveredId === rid;
+          if (hovered && uDef) {
+            tooltipTitle = `@yULTRA: ${uDef.name}`;
+            tooltipDesc = uDef.description;
+          }
+          const egHudDef = this.sprites.getSprite('sprEGIconHUD');
+          const uFrame = uDef
+            ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
+            : 0;
+          const drew = uDef
+            ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uFrame, ux - 1, uy - 1, 12, 12)
+            : false;
+          if (!drew) {
+            ctx.fillStyle = '#ffe047';
+            ctx.fillRect(ux, uy, 10, 10);
+          }
+          this.regions.push({ id: rid, x: ux - 1, y: uy - 1, w: 12, h: 12, onActivate: () => null });
+        }
+      }
+
+      if (!tooltipTitle) {
+        tooltipTitle = `@y${mutant.name}  @d(${mutant.passiveName})`;
+        tooltipDesc = `${mutant.passiveDesc}  |  @g${mutant.activeName}`;
+      }
+    } else {
+      const m = this.data.getMutant(save.selectedMutant);
+      tooltipTitle = `@y${m.name}`;
+      tooltipDesc = m.passiveDesc;
+    }
+
+    // Bottom run-info / hovered-mutation tooltip bar
+    const tipY = py + 144;
+    const tipH = 34;
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.88)';
+    ctx.fillRect(px + 10, tipY, panelW - 20, tipH);
+    ctx.strokeStyle = '#524863';
+    ctx.strokeRect(px + 10.5, tipY + 0.5, panelW - 21, tipH - 1);
+    this.fonts.draw(ctx, tooltipTitle, px + 16, tipY + 5, 'fntSmall', { outline: true });
+    this.fonts.draw(ctx, tooltipDesc, px + 16, tipY + 17, 'fntSmall', {
+      maxWidth: panelW - 32,
+      shadow: true,
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -1961,7 +2320,7 @@ export class MenuSystem {
         `AIM ${save.render.crosshairStyle + 1}`,
         () => ({
           type: 'update_render',
-          partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 7 },
+          partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 9 },
         }),
         { font: 'fntSmall', labelOffsetX: -10, focused: this.focusedIndex === 2 },
       );
@@ -2288,21 +2647,27 @@ export class MenuSystem {
       ctx,
       victory ? 'VICTORY!' : 'GAME OVER',
       cx,
-      14,
+      8,
       'fntL',
       { align: 'center', color: victory ? '#ffe047' : '#ff4242', outline: true },
     );
 
+    const areaCode = simState?.areaCode ?? save.bestArea;
+    const loopNum = simState?.loop ?? 0;
     const sub = victory
       ? '@yYOU REACHED THE KRUNKED THRONE'
-      : '@dYOU DID NOT REACH THE KRUNKED THRONE';
-    this.fonts.draw(ctx, sub, cx, 35, 'fntSmall', { align: 'center', outline: true });
+      : loopNum > 0
+        ? '@yTHE STRUGGLE CONTINUES'
+        : areaCode.startsWith('7-')
+          ? '@rYOU ALMOST REACHED THE KRUNKED THRONE'
+          : '@dYOU DID NOT REACH THE KRUNKED THRONE';
+    this.fonts.draw(ctx, sub, cx, 28, 'fntSmall', { align: 'center', outline: true });
 
-    // Summary Card
-    const cardW = Math.min(276, width - 24);
-    const cardH = 122;
+    // Summary Card (with NT Area Progression Map, Weapons, Crown & Mutations)
+    const cardW = Math.min(288, width - 20);
+    const cardH = 148;
     const cardX = Math.round((width - cardW) * 0.5);
-    const cardY = 48;
+    const cardY = 40;
 
     ctx.fillStyle = 'rgba(14, 12, 20, 0.92)';
     ctx.fillRect(cardX, cardY, cardW, cardH);
@@ -2317,6 +2682,7 @@ export class MenuSystem {
         : simState.areaCode
       : save.bestArea;
     const kills = simState?.stats.kills ?? 0;
+    const isNewBest = kills > 0 && kills >= save.bestKills && save.totalRuns > 0;
     const bosses = simState?.stats.bossesDefeated ?? [];
     const mins = Math.floor(((simState?.stats.timeTicks ?? 0) / 30) / 60);
     const secs = Math.floor(((simState?.stats.timeTicks ?? 0) / 30) % 60);
@@ -2324,8 +2690,8 @@ export class MenuSystem {
 
     // Left sprite box: killer sprite on Game Over, triumphant mutant portrait on Victory
     const boxX = cardX + 10;
-    const boxY = cardY + 12;
-    const boxSize = 54;
+    const boxY = cardY + 10;
+    const boxSize = 52;
     ctx.fillStyle = '#0d0a12';
     ctx.fillRect(boxX, boxY, boxSize, boxSize);
     ctx.strokeStyle = '#524863';
@@ -2384,60 +2750,174 @@ export class MenuSystem {
     }
 
     // Stats column
-    const sx = boxX + boxSize + 12;
+    const sx = boxX + boxSize + 10;
+    const statsW = cardW - boxSize - 26;
     if (!victory) {
       const cause = (simState?.player.lastDamageCause || 'WASTELAND').toUpperCase();
-      this.fonts.draw(ctx, `@rKILLED BY: @w${cause}`, sx, cardY + 12, 'fntSmall', {
-        maxWidth: cardW - boxSize - 30,
+      this.fonts.draw(ctx, `@rKILLED BY: @w${cause}`, sx, cardY + 10, 'fntSmall', {
+        maxWidth: statsW,
         outline: true,
       });
     } else {
-      this.fonts.draw(ctx, `@yMUTANT: @w${mutant.name}`, sx, cardY + 12, 'fntSmall', {
+      this.fonts.draw(ctx, `@yMUTANT: @w${mutant.name}`, sx, cardY + 10, 'fntSmall', {
         outline: true,
       });
     }
 
-    this.fonts.draw(ctx, `@dAREA: @w${areaText}    @dTIME: @w${timeStr}`, sx, cardY + 28, 'fntSmall', {
-      outline: true,
-    });
     this.fonts.draw(
       ctx,
-      `@dKILLS: @y${kills}    @dLEVEL: @g${simState?.player.level ?? 1}`,
+      `@dAREA: @w${areaText}   @dTIME: @w${timeStr}${isNewBest ? '  @yNEW BEST!' : ''}`,
       sx,
-      cardY + 41,
+      cardY + 23,
       'fntSmall',
       { outline: true },
     );
-    const bossListStr =
-      bosses.length > 0
-        ? bosses
-            .map((b) =>
-              (this.data.getEnemy(b)?.name ?? (b === 'nuclear_throne' ? 'THE KRUNKED THRONE' : b.replace(/_/g, ' '))).toUpperCase(),
-            )
-            .join(', ')
-        : 'NONE';
-    this.fonts.draw(ctx, `@dBOSSES: @w${bossListStr}`, sx, cardY + 54, 'fntSmall', {
-      maxWidth: cardW - boxSize - 30,
-      outline: true,
-    });
+    this.fonts.draw(
+      ctx,
+      `@dKILLS: @y${kills}   @dLV: @g${simState?.player.level ?? 1}   @dBEST: @w${save.bestKills}`,
+      sx,
+      cardY + 35,
+      'fntSmall',
+      { outline: true },
+    );
 
-    // Acquired mutations strip inside summary card
+    // Carried Weapons & Active Crown row
+    const wepRowY = cardY + 48;
+    if (simState) {
+      let wx = sx;
+      for (let s = 0; s < 2; s++) {
+        const slot = simState.player.weapons[s];
+        if (!slot) continue;
+        const wSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
+        ctx.fillStyle = 'rgba(24, 20, 34, 0.85)';
+        ctx.fillRect(wx, wepRowY, 26, 13);
+        ctx.strokeStyle = slot.cursed ? '#b94aff' : '#524863';
+        ctx.strokeRect(wx + 0.5, wepRowY + 0.5, 25, 12);
+        this.sprites.drawInBox(ctx, wSpr, 0, wx + 2, wepRowY + 1, 22, 11, { maxScale: 1 });
+        wx += 30;
+      }
+      if (simState.crown !== 'none') {
+        const cDef = this.data.getCrown(simState.crown);
+        this.sprites.drawInBox(ctx, cDef.spriteIdle, 0, wx + 2, wepRowY + 1, 12, 11);
+        wx += 16;
+      }
+      if (bosses.length > 0) {
+        const bossLabel = bosses
+          .map((b) => (b === 'nuclear_throne' ? 'THRONE' : b.replace(/_/g, ' ').toUpperCase()))
+          .join(', ');
+        this.fonts.draw(ctx, `@dBOSS: @w${bossLabel}`, wx + 2, wepRowY + 3, 'fntSmall', {
+          maxWidth: cardX + cardW - wx - 8,
+          shadow: true,
+        });
+      }
+    }
+
+    // Iconic NT Horizontal Area Progression Map (1-1 -> 7-3 + Throne emblem + reached skull/loop marker)
+    const mapY = cardY + 74;
+    const mapLeft = cardX + 16;
+    const mapRight = cardX + cardW - 22;
+    const nodeCount = MAIN_PATH_AREAS.length;
+    const progressIdx = victory ? nodeCount - 1 : resolveRunProgressIndex(areaCode);
+
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.78)';
+    ctx.fillRect(cardX + 8, mapY - 7, cardW - 16, 21);
+    ctx.strokeStyle = '#3b344a';
+    ctx.strokeRect(cardX + 8.5, mapY - 6.5, cardW - 17, 20);
+
+    // Base road rail + completed emerald path
+    ctx.fillStyle = '#3e394a';
+    ctx.fillRect(mapLeft, mapY + 2, mapRight - mapLeft, 2);
+    const reachX = Math.round(mapLeft + ((mapRight - mapLeft) * progressIdx) / Math.max(1, nodeCount - 1));
+    ctx.fillStyle = victory ? '#ffe047' : '#52e864';
+    ctx.fillRect(mapLeft, mapY + 2, Math.max(2, reachX - mapLeft), 2);
+
+    for (let n = 0; n < nodeCount; n++) {
+      const nx = Math.round(mapLeft + ((mapRight - mapLeft) * n) / Math.max(1, nodeCount - 1));
+      const reached = n <= progressIdx;
+      const isBossArea = MAIN_PATH_AREAS[n]!.endsWith('-3');
+      if (n === nodeCount - 1) {
+        const drewThrone = this.sprites.drawInBox(ctx, 'sprGameOverThrone', 0, nx - 4, mapY - 2, 9, 8);
+        if (!drewThrone) {
+          ctx.fillStyle = reached ? '#ffe047' : '#635c75';
+          ctx.fillRect(nx - 3, mapY - 1, 6, 6);
+        }
+      } else {
+        const dotSize = isBossArea ? 4 : 3;
+        ctx.fillStyle = reached ? (isBossArea ? '#ffe047' : '#52e864') : '#524b61';
+        ctx.fillRect(nx - Math.floor(dotSize / 2), mapY + 3 - Math.floor(dotSize / 2), dotSize, dotSize);
+      }
+    }
+
+    // Reached area marker (sprGameOverSkull on Game Over, gold pulse diamond on Victory)
+    if (!victory) {
+      const drewSkull = this.sprites.drawInBox(ctx, 'sprGameOverSkull', 0, reachX - 4, mapY - 6, 8, 6);
+      if (!drewSkull) {
+        ctx.fillStyle = '#ff4242';
+        ctx.fillRect(reachX - 2, mapY - 5, 4, 4);
+      }
+    }
+    this.fonts.draw(ctx, '1-1', mapLeft - 2, mapY + 6, 'fntSmall', { color: '#8f8b9e' });
+    this.fonts.draw(
+      ctx,
+      loopNum > 0 ? `@yL${loopNum}` : '7-3',
+      mapRight + 4,
+      mapY + 6,
+      'fntSmall',
+      { align: 'right', color: '#8f8b9e' },
+    );
+
+    // Acquired mutations & Ultra strip inside summary card
     const muts = simState?.player.mutations ?? [];
-    this.fonts.draw(ctx, `@dMUTATIONS (${muts.length}):`, cardX + 10, cardY + 76, 'fntSmall', {
-      outline: true,
-    });
-    for (let i = 0; i < Math.min(muts.length, 14); i++) {
+    const ultra = simState?.player.ultra ?? null;
+    this.fonts.draw(
+      ctx,
+      `@dMUTATIONS (${muts.length}${ultra ? '+U' : ''}):`,
+      cardX + 10,
+      cardY + 95,
+      'fntSmall',
+      { outline: true },
+    );
+    const maxShownMuts = Math.min(muts.length, 15);
+    for (let i = 0; i < maxShownMuts; i++) {
       const def = this.data.getMutation(muts[i]!);
-      const mx = cardX + 10 + i * 16;
-      const my = cardY + 89;
+      const mx = cardX + 10 + i * 15;
+      const my = cardY + 107;
       const drew = def
-        ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 13, 13)
+        ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 12, 12)
         : false;
       if (!drew) {
         ctx.fillStyle = '#4de862';
-        ctx.fillRect(mx, my, 12, 12);
+        ctx.fillRect(mx, my, 11, 11);
       }
     }
+    if (ultra) {
+      const uDef = this.data.getUltra(ultra);
+      const egHudDef = this.sprites.getSprite('sprEGIconHUD');
+      const uFrame = uDef
+        ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
+        : 0;
+      const ux = cardX + 10 + maxShownMuts * 15;
+      const uy = cardY + 106;
+      const drew = uDef
+        ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uFrame, ux, uy, 14, 14)
+        : false;
+      if (!drew) {
+        ctx.fillStyle = '#ffe047';
+        ctx.fillRect(ux, uy + 1, 12, 12);
+      }
+    }
+
+    // Punchy NT-style wasteland tip tucked cleanly along bottom edge of summary card
+    const endTip = selectLoadingTip(
+      simState?.biome ?? 'desert',
+      areaCode,
+      loopNum,
+      (simState?.seed ?? 1) + kills,
+    );
+    this.fonts.draw(ctx, `@d${endTip}`, cx, cardY + cardH - 12, 'fntSmall', {
+      align: 'center',
+      maxWidth: cardW - 16,
+    });
 
     // Bottom buttons: RETRY & CAMPFIRE (100% gamepad/keyboard/touch focusable)
     const endMode = mctx.inputMode ?? 'kbm';
@@ -2455,7 +2935,7 @@ export class MenuSystem {
             : 'RETRY [R]';
     const campBtnLabel = endMode === 'gamepad' ? 'CAMPFIRE [B]' : 'CAMPFIRE';
 
-    const btnY = cardY + cardH + 14;
+    const btnY = cardY + cardH + 10;
     const btnW = 104;
     const btnH = 22;
     this.drawButton(

@@ -795,6 +795,13 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   });
   b.addAlias('sprMedkit', 'sprHP');
 
+  b.addSprite('sprRogueAmmo', 10, 12, 5, 6, 2, (ctx, x, y, _w, _h, f) => {
+    outlinedBox(ctx, x + 2, y + 1, 6, 10, '#2c64c7', INK, true);
+    rect(ctx, x + 3, y + 2, 4, 2, '#9cf5ff');
+    rect(ctx, x + 3, y + 5, 4, 3, f === 0 ? '#4da6ff' : '#80ecff');
+    px(ctx, x + 4, y + 3, '#ffffff');
+  });
+
   b.addSprite('sprBulletShell', 4, 3, 2, 1, 1, (ctx, x, y) => {
     rect(ctx, x, y, 4, 3, INK);
     rect(ctx, x + 1, y + 1, 2, 1, '#f5cc47');

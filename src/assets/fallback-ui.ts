@@ -1770,8 +1770,8 @@ function registerHudSprites(b: FallbackAtlasBuilder): void {
     rect(ctx, x + 2, y + 3, 10, 18, 'rgba(168, 255, 110, 0.45)');
   });
 
-  // sprCrosshair: 16x16, orig=(8,8), 7 crisp dark-outlined white reticle styles
-  b.addSprite('sprCrosshair', 16, 16, 8, 8, 7, (ctx, x, y, _w, _h, f) => {
+  // sprCrosshair: 16x16, orig=(8,8), 9 crisp dark-outlined white reticle styles (matching NT 0..8)
+  b.addSprite('sprCrosshair', 16, 16, 8, 8, 9, (ctx, x, y, _w, _h, f) => {
     const cx = x + 8;
     const cy = y + 8;
     const drawArm = (ax: number, ay: number, aw: number, ah: number): void => {
@@ -1821,48 +1821,85 @@ function registerHudSprites(b: FallbackAtlasBuilder): void {
         }
         drawArm(cx, cy, 1, 1);
         break;
-      default:
+      case 6:
         drawArm(cx - 5, cy - 5, 11, 1);
         drawArm(cx - 5, cy + 5, 11, 1);
         drawArm(cx - 5, cy - 4, 1, 9);
         drawArm(cx + 5, cy - 4, 1, 9);
         drawArm(cx, cy, 1, 1);
         break;
+      case 7:
+        // Compact precision center pip (classic NT minimal dot)
+        drawArm(cx - 1, cy - 1, 3, 3);
+        break;
+      default:
+        // Tactical twin-chevron side brackets with center dot
+        drawArm(cx - 6, cy - 3, 1, 7);
+        drawArm(cx - 5, cy - 3, 2, 1);
+        drawArm(cx - 5, cy + 3, 2, 1);
+        drawArm(cx + 6, cy - 3, 1, 7);
+        drawArm(cx + 4, cy - 3, 2, 1);
+        drawArm(cx + 4, cy + 3, 2, 1);
+        drawArm(cx, cy, 1, 1);
+        break;
     }
   });
 
-  // Crisp outlined Ammo Icons (10x10)
-  b.addSprite('sprBulletIcon', 10, 10, 5, 5, 1, (ctx, x, y) => {
+  // Crisp outlined 8-frame draining Ammo Icons (10x10; frame 0 = FULL -> frame 7 = EMPTY, matching NT polarity!)
+  const drawDrainingOverlay = (ctx: DrawCtx, x: number, y: number, f: number): void => {
+    if (f <= 0) return;
+    // Progressively darken top rows as ammo depletes (f=1..7)
+    const emptyRows = Math.min(8, Math.ceil((f / 7) * 8));
+    ctx.save();
+    ctx.fillStyle = f >= 7 ? 'rgba(10, 8, 16, 0.82)' : 'rgba(12, 9, 18, 0.68)';
+    ctx.fillRect(x + 1, y + 1, 8, emptyRows);
+    ctx.restore();
+  };
+
+  b.addSprite('sprBulletIcon', 10, 10, 5, 5, 8, (ctx, x, y, _w, _h, f) => {
     outlinedBox(ctx, x + 3, y + 1, 4, 8, '#f2c138', INK, true);
     rect(ctx, x + 4, y + 2, 2, 2, '#fff7b2');
     rect(ctx, x + 4, y + 6, 2, 2, '#9e6b14');
+    drawDrainingOverlay(ctx, x, y, f);
   });
-  b.addSprite('sprShotIcon', 10, 10, 5, 5, 1, (ctx, x, y) => {
+  b.addSprite('sprShotIcon', 10, 10, 5, 5, 8, (ctx, x, y, _w, _h, f) => {
     outlinedBox(ctx, x + 2, y + 1, 6, 8, '#e0342b', INK);
     rect(ctx, x + 3, y + 2, 2, 4, '#ff786e');
     rect(ctx, x + 3, y + 6, 4, 2, '#f5c742');
+    drawDrainingOverlay(ctx, x, y, f);
   });
   b.addAlias('sprShellIcon', 'sprShotIcon');
-  b.addSprite('sprBoltIcon', 10, 10, 5, 5, 1, (ctx, x, y) => {
+  b.addSprite('sprBoltIcon', 10, 10, 5, 5, 8, (ctx, x, y, _w, _h, f) => {
     rect(ctx, x + 1, y + 4, 8, 3, INK);
     rect(ctx, x + 2, y + 5, 6, 1, '#59ff70');
     outlinedBox(ctx, x + 5, y + 2, 4, 6, '#3be057', INK, true);
     px(ctx, x + 7, y + 4, '#ffffff');
+    drawDrainingOverlay(ctx, x, y, f);
   });
-  b.addSprite('sprExploIcon', 10, 10, 5, 5, 1, (ctx, x, y) => {
+  b.addSprite('sprExploIcon', 10, 10, 5, 5, 8, (ctx, x, y, _w, _h, f) => {
     outlinedEllipse(ctx, x + 5, y + 5, 3, 3, '#ff7824', INK);
     rect(ctx, x + 4, y + 1, 2, 3, '#788594');
     px(ctx, x + 6, y + 1, '#ffe047');
+    drawDrainingOverlay(ctx, x, y, f);
   });
-  b.addSprite('sprEnergyIcon', 10, 10, 5, 5, 1, (ctx, x, y) => {
+  b.addSprite('sprEnergyIcon', 10, 10, 5, 5, 8, (ctx, x, y, _w, _h, f) => {
     outlinedBox(ctx, x + 2, y + 1, 6, 8, '#3ba6ff', INK, true);
     rect(ctx, x + 4, y + 2, 3, 3, '#ffffff');
     rect(ctx, x + 3, y + 5, 3, 3, '#9cf5ff');
+    drawDrainingOverlay(ctx, x, y, f);
   });
-  b.addSprite('sprRogueAmmoHUD', 10, 10, 5, 5, 1, (ctx, x, y) => {
-    outlinedBox(ctx, x + 2, y + 1, 6, 8, '#2c64c7', INK, true);
-    rect(ctx, x + 3, y + 3, 4, 4, '#8cf2ff');
-    px(ctx, x + 4, y + 4, '#ffffff');
+  // sprRogueAmmoHUD: 11x16, 4 frames (0 = empty, 1..3 = lit portal strike canisters, matching NT!)
+  b.addSprite('sprRogueAmmoHUD', 11, 16, 1, 1, 4, (ctx, x, y, _w, _h, f) => {
+    outlinedBox(ctx, x + 1, y + 1, 9, 14, '#1b2436', INK, true);
+    rect(ctx, x + 2, y + 2, 7, 1, '#5a6e8c');
+    for (let slot = 0; slot < 3; slot++) {
+      const sy = y + 11 - slot * 3;
+      const lit = slot < f;
+      rect(ctx, x + 3, sy, 5, 2, lit ? '#3da6ff' : '#263042');
+      if (lit) {
+        rect(ctx, x + 4, sy, 3, 1, '#b8f7ff');
+      }
+    }
   });
   b.addSprite('sprAmmoIcons', 10, 10, 5, 5, 6, (ctx, x, y, _w, _h, f) => {
     const cols = ['#f2c138', '#e0342b', '#4df068', '#ff7824', '#4dc8ff', '#d6dde6'];
@@ -1876,6 +1913,22 @@ function registerHudSprites(b: FallbackAtlasBuilder): void {
     rect(ctx, x + 6, y + 3, 2, 2, INK);
     px(ctx, x + 4, y + 7, INK);
     px(ctx, x + 6, y + 7, INK);
+  });
+  b.addSprite('sprGameOverSkull', 8, 6, 4, 3, 1, (ctx, x, y) => {
+    outlinedBox(ctx, x, y, 8, 5, '#f0ece4', INK, true);
+    rect(ctx, x + 2, y + 4, 4, 2, '#d6cfc2');
+    px(ctx, x + 2, y + 2, INK);
+    px(ctx, x + 5, y + 2, INK);
+  });
+  b.addSprite('sprGameOverThrone', 9, 8, 4, 4, 1, (ctx, x, y) => {
+    outlinedBox(ctx, x + 1, y, 7, 8, '#38466e', INK);
+    rect(ctx, x + 2, y + 1, 5, 2, '#f0c452');
+    rect(ctx, x + 3, y + 3, 3, 3, '#4dff75');
+    px(ctx, x + 4, y + 4, '#ffffff');
+  });
+  b.addSprite('sprMapDot', 3, 3, 1, 1, 1, (ctx, x, y) => {
+    rect(ctx, x, y, 3, 3, '#e6e6eb');
+    px(ctx, x + 1, y + 1, '#ffffff');
   });
 }
 

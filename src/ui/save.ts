@@ -256,7 +256,7 @@ export function validateSaveData(raw: unknown): SaveData {
 
   const crosshairRaw =
     typeof renderRaw.crosshairStyle === 'number' && Number.isFinite(renderRaw.crosshairStyle)
-      ? Math.max(0, Math.min(6, Math.floor(renderRaw.crosshairStyle)))
+      ? Math.max(0, Math.min(8, Math.floor(renderRaw.crosshairStyle)))
       : def.render.crosshairStyle;
 
   const targetFps: TargetFps = isTargetFps(renderRaw.targetFps)
@@ -448,7 +448,7 @@ export class SaveManager {
   updateRender(partial: Partial<RenderSettings>): RenderSettings {
     const nextCrosshair =
       partial.crosshairStyle !== undefined
-        ? Math.max(0, Math.min(6, Math.floor(partial.crosshairStyle)))
+        ? Math.max(0, Math.min(8, Math.floor(partial.crosshairStyle)))
         : this.data.render.crosshairStyle;
 
     let nextTargetFps: TargetFps = this.data.render.targetFps;

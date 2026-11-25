@@ -1454,16 +1454,32 @@ function registerAllEnemiesAndBosses(b: FallbackAtlasBuilder): void {
     outlinedBox(ctx, x + 3, y + 6, 4, 3, '#1e3c78', INK);
   });
 
-  // The Krunked Throne (96x88)
+  // The Krunked Throne (96x88) + NT-faithful 36x24 vertical mega-beam segment
   b.addSprite('sprNothingOn', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'on'));
   b.addAlias('sprNothingIdle', 'sprNothingOn');
   b.addAlias('sprNothingWalk', 'sprNothingOn');
   b.addAlias('sprNothingHurt', 'sprNothingOn');
   b.addSprite('sprNothingActivate', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'activate'));
-  b.addSprite('sprNothingBeam', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'beam'));
+  b.addSprite('sprNothingFire', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'beam'));
+  b.addSprite('sprNothingBeam', 36, 24, 18, 12, 3, (ctx, x, y, w, h, f) => {
+    // Vertical emerald mega-beam segment (36x24 matching NT sprNothingBeam proportions)
+    const wobble = f === 0 ? 0 : f === 1 ? 1 : -1;
+    // Outer dark emerald energy sheath
+    rect(ctx, x + 2, y, w - 4, h, '#14692c');
+    // Vivid rad green plasma body
+    rect(ctx, x + 5 + wobble, y, w - 10, h, '#38e864');
+    rect(ctx, x + 9, y, w - 18, h, '#94ffaa');
+    // Blazing white inner laser core
+    rect(ctx, x + 13 - wobble, y, 10, h, '#ffffff');
+    // Crackling plasma edge ribs & energy nodes
+    const ribY1 = (f * 8) % h;
+    const ribY2 = (f * 8 + 12) % h;
+    rect(ctx, x + 1, y + ribY1, 4, 3, '#7aff95');
+    rect(ctx, x + w - 5, y + ribY2, 4, 3, '#7aff95');
+    rect(ctx, x + 7, y + ((ribY1 + 4) % (h - 2)), w - 14, 2, '#d8ffe0');
+  });
   b.addSprite('sprNothingDeath', 96, 88, 48, 44, 1, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'death'));
   b.addAlias('sprNothingDead', 'sprNothingDeath');
-  b.addAlias('sprNothingFire', 'sprNothingBeam');
   b.addAlias('sprNothingDash', 'sprNothingOn');
 
   // Throne II (84x84)

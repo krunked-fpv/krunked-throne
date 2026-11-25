@@ -3,15 +3,18 @@ export {
   ALL_CROWN_IDS,
   ALL_MUTANT_IDS,
   BIOME_FALLBACK_PALETTES,
+  BIOME_LOADING_TIPS,
   BIOME_SPRITE_NUMBER,
   DEFAULT_AREAS,
   DEFAULT_CROWNS,
   DEFAULT_MUTANTS,
   DEFAULT_MUTATIONS,
   DEFAULT_UI_DATA_PROVIDER,
+  GENERAL_LOADING_TIPS,
   resolveEnemySpritePrefix,
   resolveWeaponLabel,
   resolveWeaponSpriteName,
+  selectLoadingTip,
   type BiomeFallbackPalette,
   type UiDataProvider,
 } from './data-provider';
@@ -28,7 +31,13 @@ export {
   type StorageLike,
 } from './save';
 
-export { HudRenderer, resolveHealthFillFrame, type HudRenderContext } from './hud';
+export {
+  HudRenderer,
+  computeAmmoIconFrame,
+  computeUltraIconFrame,
+  resolveHealthFillFrame,
+  type HudRenderContext,
+} from './hud';
 
 export {
   MenuSystem,

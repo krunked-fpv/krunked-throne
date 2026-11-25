@@ -102,7 +102,7 @@ function makeMutantSprites(raceIndex: number): MutantDef['sprites'] {
     bIdle: `${p}BIdle`,
     bWalk: `${p}BWalk`,
     bHurt: `${p}BHurt`,
-    bDead: `${p}BDead`,
+    bDead: raceIndex === 9 ? 'sprMutant9Dead' : `${p}BDead`,
     bSit: `${p}BSit`,
     portrait: 'sprBigPortrait',
     bPortrait: 'sprBigPortrait',
@@ -127,7 +127,7 @@ export const DEFAULT_MUTANTS: readonly MutantDef[] = [
     moveSpeed: 4,
     startingWeapon: 'revolver',
     passiveName: 'MORE AMMO',
-    passiveDesc: 'GETS @y+20% AMMO@s FROM PICKUPS',
+    passiveDesc: 'GETS @y+25% AMMO@s FROM PICKUPS',
     activeName: 'ROLL',
     activeDesc: 'COMBAT ROLL WITH MOMENTUM',
     throneButtDesc: '@yWATER BOOST:@s HOLD RMB TO BOOST',
@@ -171,7 +171,7 @@ export const DEFAULT_MUTANTS: readonly MutantDef[] = [
     throneButtDesc: '@bSTRONGER@s TELEKINESIS FORCE',
     ultras: [
       { id: 'eyes_a', mutant: 'eyes', slot: 'a', name: 'PROJECTILE STYLE', description: 'TELEKINESIS HOLDS YOUR @bPROJECTILES@s', iconIndex: 4, sprite: 'sprEGSkillIcon' },
-      { id: 'eyes_b', mutant: 'eyes', slot: 'b', name: 'MONSTER STYLE', description: 'TELEKINESIS PUSHES & DAMAGES @rENEMIES@s', iconIndex: 5, sprite: 'sprEGSkillIcon' },
+      { id: 'eyes_b', mutant: 'eyes', slot: 'b', name: 'MONSTER STYLE', description: 'PUSHES NEARBY @rENEMIES@s AWAY WHEN NOT USING TELEKINESIS', iconIndex: 5, sprite: 'sprEGSkillIcon' },
     ],
     sprites: makeMutantSprites(3),
     sounds: makeMutantSounds(3),
@@ -228,7 +228,7 @@ export const DEFAULT_MUTANTS: readonly MutantDef[] = [
     throneButtDesc: '@yBRRRAP:@s FIRE 4 SHOTS AT ONCE',
     ultras: [
       { id: 'yv_a', mutant: 'yv', slot: 'a', name: 'IMA GUN GOD', description: '@y+40% EXTRA@s FIRE RATE', iconIndex: 10, sprite: 'sprEGSkillIcon' },
-      { id: 'yv_b', mutant: 'yv', slot: 'b', name: 'BACK 2 BIZNIZ', description: 'VISIT @yY.V. CRIB@s FOR FREE CHESTS', iconIndex: 11, sprite: 'sprEGSkillIcon' },
+      { id: 'yv_b', mutant: 'yv', slot: 'b', name: 'BACK 2 BIZNIZ', description: 'FREE @yPOP POP@s UPGRADE + VISIT @yY.V. CRIB@s', iconIndex: 11, sprite: 'sprEGSkillIcon' },
     ],
     sprites: makeMutantSprites(6),
     sounds: makeMutantSounds(6),
@@ -324,7 +324,7 @@ export const DEFAULT_MUTANTS: readonly MutantDef[] = [
     throneButtDesc: 'BEAM GROWS @gFASTER@s & HEALS ON USE',
     ultras: [
       { id: 'horror_a', mutant: 'horror', slot: 'a', name: 'STALKER', description: 'ENEMIES EXPLODE IN @gRADS@s ON DEATH', iconIndex: 20, sprite: 'sprEGSkillIcon' },
-      { id: 'horror_b', mutant: 'horror', slot: 'b', name: 'ANOMALY', description: '@pPORTALS@s OPEN EARLIER, 2X RADS', iconIndex: 21, sprite: 'sprEGSkillIcon' },
+      { id: 'horror_b', mutant: 'horror', slot: 'b', name: 'ANOMALY', description: '@pPORTALS@s OPEN EARLIER, LEVEL UP FASTER', iconIndex: 21, sprite: 'sprEGSkillIcon' },
     ],
     sprites: makeMutantSprites(11),
     sounds: makeMutantSounds(11),
@@ -383,20 +383,112 @@ export const DEFAULT_MUTATIONS: readonly MutationDef[] = [
 ];
 
 export const DEFAULT_CROWNS: readonly CrownDef[] = [
-  { id: 'none', crownIndex: 0, name: 'NO CROWN', description: 'STANDARD WASTELAND RULES', tip: 'PURE RUN', spriteIdle: 'sprCrown1Idle', spriteWalk: 'sprCrown1Walk' },
-  { id: 'death', crownIndex: 1, name: 'CROWN OF DEATH', description: 'BIGGER @rEXPLOSIONS@s, -1 MAX HP', tip: 'BOOM', spriteIdle: 'sprCrown2Idle', spriteWalk: 'sprCrown2Walk' },
-  { id: 'life', crownIndex: 2, name: 'CROWN OF LIFE', description: 'NO @rHP@s DROPS, BIG MEDKIT CHESTS', tip: 'FEAST OR FAMINE', spriteIdle: 'sprCrown3Idle', spriteWalk: 'sprCrown3Walk' },
-  { id: 'haste', crownIndex: 3, name: 'CROWN OF HASTE', description: 'PICKUPS WORTH MORE, @yFADE FASTER@s', tip: 'GRAB QUICK', spriteIdle: 'sprCrown4Idle', spriteWalk: 'sprCrown4Walk' },
-  { id: 'guns', crownIndex: 4, name: 'CROWN OF GUNS', description: 'NO @yAMMO@s DROPS, MORE GUN DROPS', tip: 'SWITCH OFTEN', spriteIdle: 'sprCrown5Idle', spriteWalk: 'sprCrown5Walk' },
-  { id: 'hatred', crownIndex: 5, name: 'CROWN OF HATRED', description: 'TAKE @rDAMAGE@s OPENING CHESTS FOR RADS', tip: 'BITTER POWER', spriteIdle: 'sprCrown6Idle', spriteWalk: 'sprCrown6Walk' },
-  { id: 'blood', crownIndex: 6, name: 'CROWN OF BLOOD', description: '@rMORE ENEMIES@s, LESS RADS EACH', tip: 'SLAUGHTER', spriteIdle: 'sprCrown7Idle', spriteWalk: 'sprCrown7Walk' },
-  { id: 'destiny', crownIndex: 7, name: 'CROWN OF DESTINY', description: 'FREE @gMUTATION@s, ONLY 1 CHOICE LATER', tip: 'FATED', spriteIdle: 'sprCrown8Idle', spriteWalk: 'sprCrown8Walk' },
-  { id: 'love', crownIndex: 8, name: 'CROWN OF LOVE', description: 'ALL CHESTS ARE @yAMMO CHESTS@s', tip: 'ENDLESS AMMO', spriteIdle: 'sprCrown9Idle', spriteWalk: 'sprCrown9Walk' },
-  { id: 'risk', crownIndex: 9, name: 'CROWN OF RISK', description: 'MORE DROPS AT @rFULL HP@s, FEWER HURT', tip: 'STAY CLEAN', spriteIdle: 'sprCrown10Idle', spriteWalk: 'sprCrown10Walk' },
-  { id: 'curses', crownIndex: 10, name: 'CROWN OF CURSES', description: 'MORE @pCURSED@s WEAPON CHESTS', tip: 'DARK GEAR', spriteIdle: 'sprCrown11Idle', spriteWalk: 'sprCrown11Walk' },
-  { id: 'luck', crownIndex: 11, name: 'CROWN OF LUCK', description: 'START LEVELS AT @r1 HP@s, ENEMIES WEAKER', tip: 'ONE HIT', spriteIdle: 'sprCrown12Idle', spriteWalk: 'sprCrown12Walk' },
-  { id: 'protection', crownIndex: 12, name: 'CROWN OF PROTECTION', description: 'WEAPONS CONTAIN @rHP@s INSTEAD OF GUNS', tip: 'STURDY', spriteIdle: 'sprCrown13Idle', spriteWalk: 'sprCrown13Walk' },
+  { id: 'none', crownIndex: 1, name: 'NO CROWN', description: 'STANDARD WASTELAND RULES', tip: 'PURE RUN', spriteIdle: 'sprCrown1Idle', spriteWalk: 'sprCrown1Walk' },
+  { id: 'death', crownIndex: 2, name: 'CROWN OF DEATH', description: 'BIGGER @rEXPLOSIONS@s, -1 MAX HP', tip: 'BOOM', spriteIdle: 'sprCrown2Idle', spriteWalk: 'sprCrown2Walk' },
+  { id: 'life', crownIndex: 3, name: 'CROWN OF LIFE', description: 'NO @rHP@s DROPS, BIG MEDKIT CHESTS', tip: 'FEAST OR FAMINE', spriteIdle: 'sprCrown3Idle', spriteWalk: 'sprCrown3Walk' },
+  { id: 'haste', crownIndex: 4, name: 'CROWN OF HASTE', description: 'PICKUPS WORTH MORE, @yFADE FASTER@s', tip: 'GRAB QUICK', spriteIdle: 'sprCrown4Idle', spriteWalk: 'sprCrown4Walk' },
+  { id: 'guns', crownIndex: 5, name: 'CROWN OF GUNS', description: 'NO @yAMMO@s DROPS, MORE GUN DROPS', tip: 'SWITCH OFTEN', spriteIdle: 'sprCrown5Idle', spriteWalk: 'sprCrown5Walk' },
+  { id: 'hatred', crownIndex: 6, name: 'CROWN OF HATRED', description: 'TAKE @rDAMAGE@s OPENING CHESTS FOR RADS', tip: 'BITTER POWER', spriteIdle: 'sprCrown6Idle', spriteWalk: 'sprCrown6Walk' },
+  { id: 'blood', crownIndex: 7, name: 'CROWN OF BLOOD', description: '@rMORE ENEMIES@s, LESS RADS EACH', tip: 'SLAUGHTER', spriteIdle: 'sprCrown7Idle', spriteWalk: 'sprCrown7Walk' },
+  { id: 'destiny', crownIndex: 8, name: 'CROWN OF DESTINY', description: 'FREE @gMUTATION@s, ONLY 1 CHOICE LATER', tip: 'FATED', spriteIdle: 'sprCrown8Idle', spriteWalk: 'sprCrown8Walk' },
+  { id: 'love', crownIndex: 9, name: 'CROWN OF LOVE', description: 'ALL CHESTS ARE @yAMMO CHESTS@s', tip: 'ENDLESS AMMO', spriteIdle: 'sprCrown9Idle', spriteWalk: 'sprCrown9Walk' },
+  { id: 'luck', crownIndex: 10, name: 'CROWN OF LUCK', description: 'START LEVELS AT @r1 HP@s, ENEMIES WEAKER', tip: 'ONE HIT', spriteIdle: 'sprCrown10Idle', spriteWalk: 'sprCrown10Walk' },
+  { id: 'curses', crownIndex: 11, name: 'CROWN OF CURSES', description: 'MORE @pCURSED@s WEAPON CHESTS', tip: 'DARK GEAR', spriteIdle: 'sprCrown11Idle', spriteWalk: 'sprCrown11Walk' },
+  { id: 'risk', crownIndex: 12, name: 'CROWN OF RISK', description: 'MORE DROPS AT @rFULL HP@s, FEWER HURT', tip: 'STAY CLEAN', spriteIdle: 'sprCrown12Idle', spriteWalk: 'sprCrown12Walk' },
+  { id: 'protection', crownIndex: 13, name: 'CROWN OF PROTECTION', description: 'WEAPONS CONTAIN @rHP@s INSTEAD OF AMMO', tip: 'STURDY', spriteIdle: 'sprCrown13Idle', spriteWalk: 'sprCrown13Walk' },
 ];
+
+/**
+ * Clean-room original short punchy wasteland loading tips (Nuclear Throne style).
+ * Indexed by biome and general fallback for portal transition loading cards.
+ */
+export const BIOME_LOADING_TIPS: Readonly<Partial<Record<BiomeId, readonly string[]>>> = {
+  desert: [
+    'SCORCHING SUN',
+    'WATCH OUT FOR MAGGOTS',
+    'BANDITS LOVE EXPLOSIVE BARRELS',
+    'THE WASTELAND CALLS YOU',
+  ],
+  sewers: [
+    'NEVER DRINK THE SEWER WATER',
+    'SO MANY RATS DOWN HERE',
+    'SLUDGE EVERYWHERE',
+    'KEEP YOUR LIGHT CLOSE',
+  ],
+  scrapyard: [
+    'PORTALS CAN DETONATE CARS',
+    'WATCH THE RED LASER SIGHT',
+    'RUST AND SCRAP AS FAR AS YOU SEE',
+    'FEIGNING ASSASSINS STRIKE FAST',
+  ],
+  caves: [
+    'CRYSTAL REFLECTIONS ON EVERY WALL',
+    'SPIDERS HUNT IN PACKS',
+    'ALMOST HALFWAY THERE',
+    'MIND THE LASER CRYSTALS',
+  ],
+  frozen_city: [
+    'PACK A SCARF',
+    'SNOWBOTS THROW CARS',
+    'LISTEN FOR JETPACKS OVERHEAD',
+    'THE FROST NEVER MELTS',
+  ],
+  labs: [
+    'DO NOT PUSH ANY BUTTONS',
+    'NECROMANCERS RAISE THE FALLEN',
+    'KEEP MOVING THROUGH THE DARK',
+    'BIO-CONTAINMENT BREACHED',
+  ],
+  palace: [
+    'THE THRONE IS GETTING CLOSER',
+    'STAY OFF THE RED CARPET BEAM',
+    'DESTROY ALL FOUR GENERATORS TO LOOP',
+    'ANCIENT GUARDIANS STAND WATCH',
+  ],
+  campfire: [
+    'YOUR FRIENDS WERE HERE',
+    'THE SKY IS TEARING OPEN',
+    'ONE FINAL HURDLE BEFORE THE LOOP',
+  ],
+  vault: ['CHOOSE YOUR CROWN WISELY', 'DO NOT WAKE THE GUARDIANS'],
+  oasis: ['HOLD YOUR BREATH', 'QUIET BENEATH THE SANDS'],
+  pizza_sewers: ['SMELLS LIKE WARM CRUST', 'WATCH OUT FOR SHELLS'],
+  mansion: ['SO MUCH GOLD', 'VERIFY YOUR GUN GOD'],
+  cursed_caves: ['CURSED GEAR STICKS WITH YOU', 'DARKER THAN THE CAVES'],
+  jungle: ['SOMETHING MOVES IN THE CANOPY', 'THICK ROOTS EVERYWHERE'],
+  hq: ['I.D.P.D. ON FULL ALERT', 'NO ESCAPE FROM HEADQUARTERS'],
+};
+
+export const GENERAL_LOADING_TIPS: readonly string[] = [
+  'FISH CAN ROLL',
+  '@yEXPLOSIVES@s CARVE NEW DOORS',
+  '@wMELEE SWINGS@s DEFLECT BULLETS',
+  '@ySHELLS@s HIT HARDEST UP CLOSE',
+  'CRYSTAL CAN SHIELD',
+  'KEEP ONE EYE ON YOUR @yAMMO@s',
+  'PICK YOUR @gMUTATIONS@s WISELY',
+  'SKIP CHESTS FOR A @yBIG WEAPON CHEST@s',
+  'THE @gKRUNKED THRONE@s DEFINITELY EXISTS',
+  'TRY NOT TO GET HIT',
+];
+
+export function selectLoadingTip(
+  biome: BiomeId,
+  areaCode: AreaCode,
+  loop: number,
+  seed: number,
+): string {
+  const biomePool = BIOME_LOADING_TIPS[biome];
+  const hash = Math.abs(
+    Math.imul(seed ^ (loop * 37), 2654435761) +
+      areaCode.charCodeAt(0) * 131 +
+      areaCode.charCodeAt(areaCode.length - 1) * 17,
+  );
+  if (biomePool && biomePool.length > 0 && hash % 3 !== 0) {
+    return biomePool[hash % biomePool.length]!;
+  }
+  return GENERAL_LOADING_TIPS[hash % GENERAL_LOADING_TIPS.length]!;
+}
 
 const DEFAULT_WEAPONS_LIST: readonly WeaponDef[] = [
   {
@@ -456,7 +548,7 @@ const DEFAULT_WEAPONS_LIST: readonly WeaponDef[] = [
     destroysProjectiles: false,
     auto: false,
     golden: true,
-    sprite: 'sprGoldenRevolver',
+    sprite: 'sprGoldRevolver',
     projectileSprite: 'sprBullet1',
     fireSound: 'sndPistol',
   },
@@ -486,9 +578,9 @@ const DEFAULT_WEAPONS_LIST: readonly WeaponDef[] = [
     deflectsProjectiles: true,
     destroysProjectiles: false,
     auto: false,
-    sprite: 'sprChickenSword',
+    sprite: 'sprSword',
     projectileSprite: 'sprSlash',
-    fireSound: 'sndSword',
+    fireSound: 'sndChickenSword',
   },
   {
     id: 'rogue_rifle',
@@ -547,7 +639,7 @@ const DEFAULT_WEAPONS_LIST: readonly WeaponDef[] = [
     destroysProjectiles: false,
     auto: false,
     sprite: 'sprShotgun',
-    projectileSprite: 'sprShell',
+    projectileSprite: 'sprBullet2',
     fireSound: 'sndShotgun',
   },
   {
@@ -606,7 +698,7 @@ const DEFAULT_WEAPONS_LIST: readonly WeaponDef[] = [
     deflectsProjectiles: false,
     destroysProjectiles: false,
     auto: false,
-    sprite: 'sprGrenadeLauncher',
+    sprite: 'sprNader',
     projectileSprite: 'sprGrenade',
     fireSound: 'sndGrenade',
   },
@@ -636,7 +728,7 @@ const DEFAULT_WEAPONS_LIST: readonly WeaponDef[] = [
     deflectsProjectiles: false,
     destroysProjectiles: false,
     auto: false,
-    sprite: 'sprLaserPistol',
+    sprite: 'sprLaserGun',
     projectileSprite: 'sprLaser',
     fireSound: 'sndLaser',
   },

@@ -27,6 +27,7 @@ export interface LocalAssetResult {
 export interface DataWinParseResult {
   manifest: AssetManifest;
   audoEntries: CachedAudioEntry[];
+  embeddedTextures: CachedTextureEntry[];
   brokenTpagRefs: number;
   unresolvedExternalSounds: number;
   audoWavCount: number;
@@ -167,11 +168,41 @@ function parseTgin(bytes: Uint8Array, view: DataView, chunk: ChunkSlice): TginGr
   return groups;
 }
 
+function extractEmbeddedPngBlob(bytes: Uint8Array<ArrayBuffer>, offset: number): Blob | null {
+  if (offset <= 0 || offset + 8 >= bytes.byteLength) return null;
+  // Verify PNG signature: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    bytes[offset] !== 0x89 ||
+    bytes[offset + 1] !== 0x50 ||
+    bytes[offset + 2] !== 0x4e ||
+    bytes[offset + 3] !== 0x47 ||
+    bytes[offset + 4] !== 0x0d ||
+    bytes[offset + 5] !== 0x0a ||
+    bytes[offset + 6] !== 0x1a ||
+    bytes[offset + 7] !== 0x0a
+  ) {
+    return null;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = offset + 8;
+  while (pos + 12 <= bytes.byteLength) {
+    const chunkLen = view.getUint32(pos, false);
+    const type = readAscii(bytes, pos + 4, 4);
+    pos += 12 + chunkLen;
+    if (pos > bytes.byteLength) return null;
+    if (type === 'IEND') {
+      return new Blob([bytes.subarray(offset, pos)], { type: 'image/png' });
+    }
+  }
+  return null;
+}
+
 function parseTxtr(
+  bytes: Uint8Array<ArrayBuffer>,
   view: DataView,
   chunk: ChunkSlice,
   groups: readonly TginGroup[],
-): TexturePageDef[] {
+): { textures: TexturePageDef[]; embeddedTextures: CachedTextureEntry[] } {
   const groupByPageId = new Map<number, { group: TginGroup; indexInGroup: number }>();
   for (const group of groups) {
     for (let idx = 0; idx < group.texPageIds.length; idx++) {
@@ -184,6 +215,7 @@ function parseTxtr(
 
   const count = view.getUint32(chunk.start, true);
   const textures: TexturePageDef[] = [];
+  const embeddedTextures: CachedTextureEntry[] = [];
 
   for (let id = 0; id < count; id++) {
     const ptr = view.getUint32(chunk.start + 4 + id * 4, true);
@@ -203,6 +235,11 @@ function parseTxtr(
       const idx = rawIndexInGroup || groupInfo.indexInGroup;
       const filename = `${groupInfo.group.name}_${idx}${extPart}`;
       file = dirPart ? `${dirPart}/${filename}` : filename;
+    } else if (blobPtr !== 0) {
+      const pngBlob = extractEmbeddedPngBlob(bytes, blobPtr);
+      if (pngBlob) {
+        embeddedTextures.push({ id, blob: pngBlob });
+      }
     }
 
     textures.push({
@@ -215,7 +252,7 @@ function parseTxtr(
     });
   }
 
-  return textures;
+  return { textures, embeddedTextures };
 }
 
 function parseTpag(view: DataView, chunk: ChunkSlice): Map<number, TpagRect> {
@@ -633,7 +670,12 @@ export function parseDataWinArrayBuffer(
   requireChunk(chunks, 'STRG');
 
   const tginGroups = parseTgin(bytes, view, requireChunk(chunks, 'TGIN'));
-  const textures = parseTxtr(view, requireChunk(chunks, 'TXTR'), tginGroups);
+  const { textures, embeddedTextures } = parseTxtr(
+    bytes,
+    view,
+    requireChunk(chunks, 'TXTR'),
+    tginGroups,
+  );
   const tpagMap = parseTpag(view, requireChunk(chunks, 'TPAG'));
   const { sprites, spritesById, brokenTpagRefs: brokenSpriteTpags } = parseSprt(
     bytes,
@@ -690,6 +732,7 @@ export function parseDataWinArrayBuffer(
   return {
     manifest,
     audoEntries: audo.audoEntries,
+    embeddedTextures,
     brokenTpagRefs,
     unresolvedExternalSounds,
     audoWavCount: audo.wavCount,
@@ -992,7 +1035,7 @@ async function loadFromSteamFolder(
 
   onProgress?.('Loading external texture pages (tex/*.png)...');
   const externalPages = parsed.manifest.textures.filter((t) => !t.embedded && Boolean(t.file));
-  const textureBlobs: CachedTextureEntry[] = [];
+  const textureBlobs: CachedTextureEntry[] = [...parsed.embeddedTextures];
 
   for (const page of externalPages) {
     const texFile = lookupRelativeFile(maps, page.file);
