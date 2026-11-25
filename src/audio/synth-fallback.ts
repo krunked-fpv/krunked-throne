@@ -91,6 +91,8 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('levelultra') ||
     name.includes('mutappear') ||
     name.includes('mutstrongspirit') ||
+    name.includes('strongspiritgain') ||
+    name.includes('crownappear') ||
     name.includes('bosswin') ||
     name.includes('chickenregenhead') ||
     name.includes('charunlock') ||
@@ -178,12 +180,13 @@ export function classifySound(soundName: string): SynthSoundKind {
     return 'explosion';
   }
 
-  // 7. Portal & Vortex
+  // 7. Portal, Vortex & Proto Statue Charge
   if (
     name.includes('portal') ||
     name.includes('rift') ||
     name.includes('vortex') ||
-    name.includes('warp')
+    name.includes('warp') ||
+    name.includes('statuecharge')
   ) {
     return 'portal';
   }
@@ -196,13 +199,14 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('ammo') ||
     name.includes('hp') ||
     name.includes('canister') ||
-    name.includes('gem')
+    name.includes('gem') ||
+    name.includes('statuexp')
   ) {
     return 'pickup';
   }
 
   // 9. Specific Gunfire & Combat Classes
-  // Melee, Deflect & Crystal Ricochet
+  // Melee, Deflect, Crystal Ricochet & Crystal Juggernaut Slam
   if (
     name.includes('wrench') ||
     name.includes('sword') ||
@@ -216,6 +220,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('deflect') ||
     name.includes('reflect') ||
     name.includes('ricochet') ||
+    name.includes('crystaljuggernaut') ||
     name.includes('guitar') ||
     name.includes('assassinattack')
   ) {
@@ -308,6 +313,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('throw') ||
     name.includes('chickenreturn') ||
     name.includes('chickenlosehead') ||
+    name.includes('strongspiritlost') ||
     name.includes('plantfire') ||
     name.includes('plantsnare') ||
     name.includes('spawnally') ||

@@ -309,12 +309,24 @@ describe('parity-app-audio: Sound Classifier 1:1 Nuclear Throne Fidelity', () =>
     expect(classifySound('sndExploFreakDead')).toBe('explosion');
     expect(classifySound('sndExploGuardianDead')).toBe('explosion');
 
-    // Mutation & proc cues
+    // Mutation & proc cues (including cross-branch Steam SFX from combat-mutants & world-ai)
     expect(classifySound('sndMutLuckyShot')).toBe('pickup');
+    expect(classifySound('sndLuckyShotProc')).toBe('pickup');
     expect(classifySound('sndBloodlustProc')).toBe('pickup');
+    expect(classifySound('sndBloodHurt')).toBe('hit');
+    expect(classifySound('sndSwapCursed')).toBe('ui_click');
+    expect(classifySound('sndCursedChest')).toBe('pickup');
+    expect(classifySound('sndCursedPickup')).toBe('pickup');
     expect(classifySound('sndMutAppear')).toBe('level_up');
     expect(classifySound('sndLevelUltra')).toBe('level_up');
     expect(classifySound('sndBossWin')).toBe('level_up');
+    expect(classifySound('sndStrongSpiritGain')).toBe('level_up');
+    expect(classifySound('sndStrongSpiritLost')).toBe('ability');
+    expect(classifySound('sndCrystalJuggernaut')).toBe('melee');
+    expect(classifySound('sndCrownAppear')).toBe('level_up');
+    expect(classifySound('sndStatueCharge')).toBe('portal');
+    expect(classifySound('sndStatueXP')).toBe('pickup');
+    expect(classifySound('sndVanPortal')).toBe('portal');
 
     // Flame, Explosive launchers, Energy shields/loops, Abilities, Telegraphs & Deflects
     expect(classifySound('sndFlameCannon')).toBe('flame');
