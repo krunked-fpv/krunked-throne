@@ -536,6 +536,8 @@ export interface WeaponSlotState {
   burstTimer: number;
   kickOffset: number;
   cursed?: boolean;
+  lastFiredTick?: number;
+  meleeSwingSide?: 1 | -1;
 }
 
 export interface PlayerState {
@@ -574,10 +576,12 @@ export interface PlayerState {
   rollDirY: number;
   telekinesisActive: boolean;
   radBeamTicks: number;
+  radBeamActive?: boolean;
   headlessTicks: number;
   headlessDeaths: number;
   gunWarrantTicks: number;
   portalStrikes: number;
+  portalStrikeAim?: { x: number; y: number; angle: number; active: boolean } | null;
   hammerheadTicks: number;
   hammerheadWallTicks: number;
   allyCount: number;
@@ -648,6 +652,10 @@ export interface ProjectileEntity {
   meleeReach?: number;
   canHitPlayer?: boolean;
   isUltra?: boolean;
+  sourceCause?: string;
+  sourceSprite?: string;
+  beamOriginX?: number;
+  beamOriginY?: number;
 }
 
 export type PickupKind = 'rad' | 'big_rad' | 'ammo' | 'hp' | 'weapon' | 'portal_strike';
@@ -657,6 +665,8 @@ export interface PickupEntity {
   kind: PickupKind;
   x: number;
   y: number;
+  prevX?: number;
+  prevY?: number;
   vx: number;
   vy: number;
   value: number;
@@ -699,12 +709,17 @@ export interface PropEntity {
   mimic?: boolean;
   radsStored?: number;
   lifeTicks?: number;
+  flipX?: boolean;
+  cursed?: boolean;
+  interactPrompt?: string;
 }
 
 export interface CorpseEntity {
   id: number;
   x: number;
   y: number;
+  prevX?: number;
+  prevY?: number;
   vx: number;
   vy: number;
   facing: 1 | -1;
