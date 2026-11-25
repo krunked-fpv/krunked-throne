@@ -2,6 +2,41 @@ export {
   DEFAULT_KEYBINDINGS,
   InputManager,
   clientToLogicalCanvas,
+  type InputManagerOptions,
   type MenuInputSnapshot,
   type PointerSnapshot,
+  type SimInputContext,
 } from './input-manager';
+
+export {
+  DEFAULT_CONTROL_SETTINGS,
+  GamepadManager,
+  MAX_GAMEPAD_DEADZONE,
+  MIN_GAMEPAD_DEADZONE,
+  applyControllerAimAssist,
+  applyRadialDeadzone,
+  decodeHatSwitchAxis,
+  hasTileLineOfSight,
+  type AimAssistEnemy,
+  type AimAssistResult,
+  type GamepadButtonLike,
+  type GamepadLike,
+  type GamepadPollResult,
+  type GamepadProfileKind,
+  type GamepadVibrationActuatorLike,
+  type RumblePreset,
+  type RumbleSpec,
+} from './gamepad';
+
+export {
+  TOUCH_AIM_FIRE_THRESHOLD,
+  TOUCH_AIM_STICK_RADIUS,
+  TOUCH_MOVE_STICK_RADIUS,
+  TOUCH_STICK_DEADZONE_PX,
+  TouchControlsManager,
+  computeTouchTriggerRects,
+  type FloatingStickState,
+  type TouchGameplaySample,
+  type TouchTriggerId,
+  type TouchTriggerRect,
+} from './touch-controls';

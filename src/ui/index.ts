@@ -40,4 +40,5 @@ export {
   type HitRegion,
   type MenuAction,
   type MenuRenderContext,
+  type OptionsTab,
 } from './menus';

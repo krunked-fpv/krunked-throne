@@ -1,6 +1,7 @@
 import type {
   AreaCode,
   AudioSettings,
+  ControlSettings,
   CrownId,
   KeyBindings,
   MutantId,
@@ -8,8 +9,14 @@ import type {
   RenderSettings,
   SaveData,
   TargetFps,
+  TouchControlsMode,
 } from '@/contracts';
-import { DEFAULT_KEYBINDINGS } from '@/input/input-manager';
+import {
+  DEFAULT_CONTROL_SETTINGS,
+  DEFAULT_KEYBINDINGS,
+  MAX_GAMEPAD_DEADZONE,
+  MIN_GAMEPAD_DEADZONE,
+} from '@/input';
 import { ALL_AREA_CODES, ALL_CROWN_IDS, ALL_MUTANT_IDS } from './data-provider';
 
 export const SAVE_STORAGE_KEY = 'krunked_throne_save_v1';
@@ -112,6 +119,16 @@ function isTargetFps(v: unknown): v is TargetFps {
   return v === 30 || v === 60 || v === 120;
 }
 
+function isTouchControlsMode(v: unknown): v is TouchControlsMode {
+  return v === 'auto' || v === 'off';
+}
+
+function clampDeadzone(val: unknown, fallback: number): number {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
+  const clamped = Math.max(MIN_GAMEPAD_DEADZONE, Math.min(MAX_GAMEPAD_DEADZONE, val));
+  return Math.round(clamped * 100) / 100;
+}
+
 export function createDefaultMutantProgress(id: MutantId): MutantSaveProgress {
   return {
     unlocked: true, // All 12 mutants unlocked by default for full-roster play
@@ -154,6 +171,7 @@ export function createDefaultSaveData(): SaveData {
       pixelSnap: true,
     },
     keybinds: { ...DEFAULT_KEYBINDINGS },
+    controls: { ...DEFAULT_CONTROL_SETTINGS },
     mutants,
     totalRuns: 0,
     totalKills: 0,
@@ -187,6 +205,9 @@ export function validateSaveData(raw: unknown): SaveData {
     string,
     unknown
   >;
+  const ctrlRaw = (
+    obj.controls && typeof obj.controls === 'object' ? obj.controls : {}
+  ) as Record<string, unknown>;
   const skinsRaw = (
     obj.selectedSkins && typeof obj.selectedSkins === 'object' ? obj.selectedSkins : {}
   ) as Record<string, unknown>;
@@ -275,6 +296,14 @@ export function validateSaveData(raw: unknown): SaveData {
       pickup: keyCodeVal(kbRaw.pickup, def.keybinds.pickup),
       pause: keyCodeVal(kbRaw.pause, def.keybinds.pause),
       activeAlt: keyCodeVal(kbRaw.activeAlt, def.keybinds.activeAlt),
+    },
+    controls: {
+      gamepadAimAssist: boolVal(ctrlRaw.gamepadAimAssist, def.controls.gamepadAimAssist),
+      gamepadRumble: boolVal(ctrlRaw.gamepadRumble, def.controls.gamepadRumble),
+      gamepadDeadzone: clampDeadzone(ctrlRaw.gamepadDeadzone, def.controls.gamepadDeadzone),
+      touchMode: isTouchControlsMode(ctrlRaw.touchMode)
+        ? ctrlRaw.touchMode
+        : def.controls.touchMode,
     },
     mutants,
     totalRuns: nonNegInt(obj.totalRuns, def.totalRuns),
@@ -468,6 +497,29 @@ export class SaveManager {
     this.data.keybinds = { ...DEFAULT_KEYBINDINGS };
     this.save();
     return this.data.keybinds;
+  }
+
+  updateControls(partial: Partial<ControlSettings>): ControlSettings {
+    this.data.controls = {
+      gamepadAimAssist:
+        partial.gamepadAimAssist !== undefined
+          ? Boolean(partial.gamepadAimAssist)
+          : this.data.controls.gamepadAimAssist,
+      gamepadRumble:
+        partial.gamepadRumble !== undefined
+          ? Boolean(partial.gamepadRumble)
+          : this.data.controls.gamepadRumble,
+      gamepadDeadzone: clampDeadzone(
+        partial.gamepadDeadzone ?? this.data.controls.gamepadDeadzone,
+        this.data.controls.gamepadDeadzone,
+      ),
+      touchMode:
+        partial.touchMode && isTouchControlsMode(partial.touchMode)
+          ? partial.touchMode
+          : this.data.controls.touchMode,
+    };
+    this.save();
+    return this.data.controls;
   }
 
   recordRunStart(mutant: MutantId): void {

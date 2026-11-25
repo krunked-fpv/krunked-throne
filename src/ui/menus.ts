@@ -1,7 +1,9 @@
 import type {
   AudioSettings,
+  ControlSettings,
   CrownId,
   GameScreen,
+  InputDeviceMode,
   KeyBindings,
   MutantId,
   MutationId,
@@ -12,7 +14,11 @@ import type {
   UltraId,
 } from '@/contracts';
 import type { AssetBundle } from '@/assets';
-import type { MenuInputSnapshot } from '@/input/input-manager';
+import {
+  MAX_GAMEPAD_DEADZONE,
+  MIN_GAMEPAD_DEADZONE,
+  type MenuInputSnapshot,
+} from '@/input';
 import { BitmapFontRenderer } from '@/render/bitmap-font';
 import { SpriteRenderer } from '@/render/sprites';
 import {
@@ -44,7 +50,9 @@ export type MenuAction =
   | { type: 'pick_ultra'; index: number; ultraId: UltraId }
   | { type: 'update_audio'; partial: Partial<AudioSettings> }
   | { type: 'update_render'; partial: Partial<RenderSettings> }
+  | { type: 'update_controls'; partial: Partial<ControlSettings> }
   | { type: 'begin_rebind'; field: keyof KeyBindings }
+  | { type: 'cancel_rebind' }
   | { type: 'rebind_key'; field: keyof KeyBindings; code: string }
   | { type: 'reset_keybinds' }
   | { type: 'request_load_local' }
@@ -66,7 +74,19 @@ export interface MenuRenderContext {
   hasServerSteam?: boolean;
   assetStatusText?: string;
   assetLoading?: boolean;
+  inputMode?: InputDeviceMode;
+  gamepadConnected?: boolean;
+  gamepadName?: string | null;
+  gamepadProfile?: string | null;
 }
+
+export type OptionsTab = 'general' | 'controls' | 'keybinds';
+
+const OPTIONS_TABS: readonly OptionsTab[] = ['general', 'controls', 'keybinds'];
+const GENERAL_OPTION_COUNT = 10;
+const CONTROLS_OPTION_COUNT = 4;
+const KEYBINDS_OPTION_COUNT = 9; // 8 keybinds + reset defaults
+const CAMPFIRE_ACTION_COUNT = 5; // skin, crown, gold, go, back
 
 const KEYBIND_LABELS: ReadonlyArray<{ field: keyof KeyBindings; label: string }> = [
   { field: 'up', label: 'MOVE UP' },
@@ -158,9 +178,13 @@ export class MenuSystem {
   private regions: HitRegion[] = [];
   private hoveredId: string | null = null;
   private focusedIndex = 0;
-  private optionsTab: 'general' | 'controls' = 'general';
+  private titleSubCol = 0;
+  private campfireRow: 'roster' | 'actions' = 'roster';
+  private campfireActionIndex = 3; // 0=skin, 1=crown, 2=gold, 3=go, 4=back
+  private optionsTab: OptionsTab = 'general';
   private activeDragRegionId: string | null = null;
   private lastScreen: GameScreen | null = null;
+  private renderTimeSec = 0;
 
   constructor(bundle: AssetBundle, data: UiDataProvider = DEFAULT_UI_DATA_PROVIDER) {
     this.bundle = bundle;
@@ -187,8 +211,25 @@ export class MenuSystem {
     return this.hoveredId;
   }
 
+  getFocusedIndex(): number {
+    return this.focusedIndex;
+  }
+
+  getOptionsTab(): OptionsTab {
+    return this.optionsTab;
+  }
+
+  setOptionsTab(tab: OptionsTab): void {
+    this.optionsTab = tab;
+    this.focusedIndex = 0;
+  }
+
+  getCampfireFocus(): { row: 'roster' | 'actions'; actionIndex: number } {
+    return { row: this.campfireRow, actionIndex: this.campfireActionIndex };
+  }
+
   /**
-   * Processes pointer hover/click/drag and keyboard navigation against the active screen.
+   * Processes pointer hover/click/drag, touch taps, and full keyboard/gamepad navigation.
    */
   update(input: MenuInputSnapshot, ctx: MenuRenderContext): MenuAction[] {
     const actions: MenuAction[] = [];
@@ -196,7 +237,11 @@ export class MenuSystem {
     if (this.lastScreen !== ctx.screen) {
       this.lastScreen = ctx.screen;
       this.focusedIndex = 0;
+      this.titleSubCol = 0;
+      this.campfireRow = 'roster';
+      this.campfireActionIndex = 3;
       this.activeDragRegionId = null;
+      this.hoveredId = null;
     }
 
     // Complete pending key rebind immediately if a key was captured
@@ -210,29 +255,56 @@ export class MenuSystem {
       return actions;
     }
 
-    // Pointer hover detection
+    // Cancel pending key rebind cleanly on Back/B/Escape without leaving Options
+    if (ctx.rebindingField && input.back) {
+      actions.push({ type: 'cancel_rebind' });
+      actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      return actions;
+    }
+
+    // Clear pointer hover when user navigates via keyboard/gamepad so focus never fights parked cursor
+    const hadDirectionalNav =
+      input.navUp ||
+      input.navDown ||
+      input.navLeft ||
+      input.navRight ||
+      Boolean(input.prevTab) ||
+      Boolean(input.nextTab);
+    if (hadDirectionalNav) {
+      this.hoveredId = null;
+    }
+
+    // Pointer hover detection (update only when pointer actually moved, clicked, or is dragging,
+    // or when moved is omitted by legacy headless test callers)
     const px = input.pointer.logicalX;
     const py = input.pointer.logicalY;
-    let nextHover: string | null = null;
+    const pointerShouldHitTest =
+      input.pointer.moved === undefined ||
+      input.pointer.moved ||
+      input.pointer.clicked ||
+      input.pointer.down;
+
     let hoveredRegion: HitRegion | null = null;
+    if (pointerShouldHitTest) {
+      let nextHover: string | null = null;
+      for (let i = this.regions.length - 1; i >= 0; i--) {
+        const r = this.regions[i]!;
+        if (pointInRegion(px, py, r)) {
+          nextHover = r.id;
+          hoveredRegion = r;
+          break;
+        }
+      }
 
-    for (let i = this.regions.length - 1; i >= 0; i--) {
-      const r = this.regions[i]!;
-      if (pointInRegion(px, py, r)) {
-        nextHover = r.id;
-        hoveredRegion = r;
-        break;
+      if (nextHover !== this.hoveredId && !hadDirectionalNav) {
+        this.hoveredId = nextHover;
+        if (nextHover) {
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        }
       }
     }
 
-    if (nextHover !== this.hoveredId) {
-      this.hoveredId = nextHover;
-      if (nextHover) {
-        actions.push({ type: 'ui_sfx', sound: 'sndHover' });
-      }
-    }
-
-    // Slider dragging
+    // Slider dragging (works smoothly for both mouse and touch)
     if (!input.pointer.down) {
       this.activeDragRegionId = null;
     }
@@ -250,17 +322,24 @@ export class MenuSystem {
       const act = hoveredRegion.onActivate();
       if (act) {
         actions.push(act);
-        actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        if (act.type !== 'ui_sfx') {
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        }
       }
     }
 
-    // Screen-specific keyboard shortcuts & navigation
-    this.handleKeyboard(input, ctx, actions);
+    // Screen-specific keyboard & gamepad navigation
+    this.handleNavigation(input, ctx, actions);
 
     return actions;
   }
 
-  private handleKeyboard(
+  private cycleCrownFrom(current: CrownId, delta: number): CrownId {
+    const idx = Math.max(0, ALL_CROWN_IDS.indexOf(current));
+    return ALL_CROWN_IDS[(idx + delta + ALL_CROWN_IDS.length) % ALL_CROWN_IDS.length]!;
+  }
+
+  private handleNavigation(
     input: MenuInputSnapshot,
     ctx: MenuRenderContext,
     actions: MenuAction[],
@@ -269,18 +348,28 @@ export class MenuSystem {
 
     switch (ctx.screen) {
       case 'title': {
+        const hasSplitArtRow =
+          !ctx.assetLoading &&
+          (this.bundle.sourceMode === 'steam' || Boolean(ctx.hasCachedLocal || ctx.hasServerSteam));
+
         if (input.navUp) {
           this.focusedIndex = (this.focusedIndex - 1 + 3) % 3;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (input.navDown) {
           this.focusedIndex = (this.focusedIndex + 1) % 3;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 2 && hasSplitArtRow && (input.navLeft || input.navRight)) {
+          this.titleSubCol = this.titleSubCol === 0 ? 1 : 0;
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         }
+
         if (input.confirm) {
           if (this.focusedIndex === 0) {
             actions.push({ type: 'open_screen', screen: 'campfire' });
           } else if (this.focusedIndex === 1) {
             actions.push({ type: 'open_screen', screen: 'options' });
+          } else if (hasSplitArtRow && this.titleSubCol === 1) {
+            actions.push({ type: 'request_load_local' });
           } else if (this.bundle.sourceMode === 'steam') {
             actions.push({ type: 'use_builtin_art' });
           } else if (ctx.hasCachedLocal || ctx.hasServerSteam) {
@@ -295,24 +384,87 @@ export class MenuSystem {
 
       case 'campfire': {
         const curIdx = Math.max(0, mutants.findIndex((m) => m.id === ctx.save.selectedMutant));
-        if (input.navLeft) {
-          const next = mutants[(curIdx - 1 + mutants.length) % mutants.length]!;
-          actions.push({ type: 'select_mutant', mutant: next.id });
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
-        } else if (input.navRight) {
-          const next = mutants[(curIdx + 1) % mutants.length]!;
-          actions.push({ type: 'select_mutant', mutant: next.id });
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        const selectedId = ctx.save.selectedMutant;
+
+        // Instant shoulder/face shortcuts work cleanly from either focus row
+        if (input.prevTab) {
+          actions.push({ type: 'toggle_bskin', mutant: selectedId });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
+        if (input.nextTab) {
+          actions.push({ type: 'cycle_crown', crown: this.cycleCrownFrom(ctx.save.selectedCrown, 1) });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        }
+        if (input.secondary) {
+          actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        }
+
+        // Up/Down switches between 12-Mutant Roster and Loadout Action Bar
+        if (input.navUp && this.campfireRow === 'roster') {
+          this.campfireRow = 'actions';
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (input.navDown && this.campfireRow === 'actions') {
+          this.campfireRow = 'roster';
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.campfireRow === 'roster') {
+          if (input.navLeft) {
+            const next = mutants[(curIdx - 1 + mutants.length) % mutants.length]!;
+            actions.push({ type: 'select_mutant', mutant: next.id });
+            actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          } else if (input.navRight) {
+            const next = mutants[(curIdx + 1) % mutants.length]!;
+            actions.push({ type: 'select_mutant', mutant: next.id });
+            actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          }
+        } else {
+          if (input.navLeft) {
+            this.campfireActionIndex =
+              (this.campfireActionIndex - 1 + CAMPFIRE_ACTION_COUNT) % CAMPFIRE_ACTION_COUNT;
+            actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          } else if (input.navRight) {
+            this.campfireActionIndex = (this.campfireActionIndex + 1) % CAMPFIRE_ACTION_COUNT;
+            actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          }
+        }
+
         if (input.confirm) {
-          const m = ctx.save.selectedMutant;
-          actions.push({
-            type: 'start_run',
-            mutant: m,
-            skin: ctx.save.selectedSkins[m] ?? 'a',
-            crown: ctx.save.selectedCrown,
-            useGoldenWeapon: ctx.save.useGoldenWeapon,
-          });
+          if (this.campfireRow === 'actions') {
+            switch (this.campfireActionIndex) {
+              case 0:
+                actions.push({ type: 'toggle_bskin', mutant: selectedId });
+                break;
+              case 1:
+                actions.push({
+                  type: 'cycle_crown',
+                  crown: this.cycleCrownFrom(ctx.save.selectedCrown, 1),
+                });
+                break;
+              case 2:
+                actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
+                break;
+              case 3:
+                actions.push({
+                  type: 'start_run',
+                  mutant: selectedId,
+                  skin: ctx.save.selectedSkins[selectedId] ?? 'a',
+                  crown: ctx.save.selectedCrown,
+                  useGoldenWeapon: ctx.save.useGoldenWeapon,
+                });
+                break;
+              case 4:
+                actions.push({ type: 'open_screen', screen: 'title' });
+                break;
+            }
+          } else {
+            actions.push({
+              type: 'start_run',
+              mutant: selectedId,
+              skin: ctx.save.selectedSkins[selectedId] ?? 'a',
+              crown: ctx.save.selectedCrown,
+              useGoldenWeapon: ctx.save.useGoldenWeapon,
+            });
+          }
           actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (input.back) {
           actions.push({ type: 'open_screen', screen: 'title' });
@@ -397,17 +549,24 @@ export class MenuSystem {
       }
 
       case 'options': {
-        if (input.back && !ctx.rebindingField) {
-          actions.push({ type: 'open_screen', screen: ctx.returnScreenFromOptions });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
-        }
+        this.handleOptionsNavigation(input, ctx, actions);
         break;
       }
 
       case 'game_over':
       case 'victory': {
-        if (input.retry || input.confirm) {
+        if (input.navLeft || input.navRight || input.navUp || input.navDown) {
+          this.focusedIndex = this.focusedIndex === 0 ? 1 : 0;
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (input.retry) {
           actions.push({ type: 'restart' });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (input.confirm) {
+          if (this.focusedIndex === 1) {
+            actions.push({ type: 'open_screen', screen: 'campfire' });
+          } else {
+            actions.push({ type: 'restart' });
+          }
           actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (input.back) {
           actions.push({ type: 'open_screen', screen: 'campfire' });
@@ -421,6 +580,219 @@ export class MenuSystem {
     }
   }
 
+  private handleOptionsNavigation(
+    input: MenuInputSnapshot,
+    ctx: MenuRenderContext,
+    actions: MenuAction[],
+  ): void {
+    if (ctx.rebindingField) return;
+
+    if (input.back) {
+      actions.push({ type: 'open_screen', screen: ctx.returnScreenFromOptions });
+      actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      return;
+    }
+
+    // LB / RB cycles between VIDEO/AUDIO <-> CONTROLS <-> KEYBINDS
+    if (input.prevTab || input.nextTab) {
+      const curTabIdx = OPTIONS_TABS.indexOf(this.optionsTab);
+      const delta = input.nextTab ? 1 : -1;
+      const nextTab = OPTIONS_TABS[(curTabIdx + delta + OPTIONS_TABS.length) % OPTIONS_TABS.length]!;
+      this.optionsTab = nextTab;
+      this.focusedIndex = 0;
+      actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      return;
+    }
+
+    const { save } = ctx;
+
+    if (this.optionsTab === 'general') {
+      const count = GENERAL_OPTION_COUNT;
+      if (input.navUp) {
+        this.focusedIndex = (this.focusedIndex - 1 + count) % count;
+        actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+      } else if (input.navDown) {
+        this.focusedIndex = (this.focusedIndex + 1) % count;
+        actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+      }
+
+      const stepSlider = (cur: number, delta: number): number =>
+        Math.round(Math.max(0, Math.min(1, cur + delta)) * 20) / 20;
+
+      if (input.navLeft || input.navRight) {
+        const dir = input.navRight ? 1 : -1;
+        if (this.focusedIndex === 0 || this.focusedIndex === 1) {
+          this.focusedIndex = this.focusedIndex === 0 ? 1 : 0;
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex >= 2 && this.focusedIndex <= 4) {
+          this.focusedIndex = 2 + ((this.focusedIndex - 2 + dir + 3) % 3);
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 5) {
+          actions.push({
+            type: 'update_render',
+            partial: { screenShakeScale: stepSlider(save.render.screenShakeScale, dir * 0.05) },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 6) {
+          actions.push({
+            type: 'update_audio',
+            partial: { masterVolume: stepSlider(save.audio.masterVolume, dir * 0.05) },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 7) {
+          actions.push({
+            type: 'update_audio',
+            partial: { sfxVolume: stepSlider(save.audio.sfxVolume, dir * 0.05) },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 8) {
+          actions.push({
+            type: 'update_audio',
+            partial: { musicVolume: stepSlider(save.audio.musicVolume, dir * 0.05) },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 9) {
+          actions.push({
+            type: 'update_audio',
+            partial: { ambienceVolume: stepSlider(save.audio.ambienceVolume, dir * 0.05) },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        }
+      }
+
+      if (input.confirm) {
+        if (this.focusedIndex === 0) {
+          actions.push({ type: 'update_render', partial: { widescreen: !save.render.widescreen } });
+        } else if (this.focusedIndex === 1) {
+          const curFps: TargetFps = save.render.targetFps ?? (save.render.classic30Fps ? 30 : 120);
+          const nextFps = cycleTargetFps(curFps);
+          actions.push({
+            type: 'update_render',
+            partial: { targetFps: nextFps, classic30Fps: nextFps === 30 },
+          });
+        } else if (this.focusedIndex === 2) {
+          actions.push({
+            type: 'update_render',
+            partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 7 },
+          });
+        } else if (this.focusedIndex === 3) {
+          actions.push({ type: 'update_render', partial: { showFps: !save.render.showFps } });
+        } else if (this.focusedIndex === 4) {
+          actions.push({ type: 'update_audio', partial: { muted: !save.audio.muted } });
+        }
+        actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      }
+      return;
+    }
+
+    if (this.optionsTab === 'controls') {
+      const count = CONTROLS_OPTION_COUNT;
+      if (input.navUp) {
+        this.focusedIndex = (this.focusedIndex - 1 + count) % count;
+        actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+      } else if (input.navDown) {
+        this.focusedIndex = (this.focusedIndex + 1) % count;
+        actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+      }
+
+      const controls = save.controls;
+      if (input.navLeft || input.navRight) {
+        const dir = input.navRight ? 1 : -1;
+        if (this.focusedIndex === 0) {
+          actions.push({
+            type: 'update_controls',
+            partial: { gamepadAimAssist: !controls.gamepadAimAssist },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (this.focusedIndex === 1) {
+          actions.push({
+            type: 'update_controls',
+            partial: { gamepadRumble: !controls.gamepadRumble },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (this.focusedIndex === 2) {
+          const nextDz = Math.round(
+            Math.max(
+              MIN_GAMEPAD_DEADZONE,
+              Math.min(MAX_GAMEPAD_DEADZONE, controls.gamepadDeadzone + dir * 0.02),
+            ) * 100,
+          ) / 100;
+          actions.push({ type: 'update_controls', partial: { gamepadDeadzone: nextDz } });
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 3) {
+          actions.push({
+            type: 'update_controls',
+            partial: { touchMode: controls.touchMode === 'auto' ? 'off' : 'auto' },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        }
+      } else if (input.confirm) {
+        if (this.focusedIndex === 0) {
+          actions.push({
+            type: 'update_controls',
+            partial: { gamepadAimAssist: !controls.gamepadAimAssist },
+          });
+        } else if (this.focusedIndex === 1) {
+          actions.push({
+            type: 'update_controls',
+            partial: { gamepadRumble: !controls.gamepadRumble },
+          });
+        } else if (this.focusedIndex === 2) {
+          const nextDz =
+            controls.gamepadDeadzone >= MAX_GAMEPAD_DEADZONE
+              ? MIN_GAMEPAD_DEADZONE
+              : Math.round(Math.min(MAX_GAMEPAD_DEADZONE, controls.gamepadDeadzone + 0.04) * 100) /
+                100;
+          actions.push({ type: 'update_controls', partial: { gamepadDeadzone: nextDz } });
+        } else if (this.focusedIndex === 3) {
+          actions.push({
+            type: 'update_controls',
+            partial: { touchMode: controls.touchMode === 'auto' ? 'off' : 'auto' },
+          });
+        }
+        actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      }
+      return;
+    }
+
+    // Keybinds tab (0..7 in 2-col grid, 8 = Reset Defaults)
+    const count = KEYBINDS_OPTION_COUNT;
+    if (input.navUp) {
+      if (this.focusedIndex === 8) {
+        this.focusedIndex = 6;
+      } else if (this.focusedIndex >= 2) {
+        this.focusedIndex -= 2;
+      } else {
+        this.focusedIndex = 8;
+      }
+      actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+    } else if (input.navDown) {
+      if (this.focusedIndex === 8) {
+        this.focusedIndex = 0;
+      } else if (this.focusedIndex >= 6) {
+        this.focusedIndex = 8;
+      } else {
+        this.focusedIndex += 2;
+      }
+      actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+    } else if ((input.navLeft || input.navRight) && this.focusedIndex < 8) {
+      this.focusedIndex = this.focusedIndex % 2 === 0 ? this.focusedIndex + 1 : this.focusedIndex - 1;
+      actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+    }
+
+    if (input.confirm) {
+      if (this.focusedIndex === count - 1) {
+        actions.push({ type: 'reset_keybinds' });
+      } else {
+        const entry = KEYBIND_LABELS[this.focusedIndex];
+        if (entry) {
+          actions.push({ type: 'begin_rebind', field: entry.field });
+        }
+      }
+      actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+    }
+  }
+
   /**
    * Renders the active menu screen and populates this.regions for exact hit-testing.
    */
@@ -429,6 +801,7 @@ export class MenuSystem {
     ctx: MenuRenderContext,
   ): void {
     this.regions = [];
+    this.renderTimeSec = ctx.timeSec;
     canvasCtx.imageSmoothingEnabled = false;
 
     switch (ctx.screen) {
@@ -476,10 +849,22 @@ export class MenuSystem {
     onActivate: () => MenuAction | null,
     opts: { accent?: string; focused?: boolean; font?: string; labelOffsetX?: number } = {},
   ): void {
-    const hovered = this.hoveredId === id || Boolean(opts.focused);
+    const isFocused = Boolean(opts.focused);
+    const hovered = this.hoveredId === id || isFocused;
     const accent = opts.accent ?? '#ffe047';
 
-    ctx.fillStyle = hovered ? 'rgba(42, 34, 54, 0.94)' : 'rgba(18, 15, 24, 0.88)';
+    // Crisp pulsing outer pixel glow when focused via gamepad/keyboard or hovered
+    if (hovered) {
+      const pulse = 0.24 + 0.14 * Math.sin(this.renderTimeSec * 7.5);
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - 1.5, y - 1.5, w + 3, h + 3);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = hovered ? 'rgba(46, 36, 62, 0.96)' : 'rgba(18, 15, 24, 0.88)';
     ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = hovered ? accent : '#5a5268';
     ctx.lineWidth = 1;
@@ -488,6 +873,9 @@ export class MenuSystem {
     if (hovered) {
       ctx.fillStyle = accent;
       ctx.fillRect(x + 2, y + 2, 2, h - 4);
+      if (isFocused) {
+        ctx.fillRect(x + w - 4, y + 2, 2, h - 4);
+      }
     }
 
     this.fonts.draw(
@@ -516,14 +904,23 @@ export class MenuSystem {
     label: string,
     value: number,
     onChange: (val: number) => MenuAction,
+    opts: { focused?: boolean; valueText?: string } = {},
   ): void {
-    const hovered = this.hoveredId === id || this.activeDragRegionId === id;
+    const isFocused = Boolean(opts.focused);
+    const hovered = this.hoveredId === id || this.activeDragRegionId === id || isFocused;
     const barW = 86;
     const barH = 8;
     const barX = x + w - barW - 30;
     const barY = y + 3;
 
-    this.fonts.draw(ctx, label, x, y + 2, 'fntSmall', {
+    if (isFocused) {
+      ctx.fillStyle = 'rgba(255, 224, 71, 0.12)';
+      ctx.fillRect(x - 3, y - 1, w + 6, 15);
+      ctx.fillStyle = '#ffe047';
+      ctx.fillRect(x - 3, y, 2, 13);
+    }
+
+    this.fonts.draw(ctx, label, x + (isFocused ? 2 : 0), y + 2, 'fntSmall', {
       color: hovered ? '#ffe047' : '#d2d0dc',
       outline: true,
     });
@@ -531,15 +928,20 @@ export class MenuSystem {
     ctx.fillStyle = '#120e18';
     ctx.fillRect(barX, barY, barW, barH);
     ctx.fillStyle = hovered ? '#ffe047' : '#52e864';
-    ctx.fillRect(barX + 1, barY + 1, Math.round((barW - 2) * Math.max(0, Math.min(1, value))), barH - 2);
+    ctx.fillRect(
+      barX + 1,
+      barY + 1,
+      Math.round((barW - 2) * Math.max(0, Math.min(1, value))),
+      barH - 2,
+    );
     ctx.strokeStyle = hovered ? '#ffffff' : '#6b637a';
     ctx.lineWidth = 1;
     ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
 
-    const pct = `${Math.round(value * 100)}%`;
+    const pct = opts.valueText ?? `${Math.round(value * 100)}%`;
     this.fonts.draw(ctx, pct, x + w, y + 2, 'fntSmall', {
       align: 'right',
-      color: '#ffffff',
+      color: hovered ? '#ffe047' : '#ffffff',
       outline: true,
     });
 
@@ -686,7 +1088,7 @@ export class MenuSystem {
         toggleH,
         'USE BUILT-IN ART',
         () => ({ type: 'use_builtin_art' }),
-        { font: 'fntSmall', accent: '#52e864', focused: this.focusedIndex === 2 },
+        { font: 'fntSmall', accent: '#52e864', focused: this.focusedIndex === 2 && this.titleSubCol === 0 },
       );
       this.drawButton(
         ctx,
@@ -697,7 +1099,7 @@ export class MenuSystem {
         toggleH,
         'LOAD FOLDER',
         () => ({ type: 'request_load_local' }),
-        { font: 'fntSmall', accent: '#52a8ff' },
+        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 && this.titleSubCol === 1 },
       );
     } else if (mctx.hasCachedLocal || mctx.hasServerSteam) {
       const leftW = 90;
@@ -713,7 +1115,7 @@ export class MenuSystem {
         toggleH,
         'USE CUSTOM PACK',
         () => ({ type: 'use_local_art' }),
-        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 },
+        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 && this.titleSubCol === 0 },
       );
       this.drawButton(
         ctx,
@@ -724,7 +1126,7 @@ export class MenuSystem {
         toggleH,
         'LOAD FOLDER',
         () => ({ type: 'request_load_local' }),
-        { font: 'fntSmall', accent: '#ffe047' },
+        { font: 'fntSmall', accent: '#ffe047', focused: this.focusedIndex === 2 && this.titleSubCol === 1 },
       );
     } else {
       this.drawButton(
@@ -747,6 +1149,23 @@ export class MenuSystem {
           ? `@dBEST: @yL${save.bestLoop} ${save.bestArea}@d  KILLS: @w${save.bestKills}`
           : `@dBEST: @w${save.bestArea}@d  KILLS: @w${save.bestKills}`;
       this.fonts.draw(ctx, best, cx, 195, 'fntSmall', { align: 'center', outline: true });
+    } else if (mctx.inputMode === 'gamepad' || mctx.gamepadConnected) {
+      this.fonts.draw(
+        ctx,
+        '@gCONTROLLER READY  @d[LS/DPAD] MOVE  [A] SELECT',
+        cx,
+        195,
+        'fntSmall',
+        { align: 'center', outline: true },
+      );
+    }
+
+    // Subtle top-right connected controller badge when active
+    if (mctx.gamepadConnected) {
+      this.fonts.draw(ctx, '@gPAD READY', width - 6, 5, 'fntSmall', {
+        align: 'right',
+        outline: true,
+      });
     }
 
     // Asset mode / live status badge at bottom
@@ -904,10 +1323,26 @@ export class MenuSystem {
     }
 
     // Header & Top-Left Back button
-    this.drawButton(ctx, 'camp_back', 6, 4, 46, 15, 'BACK', () => ({
-      type: 'open_screen',
-      screen: 'title',
-    }), { font: 'fntSmall' });
+    const inActions = this.campfireRow === 'actions';
+    const inputMode = mctx.inputMode ?? 'kbm';
+    this.drawButton(
+      ctx,
+      'camp_back',
+      6,
+      4,
+      46,
+      15,
+      inputMode === 'gamepad' ? 'BACK [B]' : 'BACK',
+      () => ({
+        type: 'open_screen',
+        screen: 'title',
+      }),
+      {
+        font: 'fntSmall',
+        accent: '#ff8a38',
+        focused: inActions && this.campfireActionIndex === 4,
+      },
+    );
 
     this.fonts.draw(ctx, 'SELECT MUTANT', width * 0.5, 6, 'fntM1', {
       align: 'center',
@@ -926,7 +1361,11 @@ export class MenuSystem {
       18,
       skin === 'b' ? '@ySKIN: B' : 'SKIN: A',
       () => ({ type: 'toggle_bskin', mutant: selected.id }),
-      { font: 'fntSmall', accent: '#ffe047', focused: skin === 'b' },
+      {
+        font: 'fntSmall',
+        accent: '#ffe047',
+        focused: inActions && this.campfireActionIndex === 0,
+      },
     );
 
     const crownLabel =
@@ -944,7 +1383,11 @@ export class MenuSystem {
         const nextCrown = ALL_CROWN_IDS[(idx + 1) % ALL_CROWN_IDS.length]!;
         return { type: 'cycle_crown', crown: nextCrown };
       },
-      { font: 'fntSmall', accent: '#c96bff' },
+      {
+        font: 'fntSmall',
+        accent: '#c96bff',
+        focused: inActions && this.campfireActionIndex === 1,
+      },
     );
 
     const hasGold = Boolean(mProg?.goldenWeapon) || selected.id === 'yv';
@@ -957,9 +1400,19 @@ export class MenuSystem {
       18,
       save.useGoldenWeapon ? '@yGOLD: ON' : hasGold ? 'GOLD: OFF' : '@dGOLD: OFF',
       () => ({ type: 'toggle_golden', enabled: !save.useGoldenWeapon }),
-      { font: 'fntSmall', accent: '#ffe047' },
+      {
+        font: 'fntSmall',
+        accent: '#ffe047',
+        focused: inActions && this.campfireActionIndex === 2,
+      },
     );
 
+    const goLabel =
+      inputMode === 'gamepad'
+        ? '@gGO! [A]'
+        : inputMode === 'touch'
+          ? '@gGO!'
+          : '@gGO! [ENTER]';
     this.drawButton(
       ctx,
       'camp_go',
@@ -967,7 +1420,7 @@ export class MenuSystem {
       rowY - 2,
       74,
       22,
-      '@gGO! [ENTER]',
+      goLabel,
       () => ({
         type: 'start_run',
         mutant: selected.id,
@@ -975,7 +1428,11 @@ export class MenuSystem {
         crown: save.selectedCrown,
         useGoldenWeapon: save.useGoldenWeapon,
       }),
-      { font: 'fntSmall', accent: '#52e864', focused: true },
+      {
+        font: 'fntSmall',
+        accent: '#52e864',
+        focused: !inActions || this.campfireActionIndex === 3,
+      },
     );
 
     // Bottom 12-Mutant Roster Strip (clickable + keyboard arrow navigable)
@@ -1030,10 +1487,16 @@ export class MenuSystem {
       });
     }
 
-    // Active mutant short name under strip
+    // Active mutant short name & adaptive input hint under strip
+    const campHint =
+      inputMode === 'gamepad'
+        ? `@y[A] @w${selected.name}  @d[LB]SKIN [RB]CRN [Y]GOLD [UP]BAR`
+        : inputMode === 'touch'
+          ? `@w${selected.name}  @dTAP MUTANT OR GO TO PLAY`
+          : `@y< A / D > @w${selected.name}  @d(UP/DOWN LOADOUT - ENTER PLAY)`;
     this.fonts.draw(
       ctx,
-      `@y< A / D > @w${selected.name}  @d(CLICK OR ENTER TO PLAY)`,
+      campHint,
       width * 0.5,
       height - 11,
       'fntSmall',
@@ -1060,7 +1523,14 @@ export class MenuSystem {
       align: 'center',
       outline: true,
     });
-    this.fonts.draw(ctx, '@dCHOOSE ONE  (CLICK OR KEYS 1-' + Math.max(1, list.length) + ')', width * 0.5, 36, 'fntSmall', {
+    const mutInputMode = mctx.inputMode ?? 'kbm';
+    const mutPrompt =
+      mutInputMode === 'gamepad'
+        ? '@dCHOOSE ONE  ([LS/DPAD] BROWSE  [A] PICK)'
+        : mutInputMode === 'touch'
+          ? '@dTAP A MUTATION TO SELECT'
+          : '@dCHOOSE ONE  (CLICK OR KEYS 1-' + Math.max(1, list.length) + ')';
+    this.fonts.draw(ctx, mutPrompt, width * 0.5, 36, 'fntSmall', {
       align: 'center',
       outline: true,
     });
@@ -1305,7 +1775,14 @@ export class MenuSystem {
       () => ({ type: 'open_screen', screen: 'options' }),
       { accent: '#ffe047', focused: this.focusedIndex === 1, font: 'fntSmall' },
     );
-    this.drawButton(ctx, 'pause_restart', bx, py + 98, btnW, btnH, 'RESTART [R]', () => ({ type: 'restart' }), {
+    const pauseMode = mctx.inputMode ?? 'kbm';
+    const restartLabel =
+      pauseMode === 'gamepad'
+        ? 'RESTART [BACK]'
+        : pauseMode === 'touch'
+          ? 'RESTART'
+          : 'RESTART [R]';
+    this.drawButton(ctx, 'pause_restart', bx, py + 98, btnW, btnH, restartLabel, () => ({ type: 'restart' }), {
       accent: '#ff8a38',
       focused: this.focusedIndex === 2,
       font: 'fntSmall',
@@ -1324,7 +1801,7 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // 5. OPTIONS MENU (VIDEO, AUDIO, CROSSHAIR, KEYBINDS)
+  // 5. OPTIONS MENU (VIDEO/AUDIO, CONTROLS, KEYBINDS)
   // --------------------------------------------------------------------------
 
   private renderOptionsScreen(
@@ -1332,6 +1809,7 @@ export class MenuSystem {
     mctx: MenuRenderContext,
   ): void {
     const { width, height, save, returnScreenFromOptions, rebindingField } = mctx;
+    const inputMode = mctx.inputMode ?? 'kbm';
     const cx = Math.round(width * 0.5);
 
     ctx.fillStyle = 'rgba(12, 10, 18, 0.94)';
@@ -1349,10 +1827,20 @@ export class MenuSystem {
     ctx.strokeRect(px + 0.5, modalY + 0.5, panelW - 1, panelH - 1);
 
     // Top row: BACK button on top-left + OPTIONS header centered cleanly at modalY + 8
-    this.drawButton(ctx, 'opt_back', px + 6, modalY + 5, 44, 15, 'BACK', () => ({
-      type: 'open_screen',
-      screen: returnScreenFromOptions,
-    }), { font: 'fntSmall' });
+    this.drawButton(
+      ctx,
+      'opt_back',
+      px + 6,
+      modalY + 5,
+      48,
+      15,
+      inputMode === 'gamepad' ? 'BACK [B]' : 'BACK',
+      () => ({
+        type: 'open_screen',
+        screen: returnScreenFromOptions,
+      }),
+      { font: 'fntSmall' },
+    );
 
     this.fonts.draw(ctx, 'OPTIONS', cx, modalY + 8, 'fntM1', {
       align: 'center',
@@ -1360,11 +1848,18 @@ export class MenuSystem {
       outline: true,
     });
 
-    // Dedicated Tab Row below header (modalY + 24) with zero overlap in 320x240 & 426x240
-    const tabW = 92;
+    if (inputMode === 'gamepad') {
+      this.fonts.draw(ctx, '@d[LB/RB]', px + panelW - 8, modalY + 9, 'fntSmall', {
+        align: 'right',
+        outline: true,
+      });
+    }
+
+    // 3-Tab Row below header (VIDEO/AUDIO | CONTROLS | KEYBINDS) — fits 320x240 & 426x240 cleanly
+    const tabW = 86;
     const tabH = 14;
-    const tabGap = 8;
-    const tabStartX = cx - Math.floor((tabW * 2 + tabGap) / 2);
+    const tabGap = 6;
+    const tabStartX = cx - Math.floor((tabW * 3 + tabGap * 2) / 2);
     const tabY = modalY + 24;
     this.drawButton(
       ctx,
@@ -1376,7 +1871,8 @@ export class MenuSystem {
       'VIDEO/AUDIO',
       () => {
         this.optionsTab = 'general';
-        return null;
+        this.focusedIndex = 0;
+        return { type: 'ui_sfx', sound: 'sndClick' };
       },
       { font: 'fntSmall', focused: this.optionsTab === 'general', accent: '#52e864' },
     );
@@ -1387,12 +1883,28 @@ export class MenuSystem {
       tabY,
       tabW,
       tabH,
-      'KEYBINDS',
+      'CONTROLS',
       () => {
         this.optionsTab = 'controls';
-        return null;
+        this.focusedIndex = 0;
+        return { type: 'ui_sfx', sound: 'sndClick' };
       },
-      { font: 'fntSmall', focused: this.optionsTab === 'controls', accent: '#52a8ff' },
+      { font: 'fntSmall', focused: this.optionsTab === 'controls', accent: '#ffe047' },
+    );
+    this.drawButton(
+      ctx,
+      'opt_tab_keybinds',
+      tabStartX + (tabW + tabGap) * 2,
+      tabY,
+      tabW,
+      tabH,
+      'KEYBINDS',
+      () => {
+        this.optionsTab = 'keybinds';
+        this.focusedIndex = 0;
+        return { type: 'ui_sfx', sound: 'sndClick' };
+      },
+      { font: 'fntSmall', focused: this.optionsTab === 'keybinds', accent: '#52a8ff' },
     );
 
     const contentX = px + 10;
@@ -1411,7 +1923,7 @@ export class MenuSystem {
         16,
         save.render.widescreen ? 'ASPECT: @g16:9 WIDE' : 'ASPECT: @w4:3 CLASSIC',
         () => ({ type: 'update_render', partial: { widescreen: !save.render.widescreen } }),
-        { font: 'fntSmall' },
+        { font: 'fntSmall', focused: this.focusedIndex === 0 },
       );
       const curTargetFps: TargetFps = save.render.targetFps ?? (save.render.classic30Fps ? 30 : 120);
       this.drawButton(
@@ -1432,11 +1944,12 @@ export class MenuSystem {
         {
           font: 'fntSmall',
           accent: curTargetFps === 120 ? '#52a8ff' : curTargetFps === 60 ? '#52e864' : '#ffe047',
+          focused: this.focusedIndex === 1,
         },
       );
       y += 20;
 
-      // Crosshair style + Show FPS + Mute row (single-line AIM label + right-aligned crosshair icon)
+      // Crosshair style + Show FPS + Mute row
       const thirdW = Math.floor((contentW - 8) / 3);
       this.drawButton(
         ctx,
@@ -1450,9 +1963,8 @@ export class MenuSystem {
           type: 'update_render',
           partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 7 },
         }),
-        { font: 'fntSmall', labelOffsetX: -10 },
+        { font: 'fntSmall', labelOffsetX: -10, focused: this.focusedIndex === 2 },
       );
-      // Mini crosshair preview icon neatly right-aligned inside the crosshair button
       this.sprites.draw(ctx, 'sprCrosshair', contentX + thirdW - 12, y + 8, {
         frame: save.render.crosshairStyle,
         scaleX: 0.7,
@@ -1469,7 +1981,7 @@ export class MenuSystem {
         16,
         save.render.showFps ? 'HUD FPS: @gON' : 'HUD FPS: @dOFF',
         () => ({ type: 'update_render', partial: { showFps: !save.render.showFps } }),
-        { font: 'fntSmall' },
+        { font: 'fntSmall', focused: this.focusedIndex === 3 },
       );
 
       this.drawButton(
@@ -1481,33 +1993,77 @@ export class MenuSystem {
         16,
         save.audio.muted ? '@rMUTED' : '@gAUDIO ON',
         () => ({ type: 'update_audio', partial: { muted: !save.audio.muted } }),
-        { font: 'fntSmall', accent: save.audio.muted ? '#ff4242' : '#52e864' },
+        {
+          font: 'fntSmall',
+          accent: save.audio.muted ? '#ff4242' : '#52e864',
+          focused: this.focusedIndex === 4,
+        },
       );
       y += 22;
 
       // Sliders: Screen Shake + Master / SFX / Music / Ambience volumes
-      this.drawSliderRow(ctx, 'opt_shake', contentX, y, contentW, 'SCREEN SHAKE', save.render.screenShakeScale, (v) => ({
-        type: 'update_render',
-        partial: { screenShakeScale: v },
-      }));
+      this.drawSliderRow(
+        ctx,
+        'opt_shake',
+        contentX,
+        y,
+        contentW,
+        'SCREEN SHAKE',
+        save.render.screenShakeScale,
+        (v) => ({
+          type: 'update_render',
+          partial: { screenShakeScale: v },
+        }),
+        { focused: this.focusedIndex === 5 },
+      );
       y += 19;
 
-      this.drawSliderRow(ctx, 'opt_vol_master', contentX, y, contentW, 'MASTER VOL', save.audio.masterVolume, (v) => ({
-        type: 'update_audio',
-        partial: { masterVolume: v },
-      }));
+      this.drawSliderRow(
+        ctx,
+        'opt_vol_master',
+        contentX,
+        y,
+        contentW,
+        'MASTER VOL',
+        save.audio.masterVolume,
+        (v) => ({
+          type: 'update_audio',
+          partial: { masterVolume: v },
+        }),
+        { focused: this.focusedIndex === 6 },
+      );
       y += 19;
 
-      this.drawSliderRow(ctx, 'opt_vol_sfx', contentX, y, contentW, 'SFX VOLUME', save.audio.sfxVolume, (v) => ({
-        type: 'update_audio',
-        partial: { sfxVolume: v },
-      }));
+      this.drawSliderRow(
+        ctx,
+        'opt_vol_sfx',
+        contentX,
+        y,
+        contentW,
+        'SFX VOLUME',
+        save.audio.sfxVolume,
+        (v) => ({
+          type: 'update_audio',
+          partial: { sfxVolume: v },
+        }),
+        { focused: this.focusedIndex === 7 },
+      );
       y += 19;
 
-      this.drawSliderRow(ctx, 'opt_vol_music', contentX, y, contentW, 'MUSIC VOLUME', save.audio.musicVolume, (v) => ({
-        type: 'update_audio',
-        partial: { musicVolume: v },
-      }));
+      this.drawSliderRow(
+        ctx,
+        'opt_vol_music',
+        contentX,
+        y,
+        contentW,
+        'MUSIC VOLUME',
+        save.audio.musicVolume,
+        (v) => ({
+          type: 'update_audio',
+          partial: { musicVolume: v },
+        }),
+        { focused: this.focusedIndex === 8 },
+      );
       y += 19;
 
       this.drawSliderRow(
@@ -1519,16 +2075,150 @@ export class MenuSystem {
         'AMBIENCE VOL',
         save.audio.ambienceVolume,
         (v) => ({ type: 'update_audio', partial: { ambienceVolume: v } }),
+        { focused: this.focusedIndex === 9 },
       );
+
+      const genFooter =
+        inputMode === 'gamepad'
+          ? '@d[UP/DN] SELECT  [L/R] SLIDER  [A] TOGGLE  [B] BACK'
+          : '@dCLICK, DRAG, OR ARROWS - SETTINGS AUTO-SAVE';
+      this.fonts.draw(ctx, genFooter, cx, modalY + panelH - 12, 'fntSmall', { align: 'center' });
+    } else if (this.optionsTab === 'controls') {
+      // Dedicated Controls Tab (PC + Tesla Controller & Touch Controls)
+      const ctrl = save.controls;
+      this.drawButton(
+        ctx,
+        'opt_ctrl_aim_assist',
+        contentX,
+        y,
+        contentW,
+        18,
+        ctrl.gamepadAimAssist ? 'GAMEPAD AIM ASSIST: @gON' : 'GAMEPAD AIM ASSIST: @dOFF',
+        () => ({ type: 'update_controls', partial: { gamepadAimAssist: !ctrl.gamepadAimAssist } }),
+        {
+          font: 'fntSmall',
+          accent: ctrl.gamepadAimAssist ? '#52e864' : '#ffe047',
+          focused: this.focusedIndex === 0,
+        },
+      );
+      y += 22;
+
+      this.drawButton(
+        ctx,
+        'opt_ctrl_rumble',
+        contentX,
+        y,
+        contentW,
+        18,
+        ctrl.gamepadRumble ? 'CONTROLLER RUMBLE: @gON' : 'CONTROLLER RUMBLE: @dOFF',
+        () => ({ type: 'update_controls', partial: { gamepadRumble: !ctrl.gamepadRumble } }),
+        {
+          font: 'fntSmall',
+          accent: ctrl.gamepadRumble ? '#52e864' : '#ffe047',
+          focused: this.focusedIndex === 1,
+        },
+      );
+      y += 23;
+
+      const dzNorm =
+        (ctrl.gamepadDeadzone - MIN_GAMEPAD_DEADZONE) /
+        (MAX_GAMEPAD_DEADZONE - MIN_GAMEPAD_DEADZONE);
+      this.drawSliderRow(
+        ctx,
+        'opt_ctrl_deadzone',
+        contentX,
+        y,
+        contentW,
+        'STICK DEADZONE',
+        dzNorm,
+        (norm) => {
+          const mapped =
+            MIN_GAMEPAD_DEADZONE + norm * (MAX_GAMEPAD_DEADZONE - MIN_GAMEPAD_DEADZONE);
+          return {
+            type: 'update_controls',
+            partial: { gamepadDeadzone: Math.round(mapped * 100) / 100 },
+          };
+        },
+        {
+          focused: this.focusedIndex === 2,
+          valueText: `${Math.round(ctrl.gamepadDeadzone * 100)}%`,
+        },
+      );
+      y += 20;
+
+      this.drawButton(
+        ctx,
+        'opt_ctrl_touch',
+        contentX,
+        y,
+        contentW,
+        18,
+        ctrl.touchMode === 'auto'
+          ? 'TOUCH CONTROLS: @gAUTO (TOUCH ONLY)'
+          : 'TOUCH CONTROLS: @dOFF',
+        () => ({
+          type: 'update_controls',
+          partial: { touchMode: ctrl.touchMode === 'auto' ? 'off' : 'auto' },
+        }),
+        {
+          font: 'fntSmall',
+          accent: ctrl.touchMode === 'auto' ? '#52a8ff' : '#ff8a38',
+          focused: this.focusedIndex === 3,
+        },
+      );
+      y += 24;
+
+      // Live PC / Tesla Controller Status & Compact Legend Card
+      const boxH = 54;
+      ctx.fillStyle = 'rgba(12, 10, 18, 0.85)';
+      ctx.fillRect(contentX, y, contentW, boxH);
+      ctx.strokeStyle = mctx.gamepadConnected ? '#52e864' : '#4a4358';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(contentX + 0.5, y + 0.5, contentW - 1, boxH - 1);
+
+      const rawName = (mctx.gamepadName ?? '').trim().toUpperCase();
+      const shortName = rawName.length > 26 ? `${rawName.slice(0, 25)}.` : rawName;
+      const profileTag =
+        mctx.gamepadProfile === 'standard'
+          ? 'STD'
+          : mctx.gamepadProfile === 'linux-xpad' || mctx.gamepadProfile === 'sony-hid'
+            ? 'EVDEV'
+            : mctx.gamepadProfile
+              ? 'COMPAT'
+              : '';
+      const padLine = mctx.gamepadConnected
+        ? `@gCONNECTED: @w${shortName || 'CONTROLLER'} @d(${profileTag})`
+        : '@dNO CONTROLLER DETECTED - PRESS ANY PAD BUTTON';
+      this.fonts.draw(ctx, padLine, cx, y + 7, 'fntSmall', {
+        align: 'center',
+        maxWidth: contentW - 10,
+        outline: true,
+      });
 
       this.fonts.draw(
         ctx,
-        '@dCLICK OR DRAG SLIDERS - SETTINGS AUTO-SAVE',
+        '@yLS@w MOVE  @yRS@w AIM  @yRT/RB@w FIRE  @yLT/LB@w ACT',
         cx,
-        modalY + panelH - 12,
+        y + 24,
         'fntSmall',
-        { align: 'center' },
+        { align: 'center', outline: true },
       );
+      this.fonts.draw(
+        ctx,
+        '@yY@w SWAP  @yA/X@w USE  @ySTART@w PAUSE  @yBACK@w RETRY',
+        cx,
+        y + 38,
+        'fntSmall',
+        { align: 'center', outline: true },
+      );
+
+      const ctrlFooter =
+        inputMode === 'gamepad'
+          ? '@d[LB/RB] TABS  [L/R] ADJUST  [A] TOGGLE  [B] BACK'
+          : '@dPC & TESLA GAMEPAD + TOUCH AUTO-DETECT';
+      this.fonts.draw(ctx, ctrlFooter, cx, modalY + panelH - 12, 'fntSmall', {
+        align: 'center',
+      });
     } else {
       // Keybind Rebinding Table
       const rowH = 19;
@@ -1541,10 +2231,13 @@ export class MenuSystem {
         const rx = contentX + col * (colW + 8);
         const ry = y + row * (rowH + 4);
         const isListening = rebindingField === entry.field;
-        const keyText = isListening ? '@yPRESS KEY...' : `@w${formatKeyCode(save.keybinds[entry.field])}`;
+        const isRowFocused = this.focusedIndex === i;
+        const keyText = isListening
+          ? '@yPRESS KEY...'
+          : `@w${formatKeyCode(save.keybinds[entry.field])}`;
 
         this.fonts.draw(ctx, entry.label, rx, ry + 5, 'fntSmall', {
-          color: '#c8c6d4',
+          color: isRowFocused ? '#ffe047' : '#c8c6d4',
           outline: true,
         });
 
@@ -1557,7 +2250,7 @@ export class MenuSystem {
           rowH - 2,
           keyText,
           () => ({ type: 'begin_rebind', field: entry.field }),
-          { font: 'fntSmall', focused: isListening, accent: '#ffe047' },
+          { font: 'fntSmall', focused: isListening || isRowFocused, accent: '#ffe047' },
         );
       }
 
@@ -1570,7 +2263,7 @@ export class MenuSystem {
         16,
         'RESET DEFAULTS',
         () => ({ type: 'reset_keybinds' }),
-        { font: 'fntSmall', accent: '#ff8a38' },
+        { font: 'fntSmall', accent: '#ff8a38', focused: this.focusedIndex === 8 },
       );
     }
   }
@@ -1746,7 +2439,22 @@ export class MenuSystem {
       }
     }
 
-    // Bottom buttons: RETRY [R] & CAMPFIRE
+    // Bottom buttons: RETRY & CAMPFIRE (100% gamepad/keyboard/touch focusable)
+    const endMode = mctx.inputMode ?? 'kbm';
+    const retryBtnLabel =
+      endMode === 'gamepad'
+        ? victory
+          ? 'NEW RUN [BACK]'
+          : 'RETRY [BACK]'
+        : endMode === 'touch'
+          ? victory
+            ? 'NEW RUN'
+            : 'RETRY'
+          : victory
+            ? 'NEW RUN [R]'
+            : 'RETRY [R]';
+    const campBtnLabel = endMode === 'gamepad' ? 'CAMPFIRE [B]' : 'CAMPFIRE';
+
     const btnY = cardY + cardH + 14;
     const btnW = 104;
     const btnH = 22;
@@ -1757,9 +2465,9 @@ export class MenuSystem {
       btnY,
       btnW,
       btnH,
-      victory ? 'NEW RUN [R]' : 'RETRY [R]',
+      retryBtnLabel,
       () => ({ type: 'restart' }),
-      { accent: '#52e864', focused: true, font: 'fntSmall' },
+      { accent: '#52e864', focused: this.focusedIndex === 0, font: 'fntSmall' },
     );
     this.drawButton(
       ctx,
@@ -1768,9 +2476,9 @@ export class MenuSystem {
       btnY,
       btnW,
       btnH,
-      'CAMPFIRE',
+      campBtnLabel,
       () => ({ type: 'open_screen', screen: 'campfire' }),
-      { accent: '#ffe047', font: 'fntSmall' },
+      { accent: '#ffe047', focused: this.focusedIndex === 1, font: 'fntSmall' },
     );
   }
 }
