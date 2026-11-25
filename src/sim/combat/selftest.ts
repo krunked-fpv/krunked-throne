@@ -180,20 +180,25 @@ function runTest1ManifestValidation(): void {
   ];
   const runtimeSounds = [
     'sndRoll', 'sndFishTB', 'sndFishWarrantEnd', 'sndCrystalShield', 'sndCrystalRicochet',
-    'sndCrystalTB', 'sndEyesLoop', 'sndEyesLoopUpg', 'sndCorpseExplo', 'sndCorpseExploUpg',
-    'sndCorpseExploDead', 'sndPlantFire', 'sndPlantFireTB', 'sndPlantSnare', 'sndPlantSnareTrapper',
+    'sndCrystalTB', 'sndCrystalJuggernaut', 'sndEyesLoop', 'sndEyesLoopUpg', 'sndCorpseExplo', 'sndCorpseExploUpg',
+    'sndCorpseExploDead', 'sndPlantFire', 'sndPlantFireTB', 'sndPlantSnare', 'sndPlantSnareTB',
+    'sndPlantSnareTrapper', 'sndPlantSnareTrapperTB',
     'sndPlantTBKill', 'sndPopPop', 'sndPopPopUpg', 'sndRobotEat', 'sndRobotEatUpg',
     'sndChickenThrow', 'sndChickenReturn', 'sndChickenLoseHead', 'sndChickenRegenHead',
     'sndSpawnAlly', 'sndSpawnSuperAlly', 'sndHorrorLoop', 'sndHorrorLoopTB', 'sndHorrorEmpty',
     'sndHorrorPortal', 'sndPortalStrikeFire', 'sndPortalStrikeFireButt', 'sndPortalStrikeEmpty',
     'sndRogueCanister', 'sndMeleeFlip', 'sndDiscBounce', 'sndShotgunHitWall', 'sndImpWristHit',
-    'sndBloodlustProc', 'sndMutStrongSpirit', 'sndMutAppear', 'sndLevelUp', 'sndLevelUltra',
-    'sndPortalOpen', 'sndWeaponChest', 'sndAmmoChest', 'sndEXPChest', 'sndHealthChestBig',
+    'sndBloodlustProc', 'sndLuckyShotProc', 'sndStrongSpiritLost', 'sndStrongSpiritGain',
+    'sndMutAppear', 'sndLevelUp', 'sndLevelUltra',
+    'sndPortalOpen', 'sndPortalClose', 'sndWeaponChest', 'sndBigWeaponChest', 'sndCursedChest',
+    'sndCursedPickup', 'sndSwapCursed', 'sndAmmoChest', 'sndEXPChest', 'sndHealthChestBig',
     'sndWeaponPickup', 'sndAmmoPickup', 'sndRadPickup', 'sndHPPickup', 'sndHPPickupBig',
     'sndSwapPistol', 'sndEmpty', 'sndUltraEmpty', 'sndHammerHeadProc', 'sndHitMetal',
     'sndHitFlesh', 'sndExplosion', 'sndExplosionL', 'sndExplosionCar', 'sndNukeExplosion',
-    'sndBloodLauncherExplo', 'sndPlasmaBigExplode', 'sndFlakExplode', 'sndSuperFlakExplode',
-    'sndToxicBarrelGas', 'sndBigGeneratorBreak', 'sndSaplingSpawn', 'sndLightningHit',
+    'sndBloodLauncherExplo', 'sndBloodHurt', 'sndPlasmaHit', 'sndPlasmaBigExplode',
+    'sndPlasmaBigExplodeUpg', 'sndFlakExplode', 'sndSuperFlakExplode',
+    'sndToxicBarrelGas', 'sndToxicBoltGas', 'sndUltraGrenadeSuck',
+    'sndBigGeneratorBreak', 'sndSaplingSpawn', 'sndLightningHit',
   ];
   for (const s of runtimeSprites) checkSpr('runtime', s);
   for (const s of runtimeSounds) checkSnd('runtime', s);

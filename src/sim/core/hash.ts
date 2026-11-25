@@ -153,6 +153,9 @@ export function hashSimState(state: SimState): string {
   h.writeUint32(p.headlessTicks);
   h.writeUint32(p.gunWarrantTicks);
   h.writeUint32(p.portalStrikes);
+  h.writeBool(p.strongSpiritReady);
+  h.writeBool(p.strongSpiritRecharging);
+  h.writeUint32(p.hammerheadTicks);
   h.writeBool(p.alive);
 
   // Ammo pools (fixed canonical key order)

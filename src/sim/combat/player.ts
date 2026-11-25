@@ -22,6 +22,7 @@ import {
   createWeaponSlot,
   givePlayerWeapon,
   openChest,
+  pickTierWeaponId,
 } from '@/sim/progression/progression';
 import {
   NON_MELEE_AMMO_TYPES,
@@ -38,6 +39,9 @@ import {
   spawnPickup,
 } from './helpers';
 import { stepProjectiles } from './projectiles';
+
+// Tracks bonus free burst ticks per weapon slot (for Y.V. Back 2 Bizniz on burst weapons)
+const slotFreeBurstShots = new WeakMap<WeaponSlotState, number>();
 
 function casingKindForAmmo(ammoType: AmmoType): CasingEntity['kind'] | null {
   switch (ammoType) {
@@ -103,6 +107,44 @@ function spawnWeaponShot(
     wep.projectileKind === 'plasma' ||
     wep.projectileKind === 'lightning';
   const damageMult = isEnergy && hasLaserBrain ? 1.35 : 1.0;
+
+  // Gun Gun: shoots a literal random floor weapon pickup!
+  if (wep.id === 'gun_gun') {
+    const rolledId = pickTierWeaponId(state, rng, 0);
+    const rolledDef = getWeaponDef(rolledId);
+    const dropPos = findNearestFloor(
+      state.map,
+      player.x + Math.cos(aimAngle) * 14,
+      player.y + Math.sin(aimAngle) * 14,
+      6,
+    );
+    spawnPickup(
+      state,
+      'weapon',
+      dropPos.x,
+      dropPos.y,
+      {
+        weaponId: rolledDef.id,
+        cursed: Boolean(rolledDef.cursed),
+        value: 1,
+        vx: Math.cos(aimAngle) * 5.2,
+        vy: Math.sin(aimAngle) * 5.2,
+      },
+      rng,
+    );
+    slotState.kickOffset = Math.min(8, wep.kick * 1.4);
+    state.stats.shotsFired += 1;
+    emitEvent(state, { type: 'sfx', sound: wep.fireSound, x: player.x, y: player.y, pitchJitter: 0.08 });
+    emitEvent(state, {
+      type: 'shake',
+      trauma: wep.shake,
+      dirX: -Math.cos(aimAngle),
+      dirY: -Math.sin(aimAngle),
+      kick: wep.kick,
+    });
+    return;
+  }
+
   const count = Math.max(1, wep.projectilesPerShot);
 
   for (let p = 0; p < count; p++) {
@@ -114,33 +156,92 @@ function spawnWeaponShot(
 
     if (wep.projectileKind === 'melee_slash') {
       const reach = Math.round(wep.meleeReach * (hasLongArms ? 1.45 : 1.0));
-      state.projectiles.push({
-        id: allocEntityId(state),
-        kind: 'melee_slash',
-        team: 'player',
-        x: player.x + Math.cos(angle) * (reach * 0.45),
-        y: player.y + Math.sin(angle) * (reach * 0.45),
-        prevX: player.x,
-        prevY: player.y,
-        vx: 0,
-        vy: 0,
-        angle,
-        radius: reach * 0.5,
-        damage: Math.round(wep.damage * damageMult),
-        lifeTicks: wep.projectileLifeTicks,
-        maxLifeTicks: wep.projectileLifeTicks,
-        pierce: 99,
-        bounce: 0,
-        explosionRadius: 0,
-        sprite: wep.projectileSprite ?? 'sprSlash',
-        weaponId: wep.id,
-        hitIds: [],
-        deflectsProjectiles: wep.deflectsProjectiles,
-        destroysProjectiles: wep.destroysProjectiles,
-        meleeReach: reach,
-        meleeArcDeg: wep.meleeArcDeg,
-        isUltra: wep.ultra,
-      });
+      // Shovel fans 3 arcs; Ultra Shovel fans 5 arcs + digs walls; Jackhammer digs walls
+      const fanOffsets =
+        wep.id === 'ultra_shovel'
+          ? [-0.52, -0.26, 0, 0.26, 0.52]
+          : wep.id === 'shovel'
+            ? [-0.36, 0, 0.36]
+            : [0];
+      const arcPerSlash =
+        wep.id === 'ultra_shovel' ? 80 : wep.id === 'shovel' ? 95 : wep.meleeArcDeg;
+
+      for (let f = 0; f < fanOffsets.length; f++) {
+        const slashAng = angle + fanOffsets[f]!;
+        state.projectiles.push({
+          id: allocEntityId(state),
+          kind: 'melee_slash',
+          team: 'player',
+          x: player.x + Math.cos(slashAng) * (reach * 0.45),
+          y: player.y + Math.sin(slashAng) * (reach * 0.45),
+          prevX: player.x,
+          prevY: player.y,
+          vx: 0,
+          vy: 0,
+          angle: slashAng,
+          radius: reach * 0.5,
+          damage: Math.round(wep.damage * damageMult),
+          lifeTicks: wep.projectileLifeTicks,
+          maxLifeTicks: wep.projectileLifeTicks,
+          pierce: 99,
+          bounce: 0,
+          explosionRadius: 0,
+          sprite: wep.projectileSprite ?? 'sprSlash',
+          weaponId: wep.id,
+          hitIds: [],
+          deflectsProjectiles: wep.deflectsProjectiles,
+          destroysProjectiles: wep.destroysProjectiles,
+          meleeReach: reach,
+          meleeArcDeg: arcPerSlash,
+          isUltra: wep.ultra,
+        });
+      }
+
+      if (wep.id === 'ultra_shovel') {
+        carveCircle(
+          state.map,
+          player.x + Math.cos(angle) * 24,
+          player.y + Math.sin(angle) * 24,
+          24,
+          true,
+        );
+      } else if (wep.id === 'jackhammer') {
+        carveCircle(
+          state.map,
+          player.x + Math.cos(angle) * 16,
+          player.y + Math.sin(angle) * 16,
+          12,
+          true,
+        );
+      } else if (wep.id === 'lightning_hammer' || wep.id === 'electric_guitar') {
+        const arcCount = hasLaserBrain ? 3 : 2;
+        for (let a = 0; a < arcCount; a++) {
+          const arcAng = angle + (a - (arcCount - 1) * 0.5) * 0.24 + rng.range(-0.08, 0.08);
+          state.projectiles.push({
+            id: allocEntityId(state),
+            kind: 'lightning',
+            team: 'player',
+            x: player.x + Math.cos(arcAng) * (player.radius + 6),
+            y: player.y + Math.sin(arcAng) * (player.radius + 6),
+            prevX: player.x,
+            prevY: player.y,
+            vx: Math.cos(arcAng) * 24,
+            vy: Math.sin(arcAng) * 24,
+            angle: arcAng,
+            radius: 3.5,
+            damage: Math.round(10 * damageMult),
+            lifeTicks: hasLaserBrain ? 10 : 7,
+            maxLifeTicks: hasLaserBrain ? 10 : 7,
+            pierce: hasLaserBrain ? 2 : 1,
+            bounce: 0,
+            explosionRadius: 0,
+            sprite: 'sprLightning',
+            weaponId: wep.id,
+            hitIds: [],
+            canHitPlayer: false,
+          });
+        }
+      }
       continue;
     }
 
@@ -150,13 +251,20 @@ function spawnWeaponShot(
     const sx = player.x + Math.cos(angle) * spawnDist;
     const sy = player.y + Math.sin(angle) * spawnDist;
 
-    const extraBounce = wep.projectileKind === 'shell' && hasShotgunShoulders ? 2 : 0;
-    const extraLife =
-      wep.projectileKind === 'shell' && hasShotgunShoulders
+    const extraBounce = hasShotgunShoulders
+      ? wep.projectileKind === 'shell'
+        ? 2
+        : wep.projectileKind === 'slug'
+          ? 1
+          : 0
+      : 0;
+    const extraLife = hasShotgunShoulders && (wep.projectileKind === 'shell' || wep.projectileKind === 'slug')
+      ? wep.projectileKind === 'shell'
         ? 10
-        : isEnergy && hasLaserBrain
-          ? 4
-          : 0;
+        : 8
+      : isEnergy && hasLaserBrain
+        ? 4
+        : 0;
     const extraPierce = isEnergy && hasLaserBrain ? 1 : 0;
 
     state.projectiles.push({
@@ -223,6 +331,7 @@ function tryFireWeaponSlot(
   rng: SeededRng,
   shotMultiplier: number = 1,
   reloadMultiplier: number = 1,
+  paidShots: number = shotMultiplier,
 ): boolean {
   const player = state.player;
   const slotState = player.weapons[slotIndex];
@@ -234,43 +343,75 @@ function tryFireWeaponSlot(
   if (!autoAllowed && !isTriggerEdge && shotMultiplier === 1) return false;
 
   const freeAmmo = player.gunWarrantTicks > 0;
-  const totalAmmoCost = freeAmmo ? 0 : wep.ammoCost * shotMultiplier;
-  const totalRadCost = freeAmmo ? 0 : (wep.radCost ?? 0) * shotMultiplier;
+  const perShotAmmoCost = freeAmmo ? 0 : wep.ammoCost;
+  const perShotRadCost = freeAmmo ? 0 : (wep.radCost ?? 0);
 
-  if (wep.ammoType !== 'melee' && player.ammo[wep.ammoType] < totalAmmoCost) {
+  // Require at least 1 shot's worth of ammo/rads (allows Y.V. Pop Pop partial fire on low ammo!)
+  if (wep.ammoType !== 'melee' && player.ammo[wep.ammoType] < perShotAmmoCost) {
     if (isTriggerEdge) {
       emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
       emitEvent(state, { type: 'ammo_empty', x: player.x, y: player.y, ammoType: wep.ammoType });
     }
     return false;
   }
-  if (totalRadCost > 0 && player.rads < totalRadCost) {
+  if (perShotRadCost > 0 && player.rads < perShotRadCost) {
     if (isTriggerEdge) {
       emitEvent(state, { type: 'sfx', sound: 'sndUltraEmpty', x: player.x, y: player.y });
     }
     return false;
   }
 
-  if (wep.ammoType !== 'melee') {
-    player.ammo[wep.ammoType] -= totalAmmoCost;
-  }
-  if (totalRadCost > 0) {
-    player.rads -= totalRadCost;
+  let actualShotsToFireNow: number;
+  let ammoToDeduct: number;
+  let radsToDeduct: number;
+
+  if (wep.burstCount > 1) {
+    // Burst weapons consume ammo per burst shot (shot 1 now, remainder during burst ticks)
+    actualShotsToFireNow = 1;
+    ammoToDeduct = wep.ammoType !== 'melee' ? perShotAmmoCost : 0;
+    radsToDeduct = perShotRadCost;
+  } else {
+    const bonusFreeShots = Math.max(0, shotMultiplier - paidShots);
+    if (freeAmmo || (wep.ammoType === 'melee' && perShotRadCost === 0)) {
+      actualShotsToFireNow = shotMultiplier;
+      ammoToDeduct = 0;
+      radsToDeduct = 0;
+    } else {
+      const maxAmmoPaid =
+        wep.ammoType !== 'melee' && perShotAmmoCost > 0
+          ? Math.floor(player.ammo[wep.ammoType] / perShotAmmoCost)
+          : paidShots;
+      const maxRadPaid =
+        perShotRadCost > 0 ? Math.floor(player.rads / perShotRadCost) : paidShots;
+      const actualPaid = Math.min(paidShots, maxAmmoPaid, maxRadPaid);
+      actualShotsToFireNow = Math.min(shotMultiplier, actualPaid + bonusFreeShots);
+      ammoToDeduct = wep.ammoType !== 'melee' ? actualPaid * perShotAmmoCost : 0;
+      radsToDeduct = actualPaid * perShotRadCost;
+    }
   }
 
-  // Steroids Throne Butt: chance to refill ammo for the OTHER weapon slot when firing!
-  if (player.mutant === 'steroids' && hasMutation(player, 'throne_butt') && rng.chance(0.35)) {
+  if (wep.ammoType !== 'melee' && ammoToDeduct > 0) {
+    player.ammo[wep.ammoType] = Math.max(0, player.ammo[wep.ammoType] - ammoToDeduct);
+  }
+  if (radsToDeduct > 0) {
+    player.rads = Math.max(0, player.rads - radsToDeduct);
+  }
+
+  // Steroids Throne Butt: firing a non-melee weapon has a chance to refill ammo for the OTHER slot (higher when dual-wielding!)
+  if (player.mutant === 'steroids' && hasMutation(player, 'throne_butt') && wep.ammoType !== 'melee') {
     const otherSlot = player.weapons[slotIndex === 0 ? 1 : 0];
     if (otherSlot) {
       const otherWep = getWeaponDef(otherSlot.weaponId);
-      if (otherWep.ammoType !== 'melee') {
-        addAmmoToPool(state, otherWep.ammoType, Math.max(1, Math.round(AMMO_PICKUP_AMOUNT[otherWep.ammoType] * 0.15)));
+      const dualActive = otherSlot.reloadTicks > 0 || otherSlot.burstRemaining > 0;
+      const procChance = dualActive ? 0.48 : 0.24;
+      if (otherWep.ammoType !== 'melee' && rng.chance(procChance)) {
+        addAmmoToPool(state, otherWep.ammoType, Math.max(1, Math.round(AMMO_PICKUP_AMOUNT[otherWep.ammoType] * 0.2)));
       }
     }
   }
 
-  for (let s = 0; s < shotMultiplier; s++) {
-    const jitter = shotMultiplier > 1 ? rng.range(-0.07, 0.07) : 0;
+  for (let s = 0; s < actualShotsToFireNow; s++) {
+    const jitter = actualShotsToFireNow > 1 ? rng.range(-0.07, 0.07) : 0;
     spawnWeaponShot(state, slotState, wep, aimAngle + jitter, rng);
   }
 
@@ -279,8 +420,12 @@ function tryFireWeaponSlot(
   slotState.maxReloadTicks = effectiveReload;
 
   if (wep.burstCount > 1) {
-    slotState.burstRemaining = wep.burstCount - 1;
+    slotState.burstRemaining = wep.burstCount * shotMultiplier - 1;
     slotState.burstTimer = Math.max(1, wep.burstIntervalTicks);
+    const freeBonusBursts = Math.max(0, shotMultiplier - paidShots) * wep.burstCount;
+    slotFreeBurstShots.set(slotState, freeBonusBursts);
+  } else {
+    slotFreeBurstShots.set(slotState, 0);
   }
 
   return true;
@@ -303,7 +448,7 @@ function handleMutantActive(
   switch (player.mutant) {
     case 'fish': {
       if (hasTB && input.activeHeld) {
-        // Water Boost: continuous thrust along movement (or aim) direction
+        // Water Boost: continuous thrust along movement (or aim) direction with water spray
         const mvLen = Math.hypot(input.moveX, input.moveY);
         const dirX = mvLen > 0.05 ? input.moveX / mvLen : Math.cos(aimAngle);
         const dirY = mvLen > 0.05 ? input.moveY / mvLen : Math.sin(aimAngle);
@@ -311,6 +456,19 @@ function handleMutantActive(
         player.rollDirX = dirX;
         player.rollDirY = dirY;
         player.activeTimer = 2;
+        if (state.tick % 2 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'water',
+            x: player.x - dirX * 5,
+            y: player.y - dirY * 5,
+            vx: -dirX * 1.8 + rng.range(-0.8, 0.8),
+            vy: -dirY * 1.8 + rng.range(-0.8, 0.8),
+            color: '#66d4ff',
+            size: 3,
+            life: 8,
+          });
+        }
         if (state.tick % 4 === 0) {
           emitEvent(state, { type: 'sfx', sound: 'sndFishTB', x: player.x, y: player.y, pitchJitter: 0.12 });
         }
@@ -331,7 +489,6 @@ function handleMutantActive(
       if (input.activePressed && !player.shielding && player.activeCooldown <= 0) {
         player.shielding = true;
         player.activeTimer = hasTB ? 20 : 32;
-        player.activeCooldown = 10;
         emitEvent(state, { type: 'sfx', sound: 'sndCrystalShield', x: player.x, y: player.y });
       } else if (player.shielding && !input.activeHeld && player.activeTimer < (hasTB ? 14 : 24)) {
         // Allow early release
@@ -340,25 +497,70 @@ function handleMutantActive(
 
       if (player.shielding) {
         player.activeTimer -= 1;
-        // Juggernaut (crystal_b): crush enemies on contact while moving slowly
+        // Juggernaut (crystal_b): crush active grounded enemies on contact while moving slowly
         if (hasUltra(player, 'crystal_b') && state.tick % 5 === 0) {
           for (let i = state.enemies.length - 1; i >= 0; i--) {
             const e = state.enemies[i]!;
-            if (!e.friendly && e.hp > 0 && circleOverlap(player.x, player.y, player.radius + 5, e.x, e.y, e.radius)) {
+            if (
+              !e.friendly &&
+              e.hp > 0 &&
+              !e.elevated &&
+              !e.invulnerable &&
+              e.aiState !== 'disguised' &&
+              circleOverlap(player.x, player.y, player.radius + 5, e.x, e.y, e.radius)
+            ) {
               applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng);
+              emitEvent(state, { type: 'sfx', sound: 'sndCrystalJuggernaut', x: e.x, y: e.y, pitchJitter: 0.1 });
             }
           }
         }
         if (player.activeTimer <= 0) {
           player.shielding = false;
-          // Crystal Throne Butt: Teleport to cursor upon releasing shield!
+          // Apply cooldown AFTER shield finishes (prevents infinite shield spam!)
+          player.activeCooldown = 10;
+          // Crystal Throne Butt: Teleport toward cursor (clamped to max 220px) with exit iframes!
           if (hasTB) {
-            const dest = findNearestFloor(state.map, input.aimWorldX, input.aimWorldY, 10);
-            player.x = dest.x;
-            player.y = dest.y;
-            player.prevX = dest.x;
-            player.prevY = dest.y;
-            emitEvent(state, { type: 'sfx', sound: 'sndCrystalTB', x: dest.x, y: dest.y });
+            const ox = player.x;
+            const oy = player.y;
+            const tdx = input.aimWorldX - ox;
+            const tdy = input.aimWorldY - oy;
+            const tDist = Math.hypot(tdx, tdy);
+            const maxRange = 220;
+            const targetX = tDist > maxRange ? ox + (tdx / tDist) * maxRange : input.aimWorldX;
+            const targetY = tDist > maxRange ? oy + (tdy / tDist) * maxRange : input.aimWorldY;
+            const nearest = findNearestFloor(state.map, targetX, targetY, 8);
+            const safe = moveCircleWithSlide(state.map, nearest.x, nearest.y, 0, 0, player.radius);
+            player.x = safe.x;
+            player.y = safe.y;
+            player.prevX = safe.x;
+            player.prevY = safe.y;
+            player.iframes = Math.max(player.iframes, 8);
+            for (let k = 0; k < 6; k++) {
+              const ang = (k / 6) * Math.PI * 2;
+              emitEvent(state, {
+                type: 'particle',
+                kind: 'crystal',
+                x: ox,
+                y: oy,
+                vx: Math.cos(ang) * 2.5,
+                vy: Math.sin(ang) * 2.5,
+                color: '#d966ff',
+                size: 3,
+                life: 10,
+              });
+              emitEvent(state, {
+                type: 'particle',
+                kind: 'crystal',
+                x: safe.x,
+                y: safe.y,
+                vx: Math.cos(ang) * 2.5,
+                vy: Math.sin(ang) * 2.5,
+                color: '#e599ff',
+                size: 3,
+                life: 10,
+              });
+            }
+            emitEvent(state, { type: 'sfx', sound: 'sndCrystalTB', x: safe.x, y: safe.y });
           }
         }
       }
@@ -370,39 +572,35 @@ function handleMutantActive(
         player.telekinesisActive = true;
         const radius = hasTB ? 210 : 155;
         const radiusSq = radius * radius;
-        const monsterStyle = hasUltra(player, 'eyes_b');
         const force = hasTB ? 1.7 : 1.1;
 
-        // Pull enemies (or push + damage them with Monster Style!)
+        // Telekinesis ALWAYS pulls enemies toward Eyes (skipping elevated/sleeping/disguised foes)
         for (let i = state.enemies.length - 1; i >= 0; i--) {
           const e = state.enemies[i]!;
-          if (e.friendly || e.hp <= 0) continue;
+          if (e.friendly || e.hp <= 0 || e.elevated || e.aiState === 'sleep' || e.aiState === 'disguised') continue;
           const dx = player.x - e.x;
           const dy = player.y - e.y;
           const dSq = dx * dx + dy * dy;
           if (dSq > 1e-4 && dSq <= radiusSq) {
             const d = Math.sqrt(dSq);
-            const sign = monsterStyle ? -1.4 : 1.0;
+            const bossScale = e.isBoss ? 0.35 : 1.0;
             const res = moveCircleWithSlide(
               state.map,
               e.x,
               e.y,
-              (dx / d) * force * sign,
-              (dy / d) * force * sign,
+              (dx / d) * force * bossScale,
+              (dy / d) * force * bossScale,
               e.radius,
             );
             e.x = res.x;
             e.y = res.y;
-            if (monsterStyle && state.tick % 6 === 0) {
-              applyDamageToEnemy(state, e, 2, -(dx / d) * 3, -(dy / d) * 3, rng);
-            }
           }
         }
 
-        // Push enemy projectiles away from Eyes!
+        // Push reflectable enemy projectiles away from Eyes (capped speed, skip beams/melee!)
         for (let i = 0; i < state.projectiles.length; i++) {
           const pr = state.projectiles[i]!;
-          if (pr.team !== 'enemy') continue;
+          if (pr.team !== 'enemy' || pr.kind === 'melee_slash' || pr.kind === 'enemy_laser') continue;
           const dx = pr.x - player.x;
           const dy = pr.y - player.y;
           const dSq = dx * dx + dy * dy;
@@ -411,6 +609,13 @@ function handleMutantActive(
             const push = hasTB ? 1.5 : 0.95;
             pr.vx += (dx / d) * push;
             pr.vy += (dy / d) * push;
+            const spdSq = pr.vx * pr.vx + pr.vy * pr.vy;
+            if (spdSq > 14 * 14) {
+              const s = 14 / Math.sqrt(spdSq);
+              pr.vx *= s;
+              pr.vy *= s;
+            }
+            pr.angle = Math.atan2(pr.vy, pr.vx);
           }
         }
 
@@ -422,13 +627,41 @@ function handleMutantActive(
             y: player.y,
           });
         }
+      } else if (hasUltra(player, 'eyes_b')) {
+        // Eyes Ultra B (Monster Style): passively push nearby enemies AWAY when NOT using Telekinesis!
+        const repelRadius = 96;
+        const repelSq = repelRadius * repelRadius;
+        for (let i = state.enemies.length - 1; i >= 0; i--) {
+          const e = state.enemies[i]!;
+          if (e.friendly || e.hp <= 0 || e.elevated || e.aiState === 'sleep' || e.aiState === 'disguised') continue;
+          const dx = e.x - player.x;
+          const dy = e.y - player.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq > 1e-4 && dSq <= repelSq) {
+            const d = Math.sqrt(dSq);
+            const push = 1.65 * (e.isBoss ? 0.4 : 1.0);
+            const res = moveCircleWithSlide(
+              state.map,
+              e.x,
+              e.y,
+              (dx / d) * push,
+              (dy / d) * push,
+              e.radius,
+            );
+            e.x = res.x;
+            e.y = res.y;
+            if (res.hitWall && state.tick % 8 === 0) {
+              applyDamageToEnemy(state, e, 2, (dx / d) * 2.5, (dy / d) * 2.5, rng);
+            }
+          }
+        }
       }
       break;
     }
 
     case 'melting': {
       if (input.activePressed && player.activeCooldown <= 0) {
-        const range = hasTB ? 240 : 185;
+        const range = hasTB ? 320 : 260;
         const rangeSq = range * range;
         const blastRad = hasTB ? 42 : 28;
         const blastDmg = hasTB ? 28 : 18;
@@ -446,26 +679,56 @@ function handleMutantActive(
               carveWalls: false,
               clearsProjectiles: true,
               isBlood: true,
+              selfDamage: false,
               sound: hasTB ? 'sndCorpseExploUpg' : 'sndCorpseExplo',
             });
+            // Melting Throne Butt: massive multi-blast secondary blood explosions!
+            if (hasTB) {
+              for (let sub = 0; sub < 2; sub++) {
+                const subAng = rng.range(0, Math.PI * 2);
+                const subDist = rng.range(14, 26);
+                spawnExplosion(
+                  state,
+                  c.x + Math.cos(subAng) * subDist,
+                  c.y + Math.sin(subAng) * subDist,
+                  28,
+                  16,
+                  'player',
+                  rng,
+                  {
+                    carveWalls: false,
+                    clearsProjectiles: true,
+                    isBlood: true,
+                    selfDamage: false,
+                    sound: '',
+                  },
+                );
+              }
+            }
           }
         }
 
-        // Melting Ultra A (Brain Capacity): detonate living enemies at or below 5 HP!
+        // Melting Ultra A (Brain Capacity): detonate living enemies at or below 5 HP (no leftover corpse!)
         if (hasUltra(player, 'melting_a')) {
           const snap = [...state.enemies];
           for (let i = 0; i < snap.length; i++) {
             const e = snap[i]!;
-            if (e.friendly || e.hp <= 0 || e.hp > 5 || e.isBoss) continue;
+            if (e.friendly || e.hp <= 0 || e.hp > 5 || e.isBoss || e.aiState === 'disguised') continue;
             const dx = e.x - player.x;
             const dy = e.y - player.y;
             if (dx * dx + dy * dy <= rangeSq) {
               detonated += 1;
-              applyDamageToEnemy(state, e, 99, 0, 0, rng, { isExplosion: true, isHeavy: true });
+              applyDamageToEnemy(state, e, 99, 0, 0, rng, {
+                isExplosion: true,
+                isHeavy: true,
+                suppressCorpse: true,
+              });
               spawnExplosion(state, e.x, e.y, blastRad, blastDmg, 'player', rng, {
                 carveWalls: false,
                 clearsProjectiles: true,
                 isBlood: true,
+                selfDamage: false,
+                sound: hasTB ? 'sndCorpseExploUpg' : 'sndCorpseExplo',
               });
             }
           }
@@ -515,17 +778,22 @@ function handleMutantActive(
     }
 
     case 'yv': {
-      if (input.activePressed) {
-        const shots = hasTB ? 4 : 2;
-        const reloadMult = hasTB ? 2.5 : 1.75;
+      const activeSlotObj = player.weapons[player.activeSlot];
+      const activeWepDef = activeSlotObj ? getWeaponDef(activeSlotObj.weaponId) : null;
+      if (input.activePressed || (input.activeHeld && activeWepDef?.auto)) {
+        const baseShots = hasTB ? 4 : 2;
+        const hasB2B = hasUltra(player, 'yv_b');
+        const totalShots = baseShots + (hasB2B ? 1 : 0);
+        const reloadMult = hasTB ? 3.0 : 2.0;
         const fired = tryFireWeaponSlot(
           state,
           player.activeSlot,
           aimAngle,
-          true,
+          input.activePressed,
           rng,
-          shots,
+          totalShots,
           reloadMult,
+          baseShots,
         );
         if (fired) {
           emitEvent(state, {
@@ -554,18 +822,17 @@ function handleMutantActive(
         const activeSlot = player.activeSlot;
         const otherSlot: 0 | 1 = activeSlot === 0 ? 1 : 0;
         const curWep = player.weapons[activeSlot];
+        const surviving = player.weapons[otherSlot];
+        // Robot cannot eat his last remaining weapon (NT parity — prevents infinite HP/ammo/chest exploit!)
+        if (!surviving) {
+          emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
+          break;
+        }
         if (curWep && !curWep.cursed) {
-          // Consume active weapon; shift surviving weapon into slot 0 or fall back to Rusty Revolver
-          const surviving = player.weapons[otherSlot];
-          if (surviving) {
-            player.weapons[0] = surviving;
-            player.weapons[1] = null;
-            player.activeSlot = 0;
-          } else {
-            player.weapons[0] = createWeaponSlot('rusty_revolver');
-            player.weapons[1] = null;
-            player.activeSlot = 0;
-          }
+          player.weapons[0] = surviving;
+          player.weapons[1] = null;
+          player.activeSlot = 0;
+
           const hpGain = hasTB ? 4 : 2;
           if (player.hp < player.maxHp) {
             healPlayer(state, hpGain);
@@ -580,14 +847,20 @@ function handleMutantActive(
             y: player.y,
           });
 
-          // Robot Ultra B (Regurgitate): 35% chance to drop a bonus chest
+          // Robot Ultra B (Regurgitate): 35% chance to drop a bonus chest on valid walkable floor
           if (hasUltra(player, 'robot_b') && rng.chance(0.35)) {
-            const isWep = rng.chance(0.45);
+            const isWep = state.crown !== 'love' && rng.chance(0.45);
+            const chestPos = findNearestFloor(
+              state.map,
+              player.x + Math.cos(aimAngle) * 14,
+              player.y + Math.sin(aimAngle) * 14,
+              8,
+            );
             state.props.push({
               id: allocEntityId(state),
               kind: isWep ? 'weapon_chest' : 'ammo_chest',
-              x: player.x + Math.cos(aimAngle) * 14,
-              y: player.y + Math.sin(aimAngle) * 14,
+              x: chestPos.x,
+              y: chestPos.y,
               radius: 8,
               hp: 10,
               maxHp: 10,
@@ -611,6 +884,10 @@ function handleMutantActive(
         const cur = player.weapons[activeSlot];
         if (cur && !cur.cursed) {
           const wepDef = getWeaponDef(cur.weaponId);
+          const surviving = player.weapons[otherSlot];
+          const throwingLastSword = !surviving && cur.weaponId === 'chicken_sword';
+          const levelScaledDmg = Math.max(20, 14 + player.level * 4 + wepDef.tier * 2);
+
           state.projectiles.push({
             id: allocEntityId(state),
             kind: 'thrown_weapon',
@@ -623,7 +900,7 @@ function handleMutantActive(
             vy: Math.sin(aimAngle) * 16,
             angle: aimAngle,
             radius: 7,
-            damage: Math.max(22, wepDef.tier * 4 + 16),
+            damage: levelScaledDmg,
             lifeTicks: 28,
             maxLifeTicks: 28,
             pierce: hasTB ? 5 : 0,
@@ -634,7 +911,6 @@ function handleMutantActive(
             hitIds: [],
           });
 
-          const surviving = player.weapons[otherSlot];
           if (surviving) {
             player.weapons[0] = surviving;
             player.weapons[1] = null;
@@ -644,7 +920,7 @@ function handleMutantActive(
             player.weapons[1] = null;
             player.activeSlot = 0;
           }
-          player.activeCooldown = 10;
+          player.activeCooldown = throwingLastSword ? 24 : 10;
           emitEvent(state, { type: 'sfx', sound: 'sndChickenThrow', x: player.x, y: player.y });
         }
       }
@@ -653,7 +929,14 @@ function handleMutantActive(
 
     case 'rebel': {
       if (input.activePressed && player.activeCooldown <= 0) {
-        const hpCost = player.allyCount === 0 ? 1 : 2;
+        let liveAllies = 0;
+        for (let i = 0; i < state.enemies.length; i++) {
+          const e = state.enemies[i]!;
+          if (e.friendly && e.defId === 'rebel_ally' && e.hp > 0) liveAllies += 1;
+        }
+        player.allyCount = liveAllies;
+
+        const hpCost = liveAllies === 0 ? 1 : 2;
         if (player.hp > hpCost) {
           player.hp -= hpCost;
           const spawnCount = hasUltra(player, 'rebel_b') ? 2 : 1;
@@ -693,7 +976,7 @@ function handleMutantActive(
           if (state.tick % 2 === 0) {
             player.rads = Math.max(0, player.rads - 1);
           }
-          const ramp = Math.min(4, Math.floor(player.radBeamTicks / 18));
+          const ramp = Math.min(3, Math.floor(player.radBeamTicks / 24));
           const spread = rng.range(-0.12, 0.12);
           const ang = aimAngle + spread;
           const spd = 15;
@@ -709,7 +992,7 @@ function handleMutantActive(
             vy: Math.sin(ang) * spd,
             angle: ang,
             radius: 5 + ramp,
-            damage: 4 + ramp * 2,
+            damage: 2 + ramp,
             lifeTicks: 18,
             maxLifeTicks: 18,
             pierce: 2,
@@ -752,15 +1035,23 @@ function handleMutantActive(
           const baseDist = Math.min(120, Math.hypot(input.aimWorldX - player.x, input.aimWorldY - player.y));
           const startX = player.x + Math.cos(aimAngle) * Math.max(24, baseDist * 0.65);
           const startY = player.y + Math.sin(aimAngle) * Math.max(24, baseDist * 0.65);
+          const ts = state.map.tileSize || 16;
+          const minX = ts * 2.5;
+          const minY = ts * 2.5;
+          const maxX = state.map.width * ts - ts * 2.5;
+          const maxY = state.map.height * ts - ts * 2.5;
 
           for (let b = 0; b < blastCount; b++) {
-            const bx = startX + Math.cos(aimAngle) * (b * 24);
-            const by = startY + Math.sin(aimAngle) * (b * 24);
+            const bx = Math.max(minX, Math.min(maxX, startX + Math.cos(aimAngle) * (b * 24)));
+            const by = Math.max(minY, Math.min(maxY, startY + Math.sin(aimAngle) * (b * 24)));
             spawnExplosion(state, bx, by, blastRadius, blastDamage, 'player', rng, {
               carveWalls: true,
               clearsProjectiles: true,
               isRogue: true,
-              sound: hasTB ? 'sndPortalStrikeFireButt' : 'sndPortalStrikeFire',
+              selfDamage: true,
+              cause: 'PORTAL STRIKE',
+              killerSprite: 'sprRogueExplosion',
+              sound: b === 0 ? (hasTB ? 'sndPortalStrikeFireButt' : 'sndPortalStrikeFire') : '',
             });
           }
         } else {
@@ -791,14 +1082,15 @@ function stepSnareTrapsAndFriendlies(state: SimState, rng: SeededRng): void {
     const snap = [...state.enemies];
     for (let j = 0; j < snap.length; j++) {
       const e = snap[j]!;
-      if (e.friendly || e.hp <= 0) continue;
+      if (e.friendly || e.hp <= 0 || e.invulnerable || e.aiState === 'sleep' || e.aiState === 'disguised') continue;
       const dx = e.x - prop.x;
       const dy = e.y - prop.y;
       if (dx * dx + dy * dy <= rSq) {
         e.snaredTicks = Math.max(e.snaredTicks, 8);
         e.vx *= 0.2;
         e.vy *= 0.2;
-        if (plantTB && !e.isBoss && e.hp <= e.maxHp * 0.33) {
+        // Plant Throne Butt executes ALL snared enemies (including bosses!) at <= 33% HP!
+        if (plantTB && e.hp <= e.maxHp * 0.33) {
           applyDamageToEnemy(state, e, e.hp + 10, 0, 0, rng, { isCrit: true });
           emitEvent(state, { type: 'sfx', sound: 'sndPlantTBKill', x: e.x, y: e.y });
         }
@@ -888,10 +1180,19 @@ function stepSnareTrapsAndFriendlies(state: SimState, rng: SeededRng): void {
             bounce: 0,
             explosionRadius: 0,
             sprite: 'sprAllyBullet',
+            weaponId: 'rebel_ally_bullet',
             hitIds: [],
           });
           u.attackCooldown = rebelTB ? 6 : 12;
           emitEvent(state, { type: 'sfx', sound: 'sndPistol', x: u.x, y: u.y, pitchJitter: 0.15, volume: 0.6 });
+        }
+      }
+      // Rebel Allies slowly lose HP over time (NT parity!)
+      if (state.tick % 60 === 0) {
+        u.hp -= 1;
+        if (u.hp <= 0) {
+          state.enemies.splice(i, 1);
+          player.allyCount = Math.max(0, player.allyCount - 1);
         }
       }
     }
@@ -921,7 +1222,6 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
   // 2. Collect non-weapon pickups automatically; weapon pickup on E (pickupPressed)
   let nearestWepIdx = -1;
   let nearestWepDistSq = 28 * 28;
-  const robotRefined = player.mutant === 'robot' && hasUltra(player, 'robot_a');
 
   for (let i = state.pickups.length - 1; i >= 0; i--) {
     const pk = state.pickups[i]!;
@@ -930,16 +1230,6 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
     const dSq = dx * dx + dy * dy;
 
     if (pk.kind === 'weapon') {
-      // Robot Refined Taste auto-eats very low tier floor weapons on contact
-      if (robotRefined && pk.weaponId && dSq <= 16 * 16) {
-        const wDef = getWeaponDef(pk.weaponId);
-        if (wDef.tier <= 2 && !wDef.golden && !wDef.ultra) {
-          state.pickups.splice(i, 1);
-          addAmmoToPool(state, rng.pick(NON_MELEE_AMMO_TYPES), 6);
-          emitEvent(state, { type: 'sfx', sound: 'sndRobotEat', x: player.x, y: player.y });
-          continue;
-        }
-      }
       if (dSq < nearestWepDistSq) {
         nearestWepDistSq = dSq;
         nearestWepIdx = i;
@@ -992,7 +1282,7 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
       }
 
       case 'portal_strike': {
-        const cap = hasUltra(player, 'rogue_a') ? 5 : 3;
+        const cap = hasUltra(player, 'rogue_a') ? 6 : 3;
         if (player.portalStrikes < cap) {
           player.portalStrikes = Math.min(cap, player.portalStrikes + pk.value);
           emitEvent(state, { type: 'sfx', sound: 'sndRogueCanister', x: pk.x, y: pk.y });
@@ -1006,7 +1296,13 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
   // Pick up nearest weapon when pressing E (pickupPressed)
   if (input.pickupPressed && nearestWepIdx !== -1) {
     const pk = state.pickups[nearestWepIdx]!;
-    if (pk.weaponId && givePlayerWeapon(state, pk.weaponId)) {
+    if (
+      pk.weaponId &&
+      givePlayerWeapon(state, pk.weaponId, undefined, true, {
+        cursed: pk.cursed,
+        grantBonus: pk.value > 0,
+      })
+    ) {
       state.pickups.splice(nearestWepIdx, 1);
     }
   }
@@ -1072,7 +1368,28 @@ export function stepPlayerAndCombat(
     // Weapon swap (Q)
     if (input.swapPressed && player.weapons[1] !== null) {
       player.activeSlot = player.activeSlot === 0 ? 1 : 0;
-      emitEvent(state, { type: 'sfx', sound: 'sndSwapPistol', x: player.x, y: player.y });
+      const swappedSlot = player.weapons[player.activeSlot];
+      emitEvent(state, {
+        type: 'sfx',
+        sound: swappedSlot?.cursed ? 'sndSwapCursed' : 'sndSwapPistol',
+        x: player.x,
+        y: player.y,
+      });
+    }
+
+    // Subtle purple curse sparkles when carrying any cursed weapon
+    if ((player.weapons[0]?.cursed || player.weapons[1]?.cursed) && state.tick % 10 === 0) {
+      emitEvent(state, {
+        type: 'particle',
+        kind: 'curse',
+        x: player.x + rng.range(-5, 5),
+        y: player.y + rng.range(-5, 5),
+        vx: rng.range(-0.3, 0.3),
+        vy: rng.range(-0.8, -0.3),
+        color: '#c44dff',
+        size: 2.5,
+        life: 10,
+      });
     }
 
     // Tick weapon reloads, kick recovery, and active bursts on BOTH slots
@@ -1088,9 +1405,30 @@ export function stepPlayerAndCombat(
         slot.burstTimer -= 1;
         if (slot.burstTimer <= 0) {
           const wep = getWeaponDef(slot.weaponId);
-          spawnWeaponShot(state, slot, wep, player.aimAngle, rng);
-          slot.burstRemaining -= 1;
-          slot.burstTimer = Math.max(1, wep.burstIntervalTicks);
+          const freeBonus = slotFreeBurstShots.get(slot) ?? 0;
+          const isFreeTick = player.gunWarrantTicks > 0 || freeBonus > 0;
+          const ammoCost = isFreeTick ? 0 : wep.ammoCost;
+          const radCost = isFreeTick ? 0 : (wep.radCost ?? 0);
+          const hasAmmo = wep.ammoType === 'melee' || player.ammo[wep.ammoType] >= ammoCost;
+          const hasRads = radCost === 0 || player.rads >= radCost;
+
+          if (!hasAmmo || !hasRads) {
+            slot.burstRemaining = 0;
+            slotFreeBurstShots.set(slot, 0);
+          } else {
+            if (freeBonus > 0 && player.gunWarrantTicks <= 0) {
+              slotFreeBurstShots.set(slot, freeBonus - 1);
+            }
+            if (wep.ammoType !== 'melee' && ammoCost > 0) {
+              player.ammo[wep.ammoType] = Math.max(0, player.ammo[wep.ammoType] - ammoCost);
+            }
+            if (radCost > 0) {
+              player.rads = Math.max(0, player.rads - radCost);
+            }
+            spawnWeaponShot(state, slot, wep, player.aimAngle, rng);
+            slot.burstRemaining -= 1;
+            slot.burstTimer = Math.max(1, wep.burstIntervalTicks);
+          }
         }
       }
     }
@@ -1132,17 +1470,17 @@ export function stepPlayerAndCombat(
       player.y = mv.y;
       player.animFrame = (player.animFrame + 0.35) % 8;
 
-      // Hammerhead: pushing into a wall carves through!
+      // Hammerhead: pushing into a wall for 0.5s (15 ticks) carves through!
       if (mv.hitWall && hasMutation(player, 'hammerhead') && player.hammerheadTicks > 0) {
         player.hammerheadWallTicks += 1;
-        if (player.hammerheadWallTicks >= 8) {
+        if (player.hammerheadWallTicks >= 15) {
           const dirLen = Math.hypot(moveDx, moveDy) || 1;
           const carveX = player.x + (moveDx / dirLen) * (player.radius + 8);
           const carveY = player.y + (moveDy / dirLen) * (player.radius + 8);
           const carved = carveCircle(state.map, carveX, carveY, 15, true);
+          player.hammerheadWallTicks = 0;
           if (carved > 0) {
             player.hammerheadTicks = Math.max(0, player.hammerheadTicks - carved);
-            player.hammerheadWallTicks = 0;
             emitEvent(state, { type: 'sfx', sound: 'sndHammerHeadProc', x: carveX, y: carveY });
             emitEvent(state, { type: 'shake', trauma: 0.25 });
           }
@@ -1161,11 +1499,21 @@ export function stepPlayerAndCombat(
       tryFireWeaponSlot(state, player.activeSlot, player.aimAngle, input.firePressed, rng);
     }
 
-    // Gamma Guts: enemies touching the player take contact damage!
-    if (hasMutation(player, 'gamma_guts') && state.tick % 4 === 0) {
+    // Gamma Guts: grounded active enemies touching player take contact damage on first contact frame!
+    if (hasMutation(player, 'gamma_guts')) {
       for (let i = state.enemies.length - 1; i >= 0; i--) {
         const e = state.enemies[i]!;
-        if (e.friendly || e.hp <= 0) continue;
+        if (
+          e.friendly ||
+          e.hp <= 0 ||
+          e.elevated ||
+          e.invulnerable ||
+          e.aiState === 'sleep' ||
+          e.aiState === 'disguised' ||
+          e.hurtFlashTicks > 0
+        ) {
+          continue;
+        }
         if (circleOverlap(player.x, player.y, player.radius + 2, e.x, e.y, e.radius)) {
           applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng);
         }

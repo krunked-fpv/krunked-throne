@@ -51,6 +51,15 @@ export function getPlayerMoveSpeed(player: PlayerState): number {
   return base * extraFeetMult;
 }
 
+// Tracks rads absorbed into enemies by Horror's Rad Beam so killing them refunds rads (NT parity).
+const horrorAbsorbedRads = new WeakMap<EnemyEntity, number>();
+
+export function addHorrorAbsorbedRads(enemy: EnemyEntity, amount: number): void {
+  if (amount <= 0) return;
+  const cur = horrorAbsorbedRads.get(enemy) ?? 0;
+  horrorAbsorbedRads.set(enemy, Math.min(60, cur + amount));
+}
+
 export function addAmmoToPool(
   state: SimState,
   ammoType: AmmoType,
@@ -58,7 +67,7 @@ export function addAmmoToPool(
 ): number {
   if (ammoType === 'melee' || amount <= 0) return 0;
   const player = state.player;
-  const fishMult = player.mutant === 'fish' ? 1.2 : 1.0;
+  const fishMult = player.mutant === 'fish' ? 1.25 : 1.0;
   const hasteMult = state.crown === 'haste' ? 1.25 : 1.0;
   const gain = Math.max(1, Math.round(amount * fishMult * hasteMult));
   const before = player.ammo[ammoType];
@@ -66,6 +75,27 @@ export function addAmmoToPool(
   const next = Math.min(max, before + gain);
   player.ammo[ammoType] = next;
   return next - before;
+}
+
+function tryRechargeStrongSpirit(state: SimState): void {
+  const player = state.player;
+  if (player.strongSpiritRecharging && !player.strongSpiritReady && player.hp >= player.maxHp) {
+    player.strongSpiritReady = true;
+    player.strongSpiritRecharging = false;
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndStrongSpiritGain',
+      x: player.x,
+      y: player.y,
+    });
+    emitEvent(state, {
+      type: 'pickup_text',
+      x: player.x,
+      y: player.y - 14,
+      text: 'SPIRIT RECHARGED!',
+      color: '#88e8ff',
+    });
+  }
 }
 
 export function healPlayer(state: SimState, amount: number): number {
@@ -92,6 +122,7 @@ export function healPlayer(state: SimState, amount: number): number {
       text: 'HEAD REGROWN!',
       color: '#ff6666',
     });
+    tryRechargeStrongSpirit(state);
     return player.hp;
   }
 
@@ -107,6 +138,7 @@ export function healPlayer(state: SimState, amount: number): number {
       heal: true,
     });
   }
+  tryRechargeStrongSpirit(state);
   return gained;
 }
 
@@ -282,6 +314,8 @@ export interface SpawnExplosionOptions {
   isBlood?: boolean;
   isRogue?: boolean;
   isRad?: boolean;
+  selfDamage?: boolean;
+  detonateCorpses?: boolean;
   sound?: string;
   cause?: string;
   killerSprite?: string;
@@ -297,7 +331,7 @@ export function spawnExplosion(
   rng: SeededRng,
   opts: SpawnExplosionOptions = {},
 ): void {
-  const crownDeathMult = state.crown === 'death' ? 1.3 : 1.0;
+  const crownDeathMult = state.crown === 'death' ? 1.4 : 1.0;
   const effectiveRadius = Math.max(8, radius * crownDeathMult);
   const carveWalls = opts.carveWalls ?? true;
 
@@ -370,19 +404,22 @@ export function spawnExplosion(
     });
   }
 
-  emitEvent(state, {
-    type: 'sfx',
-    sound:
-      opts.sound ??
-      (opts.isBlood
-        ? 'sndCorpseExplo'
-        : effectiveRadius >= 55
-          ? 'sndExplosionL'
-          : 'sndExplosion'),
-    x,
-    y,
-    pitchJitter: 0.1,
-  });
+  const soundKey =
+    opts.sound ??
+    (opts.isBlood
+      ? 'sndCorpseExplo'
+      : effectiveRadius >= 55
+        ? 'sndExplosionL'
+        : 'sndExplosion');
+  if (soundKey.length > 0) {
+    emitEvent(state, {
+      type: 'sfx',
+      sound: soundKey,
+      x,
+      y,
+      pitchJitter: 0.1,
+    });
+  }
 
   emitEvent(state, {
     type: 'shake',
@@ -400,7 +437,7 @@ export function spawnExplosion(
     const clearRadSq = effectiveRadius * effectiveRadius;
     for (let i = state.projectiles.length - 1; i >= 0; i--) {
       const pr = state.projectiles[i]!;
-      if (pr.team === 'enemy') {
+      if (pr.team === 'enemy' && pr.kind !== 'enemy_laser' && pr.kind !== 'melee_slash') {
         const dx = pr.x - x;
         const dy = pr.y - y;
         if (dx * dx + dy * dy <= clearRadSq) {
@@ -436,10 +473,11 @@ export function spawnExplosion(
     }
   }
 
-  // Damage nearby breakable props (cars, barrels, rad canisters, throne generators)
-  for (let i = state.props.length - 1; i >= 0; i--) {
-    const prop = state.props[i]!;
-    if (prop.hp <= 0 || prop.opened) continue;
+  // Damage nearby breakable props (snapshot array so chain-exploding cars/barrels can never invalidate indices!)
+  const propsSnapshot = [...state.props];
+  for (let i = 0; i < propsSnapshot.length; i++) {
+    const prop = propsSnapshot[i]!;
+    if (!state.props.includes(prop) || prop.hp <= 0 || prop.opened) continue;
     if (
       prop.kind === 'weapon_chest' ||
       prop.kind === 'big_weapon_chest' ||
@@ -456,8 +494,35 @@ export function spawnExplosion(
     }
   }
 
-  // Damage player (friendly explosions still hurt player unless Rogue/Blood/Rad or Boiling Veins <=4 HP!)
-  const canHurtPlayer = !opts.isBlood && !opts.isRogue && !opts.isRad;
+  // Blood Launcher / Blood Cannon detonates nearby explodable corpses in a chain!
+  if (opts.detonateCorpses) {
+    const corpseRadSq = effectiveRadius * effectiveRadius;
+    const toDetonate: Array<{ x: number; y: number }> = [];
+    for (let i = state.corpses.length - 1; i >= 0; i--) {
+      const c = state.corpses[i]!;
+      if (!c.explodable) continue;
+      const dx = c.x - x;
+      const dy = c.y - y;
+      if (dx * dx + dy * dy <= corpseRadSq) {
+        toDetonate.push({ x: c.x, y: c.y });
+        state.corpses.splice(i, 1);
+      }
+    }
+    for (let i = 0; i < toDetonate.length; i++) {
+      const pt = toDetonate[i]!;
+      spawnExplosion(state, pt.x, pt.y, 28, 22, team, rng, {
+        carveWalls: false,
+        clearsProjectiles: true,
+        isBlood: true,
+        selfDamage: false,
+        detonateCorpses: false,
+        sound: 'sndCorpseExplo',
+      });
+    }
+  }
+
+  // Damage player (respects explicit selfDamage override, plus Boiling Veins <=4 HP protection)
+  const canHurtPlayer = opts.selfDamage ?? (!opts.isBlood && !opts.isRogue && !opts.isRad);
   if (canHurtPlayer && state.player.alive) {
     const p = state.player;
     const dx = p.x - x;
@@ -516,7 +581,8 @@ export function damageProp(
       break;
     }
     case 'idpd_canister': {
-      spawnPickup(state, 'portal_strike', prop.x, prop.y, { value: 1 }, rng);
+      const strikeGain = hasUltra(state.player, 'rogue_a') ? 2 : 1;
+      spawnPickup(state, 'portal_strike', prop.x, prop.y, { value: strikeGain }, rng);
       emitEvent(state, { type: 'sfx', sound: 'sndRogueCanister', x: prop.x, y: prop.y });
       break;
     }
@@ -584,6 +650,10 @@ export function spawnFriendlyUnit(
 ): EnemyEntity {
   const def = ENEMIES[defId]!;
   const safe = findNearestFloor(state.map, x, y, 6);
+  const boostedMaxHp =
+    defId === 'rebel_ally' && hasUltra(state.player, 'rebel_a')
+      ? Math.round(def.maxHp * 1.6)
+      : def.maxHp;
   const unit: EnemyEntity = {
     id: allocEntityId(state),
     defId,
@@ -594,8 +664,8 @@ export function spawnFriendlyUnit(
     vx: 0,
     vy: 0,
     radius: def.radius,
-    hp: def.maxHp,
-    maxHp: def.maxHp,
+    hp: boostedMaxHp,
+    maxHp: boostedMaxHp,
     facing: 1,
     aimAngle: 0,
     hurtFlashTicks: 0,
@@ -621,6 +691,8 @@ export interface DamageEnemyOptions {
   isHeavy?: boolean;
   isCrit?: boolean;
   fromBullet?: boolean;
+  fromHeavyBullet?: boolean;
+  suppressCorpse?: boolean;
 }
 
 export function applyDamageToEnemy(
@@ -668,15 +740,15 @@ export function applyDamageToEnemy(
     state.boss.hp = Math.max(0, enemy.hp);
   }
 
-  // Recycle Gland on bullet hits (60% chance refund 1 bullet)
+  // Recycle Gland on player bullet hits (60% chance refund 1 bullet, or 2 for heavy bullets!)
   if (
-    opts.fromBullet &&
+    (opts.fromBullet || opts.fromHeavyBullet) &&
     !enemy.friendly &&
     hasMutation(state.player, 'recycle_gland') &&
     rng.chance(0.6)
   ) {
-    const before = state.player.ammo.bullet;
-    state.player.ammo.bullet = Math.min(state.player.ammoMax.bullet, before + 1);
+    const refund = opts.fromHeavyBullet ? 2 : 1;
+    state.player.ammo.bullet = Math.min(state.player.ammoMax.bullet, state.player.ammo.bullet + refund);
   }
 
   if (enemy.hp > 0) {
@@ -746,25 +818,27 @@ export function applyDamageToEnemy(
     },
   });
 
-  // Spawn high-velocity flying corpse (combines momentum + killing blow; Impact Wrists rockets them!)
-  const hasIW = hasMutation(player, 'impact_wrists');
-  const impactMult = hasIW ? 2.45 : 1.25;
-  const rawVx = (enemy.vx * 0.55 + (knockX || rng.range(-2.4, 2.4))) * impactMult;
-  const rawVy = (enemy.vy * 0.55 + (knockY || rng.range(-2.4, 2.4))) * impactMult;
-  const maxCorpseSpd = hasIW ? 22 : 14;
-  const rawSpd = Math.hypot(rawVx, rawVy);
-  const scale = rawSpd > maxCorpseSpd && rawSpd > 1e-4 ? maxCorpseSpd / rawSpd : 1;
-  spawnCorpse(
-    state,
-    enemy.x,
-    enemy.y,
-    rawVx * scale,
-    rawVy * scale,
-    enemy.facing,
-    def?.sprites.dead ?? 'sprBanditDead',
-    enemy.radius * 1.5,
-    true,
-  );
+  // Spawn high-velocity flying corpse (skipped if vaporized by Melting Brain Capacity)
+  if (!opts.suppressCorpse) {
+    const hasIW = hasMutation(player, 'impact_wrists');
+    const impactMult = hasIW ? 2.45 : 1.25;
+    const rawVx = (enemy.vx * 0.55 + (knockX || rng.range(-2.4, 2.4))) * impactMult;
+    const rawVy = (enemy.vy * 0.55 + (knockY || rng.range(-2.4, 2.4))) * impactMult;
+    const maxCorpseSpd = hasIW ? 22 : 14;
+    const rawSpd = Math.hypot(rawVx, rawVy);
+    const scale = rawSpd > maxCorpseSpd && rawSpd > 1e-4 ? maxCorpseSpd / rawSpd : 1;
+    spawnCorpse(
+      state,
+      enemy.x,
+      enemy.y,
+      rawVx * scale,
+      rawVy * scale,
+      enemy.facing,
+      def?.sprites.dead ?? 'sprBanditDead',
+      enemy.radius * 1.5,
+      true,
+    );
+  }
 
   // Boss defeat handling
   if (enemy.isBoss && enemy.bossId) {
@@ -777,11 +851,13 @@ export function applyDamageToEnemy(
     }
   }
 
-  // Trigger Fingers: reduce active weapon reload time on kill
+  // Trigger Fingers: reduce reload time on BOTH weapon slots by 40% on every kill (NT parity!)
   if (hasMutation(player, 'trigger_fingers')) {
-    const activeWep = player.weapons[player.activeSlot];
-    if (activeWep && activeWep.reloadTicks > 0) {
-      activeWep.reloadTicks = Math.max(0, Math.floor(activeWep.reloadTicks * 0.55));
+    for (let s = 0; s < 2; s++) {
+      const slotWep = player.weapons[s];
+      if (slotWep && slotWep.reloadTicks > 0) {
+        slotWep.reloadTicks = Math.max(0, Math.floor(slotWep.reloadTicks * 0.6));
+      }
     }
   }
 
@@ -796,11 +872,25 @@ export function applyDamageToEnemy(
     });
   }
 
-  // Lucky Shot: chance to gain ammo for a random ammo type
+  // Lucky Shot: chance on kill to grant a FULL ammo pack for a random ammo type
   if (hasMutation(player, 'lucky_shot') && rng.chance(0.1)) {
     const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
-    const amount = Math.max(2, Math.round(AMMO_PICKUP_AMOUNT[ammoType] * 0.5));
-    addAmmoToPool(state, ammoType, amount);
+    const gained = addAmmoToPool(state, ammoType, AMMO_PICKUP_AMOUNT[ammoType]);
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndLuckyShotProc',
+      x: player.x,
+      y: player.y,
+    });
+    if (gained > 0) {
+      emitEvent(state, {
+        type: 'pickup_text',
+        x: player.x,
+        y: player.y - 12,
+        text: `+${gained} ${ammoType.toUpperCase()}`,
+        color: '#ffe066',
+      });
+    }
   }
 
   // Chicken Ultra A (Harder to Kill): extend headless timer on kill
@@ -808,9 +898,13 @@ export function applyDamageToEnemy(
     player.headlessTicks = Math.min(210, player.headlessTicks + 35);
   }
 
-  // Plant Ultra B (Killer): snared enemy spawns friendly sapling
+  // Plant Ultra B (Killer): snared enemy spawns multiple friendly saplings!
   if (player.mutant === 'plant' && hasUltra(player, 'plant_b') && enemy.snaredTicks > 0) {
-    spawnFriendlyUnit(state, 'plant_sapling', enemy.x, enemy.y);
+    const saplingCount = enemy.maxHp >= 30 ? 3 : 2;
+    for (let s = 0; s < saplingCount; s++) {
+      const ang = (s / saplingCount) * Math.PI * 2 + rng.range(-0.3, 0.3);
+      spawnFriendlyUnit(state, 'plant_sapling', enemy.x + Math.cos(ang) * 8, enemy.y + Math.sin(ang) * 8);
+    }
     emitEvent(state, {
       type: 'sfx',
       sound: 'sndSaplingSpawn',
@@ -824,14 +918,17 @@ export function applyDamageToEnemy(
     spawnExplosion(state, enemy.x, enemy.y, 30, 14, 'player', rng, {
       carveWalls: false,
       isRad: true,
+      selfDamage: false,
       sound: 'sndRadPickup',
     });
   }
 
-  // Rad drops (Melting gets +1 bonus rad per kill; Crown of Blood drops fewer)
-  let totalRads = enemy.radDrop;
-  if (player.mutant === 'melting') totalRads += 1;
-  if (state.crown === 'blood') totalRads = Math.max(0, Math.floor(totalRads * 0.65));
+  // Rad drops (Melting gets +1 bonus rad per kill; Crown of Blood drops fewer; Horror refunds absorbed beam rads)
+  const absorbedRads = horrorAbsorbedRads.get(enemy) ?? 0;
+  let baseRads = enemy.radDrop;
+  if (player.mutant === 'melting') baseRads += 1;
+  if (state.crown === 'blood') baseRads = Math.max(0, Math.floor(baseRads * 0.65));
+  const totalRads = baseRads + absorbedRads;
 
   const bigRads = Math.floor(totalRads / 10);
   const smallRads = totalRads % 10;
@@ -849,27 +946,35 @@ export function applyDamageToEnemy(
     dropMult *= player.hp >= player.maxHp ? 1.6 : 0.55;
   }
 
-  // Health drop
-  const missingHpRatio = player.maxHp > 0 ? 1 - player.hp / player.maxHp : 0;
-  if (state.crown !== 'life' && rng.chance((0.05 + missingHpRatio * 0.14) * dropMult)) {
+  // Health drop (ONLY drops when wounded or Chicken headless, never at full HP or with Crown of Life!)
+  const needsHp = player.hp < player.maxHp || player.headlessTicks > 0;
+  const missingHpRatio = player.maxHp > 0 ? Math.max(0, 1 - player.hp / player.maxHp) : 0;
+  if (needsHp && state.crown !== 'life' && rng.chance((0.06 + missingHpRatio * 0.16) * dropMult)) {
     spawnPickup(state, 'hp', enemy.x, enemy.y, { value: 2 }, rng);
   }
 
-  // Ammo drop
-  if (state.crown !== 'guns' && rng.chance(0.14 * dropMult)) {
+  // Ammo drop (scales inversely with current active weapon ammo fullness, NT parity!)
+  if (state.crown !== 'guns') {
     const activeWep = getWeaponDef(player.weapons[player.activeSlot]?.weaponId ?? 'revolver');
-    const chosenAmmo =
-      activeWep.ammoType !== 'melee' && rng.chance(0.65)
-        ? activeWep.ammoType
-        : rng.pick(NON_MELEE_AMMO_TYPES);
-    spawnPickup(
-      state,
-      'ammo',
-      enemy.x,
-      enemy.y,
-      { ammoType: chosenAmmo, value: AMMO_PICKUP_AMOUNT[chosenAmmo] },
-      rng,
-    );
+    const ammoFill =
+      activeWep.ammoType !== 'melee' && player.ammoMax[activeWep.ammoType] > 0
+        ? Math.min(1, player.ammo[activeWep.ammoType] / player.ammoMax[activeWep.ammoType])
+        : 0.5;
+    const scarcityBoost = 1 + (1 - ammoFill) * 0.65;
+    if (rng.chance(0.11 * scarcityBoost * dropMult)) {
+      const chosenAmmo =
+        activeWep.ammoType !== 'melee' && rng.chance(0.65)
+          ? activeWep.ammoType
+          : rng.pick(NON_MELEE_AMMO_TYPES);
+      spawnPickup(
+        state,
+        'ammo',
+        enemy.x,
+        enemy.y,
+        { ammoType: chosenAmmo, value: AMMO_PICKUP_AMOUNT[chosenAmmo] },
+        rng,
+      );
+    }
   }
 
   // Weapon drop (Crown of Guns / Heavy Heart / Boss drop)
@@ -879,19 +984,29 @@ export function applyDamageToEnemy(
   if (rng.chance(wepDropChance)) {
     const tier = Math.min(12, Math.max(0, state.loop * 4 + 3 + (player.mutant === 'robot' ? 1 : 0)));
     const minTier = player.mutant === 'robot' && hasUltra(player, 'robot_a') ? Math.min(tier, 4) : 0;
-    const pool = getWeaponsByTier(minTier, tier, state.crown === 'curses');
+    const allowCursed = state.crown === 'curses' || state.biome === 'cursed_caves';
+    const pool = getWeaponsByTier(minTier, tier, allowCursed);
     const chosen = pool.length > 0 ? rng.pick(pool) : WEAPONS.revolver!;
-    spawnPickup(state, 'weapon', enemy.x, enemy.y, { weaponId: chosen.id, cursed: chosen.cursed }, rng);
+    const dropCursed = Boolean(chosen.cursed) || (allowCursed && rng.chance(0.35));
+    spawnPickup(
+      state,
+      'weapon',
+      enemy.x,
+      enemy.y,
+      { weaponId: chosen.id, cursed: dropCursed, value: 1 },
+      rng,
+    );
   }
 
-  // Fish Ultra A (Confiscate): chance to drop a bonus ammo/weapon chest
+  // Fish Ultra A (Confiscate): chance to drop a bonus ammo/weapon chest on valid walkable floor
   if (player.mutant === 'fish' && hasUltra(player, 'fish_a') && rng.chance(0.12)) {
-    const isWep = rng.chance(0.35);
+    const chestPos = findNearestFloor(state.map, enemy.x, enemy.y, 8);
+    const isWep = state.crown !== 'love' && rng.chance(0.35);
     state.props.push({
       id: allocEntityId(state),
       kind: isWep ? 'weapon_chest' : 'ammo_chest',
-      x: enemy.x,
-      y: enemy.y,
+      x: chestPos.x,
+      y: chestPos.y,
       radius: 8,
       hp: 10,
       maxHp: 10,
@@ -926,13 +1041,19 @@ export function applyDamageToPlayer(
   if (!opts.ignoreIframes && player.iframes > 0) return false;
   if (!opts.bypassShield && player.shielding) return false;
 
-  // Boiling Veins: immune to explosions and fire when at or below 4 HP
-  if ((opts.isExplosion || opts.isFire) && hasMutation(player, 'boiling_veins') && player.hp <= 4) {
-    return false;
+  // Boiling Veins: immune to explosions & fire at <= 4 HP, and clamps lethal hits from >4 HP down to 4 HP!
+  let dmg = Math.max(1, Math.round(damage));
+  if ((opts.isExplosion || opts.isFire) && hasMutation(player, 'boiling_veins')) {
+    if (player.hp <= 4) {
+      return false;
+    }
+    if (player.hp - dmg < 4) {
+      dmg = player.hp - 4;
+    }
   }
 
-  const dmg = Math.max(1, Math.round(damage));
-  player.hp -= dmg;
+  const alreadyHeadless = player.mutant === 'chicken' && player.headlessTicks > 0;
+  player.hp = alreadyHeadless ? 0 : player.hp - dmg;
   player.iframes = PLAYER_IFRAMES;
   player.hurtFlashTicks = 6;
   player.lastDamageCause = cause;
@@ -959,22 +1080,22 @@ export function applyDamageToPlayer(
     emitEvent(state, { type: 'hitstop', ticks: 2 });
   }
 
-  // Sharp Teeth: retaliate 2x damage taken to all enemies on screen (within 240px)
+  // Sharp Teeth: retaliate 2x damage taken to all active enemies on screen (within 260px)
   if (hasMutation(player, 'sharp_teeth')) {
     const retal = dmg * 2;
     const snap = [...state.enemies];
     for (let i = 0; i < snap.length; i++) {
       const e = snap[i]!;
-      if (e.friendly || e.hp <= 0) continue;
+      if (e.friendly || e.hp <= 0 || e.aiState === 'disguised') continue;
       const dx = e.x - player.x;
       const dy = e.y - player.y;
-      if (dx * dx + dy * dy <= 240 * 240) {
+      if (dx * dx + dy * dy <= 260 * 260) {
         applyDamageToEnemy(state, e, retal, 0, 0, rng);
       }
     }
   }
 
-  // Rogue Passive: Blast Armor / Ultra B: Super Blast Armor
+  // Rogue Passive: Blast Armor / Ultra B: Super Blast Armor (never hurts Rogue!)
   if (player.mutant === 'rogue') {
     const superBlast = hasUltra(player, 'rogue_b');
     spawnExplosion(
@@ -989,22 +1110,29 @@ export function applyDamageToPlayer(
         carveWalls: true,
         clearsProjectiles: true,
         isRogue: true,
+        selfDamage: false,
         sound: 'sndPortalStrikeFire',
       },
     );
   }
 
+  // Headless Chicken is immune to further HP death (only the bleed-out timer kills her!)
+  if (alreadyHeadless) {
+    player.hp = 0;
+    return true;
+  }
+
   // Lethal check
   if (player.hp <= 0) {
-    // Strong Spirit: prevents death once at 1 HP with extended iframes
+    // Strong Spirit: prevents death once at 1 HP; must enter next area before becoming eligible to recharge!
     if (player.strongSpiritReady) {
       player.hp = 1;
       player.strongSpiritReady = false;
-      player.strongSpiritRecharging = true;
+      player.strongSpiritRecharging = false;
       player.iframes = 24;
       emitEvent(state, {
         type: 'sfx',
-        sound: 'sndMutStrongSpirit',
+        sound: 'sndStrongSpiritLost',
         x: player.x,
         y: player.y,
       });

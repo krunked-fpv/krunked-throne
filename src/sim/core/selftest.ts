@@ -673,7 +673,10 @@ function test4_PortalVortexAndPhysics(): string {
   const runB = runPortalScenario(202601);
 
   assert(runA.carvedTiles >= 3, `Portal failed to carve walls: carved ${runA.carvedTiles}`);
-  assert(runA.pickupsRemaining === 0, `Portal left ${runA.pickupsRemaining} pickups unvacuumed`);
+  assert(
+    runA.pickupsRemaining === 2,
+    `Portal should vacuum rads while preserving ammo/weapon pickups; got ${runA.pickupsRemaining} remaining`,
+  );
   assert(runA.chestsRemaining === 0, `Portal left ${runA.chestsRemaining} chests unvacuumed`);
   assert(runA.chestSkipStreak === 1, `Expected chestSkipStreak=1, got ${runA.chestSkipStreak}`);
   assert(runA.finalRads === 5 + 15 + 12, `Expected 32 vacuumed rads, got ${runA.finalRads}`);

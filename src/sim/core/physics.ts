@@ -333,12 +333,21 @@ export function stepPickups(state: SimState): void {
         }
       } else {
         const isRad = pk.kind === 'rad' || pk.kind === 'big_rad';
-        attractRadius = hasPlutoniumHunger ? 150 : isRad ? 44 : 26;
-        pullAccel = hasPlutoniumHunger ? 1.25 : isRad ? 0.85 : 0.65;
+        const horrorBeaming = isRad && player.mutant === 'horror' && player.radBeamTicks > 0;
+        const hpFull = pk.kind === 'hp' && player.hp >= player.maxHp && player.headlessTicks === 0;
+        const strikeCap = player.ultra === 'rogue_a' ? 6 : 3;
+        const strikesFull = pk.kind === 'portal_strike' && player.portalStrikes >= strikeCap;
 
-        if (telekinesis && teleRadius > attractRadius) {
-          attractRadius = teleRadius;
-          pullAccel = Math.max(pullAccel, hasThroneButt ? 1.45 : 1.05);
+        if (!horrorBeaming) {
+          if (!hpFull && !strikesFull) {
+            attractRadius = hasPlutoniumHunger ? 150 : isRad ? 44 : 26;
+            pullAccel = hasPlutoniumHunger ? 1.25 : isRad ? 0.85 : 0.65;
+          }
+
+          if (telekinesis && teleRadius > attractRadius) {
+            attractRadius = teleRadius;
+            pullAccel = Math.max(pullAccel, hasThroneButt ? 1.45 : 1.05);
+          }
         }
       }
 
@@ -403,26 +412,27 @@ export function stepPortal(state: SimState): void {
   const captureDistSq = captureDist * captureDist;
   let vacuumedRads = 0;
 
-  // 2. Vacuum loose rads, pickups, and weapons toward portal center
+  // 2. Vacuum loose rads toward portal center (leaving HP, ammo, portal strikes, and floor weapons intact!)
   for (let i = state.pickups.length - 1; i >= 0; i--) {
     const pk = state.pickups[i]!;
+    if (pk.kind !== 'rad' && pk.kind !== 'big_rad') {
+      continue;
+    }
     const dx = portal.x - pk.x;
     const dy = portal.y - pk.y;
     const distSq = dx * dx + dy * dy;
 
     if (distSq <= captureDistSq) {
-      if (pk.kind === 'rad' || pk.kind === 'big_rad') {
-        state.player.rads += pk.value;
-        state.stats.radsCollected += pk.value;
-        vacuumedRads += pk.value;
-        emitEvent(state, {
-          type: 'sfx',
-          sound: 'sndRadPickup',
-          x: portal.x,
-          y: portal.y,
-          pitchJitter: 0.1,
-        });
-      }
+      state.player.rads += pk.value;
+      state.stats.radsCollected += pk.value;
+      vacuumedRads += pk.value;
+      emitEvent(state, {
+        type: 'sfx',
+        sound: 'sndRadPickup',
+        x: portal.x,
+        y: portal.y,
+        pitchJitter: 0.1,
+      });
       state.pickups.splice(i, 1);
       continue;
     }
@@ -524,7 +534,7 @@ export function stepPortal(state: SimState): void {
       state.portalTransitionTicks = 1;
       emitEvent(state, {
         type: 'sfx',
-        sound: 'sndPortalEnter',
+        sound: 'sndPortalClose',
         x: portal.x,
         y: portal.y,
       });

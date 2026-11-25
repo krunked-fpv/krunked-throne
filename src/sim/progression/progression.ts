@@ -5,6 +5,7 @@ import {
   type CrownId,
   type MutantId,
   type MutationId,
+  type PlayerState,
   type PropEntity,
   type SimState,
   type UltraId,
@@ -33,6 +34,7 @@ import {
   generateWorldMap,
   getTile,
   isWalkableTile,
+  rolloverPlayerRads,
   tileToWorldCenter,
 } from '@/sim/core';
 import {
@@ -45,6 +47,9 @@ import {
   spawnFriendlyUnit,
   spawnPickup,
 } from '@/sim/combat/helpers';
+
+// Tracks players who have already consumed Patience in the current run (once-per-run NT rule).
+const patienceConsumedPlayers = new WeakSet<PlayerState>();
 
 export type PopulateAreaFn = (state: SimState, rng: SeededRng) => void;
 
@@ -79,7 +84,7 @@ function countHostileEnemies(state: SimState): number {
   let count = 0;
   for (let i = 0; i < state.enemies.length; i++) {
     const e = state.enemies[i]!;
-    if (!e.friendly && e.hp > 0) count += 1;
+    if (!e.friendly && e.hp > 0 && e.aiState !== 'disguised') count += 1;
   }
   return count;
 }
@@ -158,7 +163,11 @@ function findRiskRewardChestSpot(
   return findNearestFloor(map, avoidX + 64, avoidY, 16);
 }
 
-export function pickTierWeaponId(state: SimState, rng: SeededRng, bonusTier = 0): string {
+function rollTierWeapon(
+  state: SimState,
+  rng: SeededRng,
+  bonusTier = 0,
+): { weaponId: string; cursed: boolean } {
   const areaDef = getAreaDef(state.areaCode);
   const player = state.player;
   const robotBonus = player.mutant === 'robot' ? 1 : 0;
@@ -172,14 +181,30 @@ export function pickTierWeaponId(state: SimState, rng: SeededRng, bonusTier = 0)
   }
 
   const allowCursed = state.crown === 'curses' || state.biome === 'cursed_caves';
-  const pool = getWeaponsByTier(minTier, maxTier, allowCursed);
-  if (pool.length === 0) return 'revolver';
-
-  if (allowCursed && rng.chance(0.45)) {
-    const cursedPool = pool.filter((w) => w.cursed);
-    if (cursedPool.length > 0) return rng.pick(cursedPool).id;
+  if (allowCursed && rng.chance(state.crown === 'curses' ? 0.55 : 0.45)) {
+    // Crown of Curses / Cursed Crystal Caves: roll elevated-tier cursed weapons on ANY floor!
+    const cursedMax = Math.min(12, maxTier + 2);
+    const cursedMin = Math.min(cursedMax, Math.max(minTier, maxTier - 1));
+    const elevatedPool = getWeaponsByTier(cursedMin, cursedMax, true);
+    if (elevatedPool.length > 0) {
+      const intrinsicCursed = elevatedPool.filter((w) => w.cursed);
+      const chosen =
+        intrinsicCursed.length > 0 && rng.chance(0.6)
+          ? rng.pick(intrinsicCursed)
+          : rng.pick(elevatedPool);
+      return { weaponId: chosen.id, cursed: true };
+    }
   }
-  return rng.pick(pool).id;
+
+  const pool = getWeaponsByTier(minTier, maxTier, allowCursed);
+  if (pool.length === 0) return { weaponId: 'revolver', cursed: false };
+
+  const chosen = rng.pick(pool);
+  return { weaponId: chosen.id, cursed: Boolean(chosen.cursed) };
+}
+
+export function pickTierWeaponId(state: SimState, rng: SeededRng, bonusTier = 0): string {
+  return rollTierWeapon(state, rng, bonusTier).weaponId;
 }
 
 export function spawnLevelChests(state: SimState, rng: SeededRng): void {
@@ -287,33 +312,69 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
       });
     }
 
-    // 4. Open Mind extra chest
+    // 4. Open Mind extra chest (equal 1/3 chance: weapon chest, ammo chest, or rad/IDPD canister)
     if (hasMutation(player, 'open_mind')) {
       const posExtra = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 88, true, rng);
-      const extraWeapon = rng.chance(0.5) && state.crown !== 'love';
-      state.props.push({
-        id: allocEntityId(state),
-        kind: extraWeapon ? 'weapon_chest' : 'ammo_chest',
-        x: posExtra.x,
-        y: posExtra.y,
-        radius: 8,
-        hp: 10,
-        maxHp: 10,
-        solid: false,
-        opened: false,
-        hurtFlashTicks: 0,
-        sprite: extraWeapon ? 'sprWeaponChest' : 'sprAmmoChest',
-        openSprite: extraWeapon ? 'sprWeaponChestOpen' : 'sprAmmoChestOpen',
-      });
+      const roll = rng.int(0, 2);
+      if (roll === 2) {
+        if (player.mutant === 'rogue') {
+          state.props.push({
+            id: allocEntityId(state),
+            kind: 'idpd_canister',
+            x: posExtra.x,
+            y: posExtra.y,
+            radius: 8,
+            hp: 6,
+            maxHp: 6,
+            solid: false,
+            opened: false,
+            hurtFlashTicks: 0,
+            sprite: 'sprRogueAmmoChest',
+            openSprite: 'sprRogueAmmoChestOpen',
+          });
+        } else {
+          state.props.push({
+            id: allocEntityId(state),
+            kind: 'rad_canister',
+            x: posExtra.x,
+            y: posExtra.y,
+            radius: 8,
+            hp: 6,
+            maxHp: 6,
+            solid: false,
+            opened: false,
+            hurtFlashTicks: 0,
+            sprite: 'sprRadChest',
+            radsStored: 14 + state.loop * 8,
+          });
+        }
+      } else {
+        const extraWeapon = roll === 0 && state.crown !== 'love';
+        state.props.push({
+          id: allocEntityId(state),
+          kind: extraWeapon ? 'weapon_chest' : 'ammo_chest',
+          x: posExtra.x,
+          y: posExtra.y,
+          radius: 8,
+          hp: 10,
+          maxHp: 10,
+          solid: false,
+          opened: false,
+          hurtFlashTicks: 0,
+          sprite: extraWeapon ? 'sprWeaponChest' : 'sprAmmoChest',
+          openSprite: extraWeapon ? 'sprWeaponChestOpen' : 'sprAmmoChestOpen',
+        });
+      }
     }
 
-    // 5. Y.V. Ultra B (Back 2 Bizniz): extra Crib weapon chests
+    // 5. Y.V. Ultra B (Back 2 Bizniz): extra Crib weapon chests (or ammo chests with Crown of Love)
     if (player.mutant === 'yv' && hasUltra(player, 'yv_b')) {
+      const cribAmmoOnly = state.crown === 'love';
       for (let c = 0; c < 2; c++) {
         const posCrib = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 56, false, rng);
         state.props.push({
           id: allocEntityId(state),
-          kind: 'weapon_chest',
+          kind: cribAmmoOnly ? 'ammo_chest' : 'weapon_chest',
           x: posCrib.x,
           y: posCrib.y,
           radius: 8,
@@ -322,8 +383,8 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
           solid: false,
           opened: false,
           hurtFlashTicks: 0,
-          sprite: 'sprWeaponChest',
-          openSprite: 'sprWeaponChestOpen',
+          sprite: cribAmmoOnly ? 'sprAmmoChest' : 'sprWeaponChest',
+          openSprite: cribAmmoOnly ? 'sprAmmoChestOpen' : 'sprWeaponChestOpen',
         });
       }
     }
@@ -339,10 +400,11 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
 
   const player = state.player;
 
-  // Crown of Hatred: opening any chest damages player by 1 and yields 14 rads
+  // Crown of Hatred: opening any chest damages player by 1 (bypassing shield/iframes) and yields 14 rads
   if (state.crown === 'hatred') {
     applyDamageToPlayer(state, 1, 'CROWN OF HATRED', 'sprCrown6Idle', rng, {
       ignoreIframes: true,
+      bypassShield: true,
     });
     for (let i = 0; i < 4; i++) {
       spawnPickup(state, 'rad', prop.x, prop.y, { value: 1 }, rng);
@@ -353,38 +415,50 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
   if (prop.kind === 'weapon_chest') {
     state.chestSkipStreak = 0;
     const count = player.mutant === 'steroids' && hasUltra(player, 'steroids_a') ? 2 : 1;
+    let anyCursed = false;
     for (let i = 0; i < count; i++) {
-      const wepId = pickTierWeaponId(state, rng);
-      const def = getWeaponDef(wepId);
+      const rolled = rollTierWeapon(state, rng, 0);
+      if (rolled.cursed) anyCursed = true;
       spawnPickup(
         state,
         'weapon',
         prop.x,
         prop.y,
-        { weaponId: def.id, cursed: def.cursed },
+        { weaponId: rolled.weaponId, cursed: rolled.cursed, value: 1 },
         rng,
       );
     }
-    emitEvent(state, { type: 'sfx', sound: 'sndWeaponChest', x: prop.x, y: prop.y });
+    emitEvent(state, {
+      type: 'sfx',
+      sound: anyCursed ? 'sndCursedChest' : 'sndWeaponChest',
+      x: prop.x,
+      y: prop.y,
+    });
     return true;
   }
 
   if (prop.kind === 'big_weapon_chest') {
     state.chestSkipStreak = 0;
-    const count = player.mutant === 'steroids' && hasUltra(player, 'steroids_a') ? 4 : 3;
+    const count = player.mutant === 'steroids' && hasUltra(player, 'steroids_a') ? 6 : 3;
+    let anyCursed = false;
     for (let i = 0; i < count; i++) {
-      const wepId = pickTierWeaponId(state, rng, 1);
-      const def = getWeaponDef(wepId);
+      const rolled = rollTierWeapon(state, rng, 1);
+      if (rolled.cursed) anyCursed = true;
       spawnPickup(
         state,
         'weapon',
         prop.x,
         prop.y,
-        { weaponId: def.id, cursed: def.cursed },
+        { weaponId: rolled.weaponId, cursed: rolled.cursed, value: 1 },
         rng,
       );
     }
-    emitEvent(state, { type: 'sfx', sound: 'sndWeaponChest', x: prop.x, y: prop.y });
+    emitEvent(state, {
+      type: 'sfx',
+      sound: anyCursed ? 'sndCursedChest' : 'sndBigWeaponChest',
+      x: prop.x,
+      y: prop.y,
+    });
     return true;
   }
 
@@ -404,6 +478,7 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
     } else if (state.crown === 'life' && player.hp < player.maxHp) {
       healPlayer(state, hasMutation(player, 'second_stomach') ? 8 : 4);
       emitEvent(state, { type: 'sfx', sound: 'sndHealthChestBig', x: prop.x, y: prop.y });
+      return true;
     } else {
       const activeWep = getWeaponDef(player.weapons[player.activeSlot]?.weaponId ?? 'revolver');
       const secWep = player.weapons[1 - player.activeSlot]
@@ -422,7 +497,7 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
 
   if (prop.kind === 'idpd_canister') {
     const gain = hasUltra(player, 'rogue_a') ? 2 : 1;
-    const cap = hasUltra(player, 'rogue_a') ? 5 : 3;
+    const cap = hasUltra(player, 'rogue_a') ? 6 : 3;
     player.portalStrikes = Math.min(cap, player.portalStrikes + gain);
     emitEvent(state, { type: 'sfx', sound: 'sndRogueCanister', x: prop.x, y: prop.y });
     emitEvent(state, {
@@ -438,15 +513,23 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
   return false;
 }
 
+export interface GiveWeaponOptions {
+  cursed?: boolean;
+  grantBonus?: boolean;
+}
+
 export function givePlayerWeapon(
   state: SimState,
   weaponId: string,
   slot?: 0 | 1,
   dropPrevious: boolean = true,
+  opts: GiveWeaponOptions = {},
 ): boolean {
   const def = WEAPONS[weaponId];
   if (!def) return false;
 
+  const incomingCursed = opts.cursed ?? Boolean(def.cursed);
+  const grantBonus = opts.grantBonus ?? true;
   const player = state.player;
   let targetSlot: 0 | 1;
 
@@ -456,52 +539,64 @@ export function givePlayerWeapon(
     targetSlot = 1;
   } else {
     targetSlot = player.activeSlot;
-    // Do not drop a cursed active weapon automatically if secondary is uncursed
-    const cur = player.weapons[targetSlot];
-    const alt = player.weapons[targetSlot === 0 ? 1 : 0];
-    if (cur?.cursed && alt && !alt.cursed) {
-      targetSlot = targetSlot === 0 ? 1 : 0;
-    } else if (cur?.cursed && alt?.cursed) {
-      emitEvent(state, {
-        type: 'pickup_text',
-        x: player.x,
-        y: player.y - 12,
-        text: 'CURSED!',
-        color: '#cc55ff',
-      });
-      return false;
+    // Cursed weapons cannot be dropped for uncursed ones (but CAN be swapped for another cursed weapon!)
+    if (!incomingCursed) {
+      const cur = player.weapons[targetSlot];
+      const alt = player.weapons[targetSlot === 0 ? 1 : 0];
+      if (cur?.cursed && alt && !alt.cursed) {
+        targetSlot = targetSlot === 0 ? 1 : 0;
+      } else if (cur?.cursed && alt?.cursed) {
+        emitEvent(state, { type: 'sfx', sound: 'sndSwapCursed', x: player.x, y: player.y });
+        emitEvent(state, {
+          type: 'pickup_text',
+          x: player.x,
+          y: player.y - 12,
+          text: 'CURSED!',
+          color: '#cc55ff',
+        });
+        return false;
+      }
     }
   }
 
   const prev = player.weapons[targetSlot];
   if (prev && dropPrevious) {
+    // Dropped player weapons have value: 0 so picking them back up cannot farm infinite ammo or HP!
     spawnPickup(state, 'weapon', player.x, player.y, {
       weaponId: prev.weaponId,
       cursed: prev.cursed,
+      value: 0,
       vx: 0,
       vy: 0,
     });
   }
 
-  player.weapons[targetSlot] = createWeaponSlot(def.id, def.cursed);
+  player.weapons[targetSlot] = createWeaponSlot(def.id, incomingCursed);
   if (slot === undefined && targetSlot === 1 && prev === null) {
     player.activeSlot = 1;
   }
 
-  // Picking up a weapon grants starter ammo of that type (or HP with Crown of Protection!)
-  if (state.crown === 'protection') {
-    healPlayer(state, hasMutation(player, 'second_stomach') ? 4 : 2);
-  } else if (def.ammoType !== 'melee') {
-    addAmmoToPool(state, def.ammoType, Math.max(2, Math.round(AMMO_PICKUP_AMOUNT[def.ammoType] * 0.5)));
+  // Only fresh unlooted weapons grant starter ammo (or HP with Crown of Protection)
+  if (grantBonus) {
+    if (state.crown === 'protection') {
+      healPlayer(state, hasMutation(player, 'second_stomach') ? 4 : 2);
+    } else if (def.ammoType !== 'melee') {
+      addAmmoToPool(state, def.ammoType, Math.max(2, Math.round(AMMO_PICKUP_AMOUNT[def.ammoType] * 0.5)));
+    }
   }
 
-  emitEvent(state, { type: 'sfx', sound: 'sndWeaponPickup', x: player.x, y: player.y });
+  emitEvent(state, {
+    type: 'sfx',
+    sound: incomingCursed ? 'sndCursedPickup' : 'sndWeaponPickup',
+    x: player.x,
+    y: player.y,
+  });
   emitEvent(state, {
     type: 'pickup_text',
     x: player.x,
     y: player.y - 12,
-    text: def.name,
-    color: def.golden ? '#ffe066' : def.cursed ? '#d966ff' : '#ffffff',
+    text: incomingCursed && !def.cursed ? `CURSED ${def.name}` : def.name,
+    color: def.golden ? '#ffe066' : incomingCursed ? '#d966ff' : '#ffffff',
   });
   return true;
 }
@@ -539,16 +634,19 @@ export function drawMutationChoices(state: SimState, rng: SeededRng): MutationId
   const player = state.player;
   const owned = new Set<MutationId>(player.mutations);
   const weaponMutCount = WEAPON_SPECIFIC_MUTATIONS.filter((id) => owned.has(id)).length;
+  const patienceUsed = patienceConsumedPlayers.has(player);
 
   const eligible = MUTATION_IDS.filter((id) => {
     if (owned.has(id)) return false;
+    if (id === 'patience' && patienceUsed) return false;
     if (id === 'heavy_heart' && weaponMutCount < 3) return false;
     return true;
   });
 
   const shuffled = rng.shuffle([...eligible]);
-  const cardCount =
-    state.crown === 'destiny' ? 1 : player.mutant === 'horror' ? 5 : 4;
+  // Crown of Destiny narrows picks to 1 card (2 for Horror via +1 extra choice passive)
+  const baseCards = state.crown === 'destiny' ? 1 : 4;
+  const cardCount = baseCards + (player.mutant === 'horror' ? 1 : 0);
   const drawn = shuffled.slice(0, Math.min(cardCount, shuffled.length));
   state.pendingMutations = drawn;
   state.rngState = rng.getState();
@@ -597,10 +695,9 @@ export function grantMutationById(
 ): boolean {
   const player = state.player;
   if (!MUTATION_IDS.includes(id)) return false;
+  if (player.mutations.includes(id)) return true;
 
-  if (!player.mutations.includes(id)) {
-    player.mutations.push(id);
-  }
+  player.mutations.push(id);
 
   switch (id) {
     case 'rhino_skin':
@@ -611,6 +708,10 @@ export function grantMutationById(
       player.ammoMax = { ...BACK_MUSCLE_AMMO_MAX };
       break;
     case 'last_wish':
+      if (player.mutant === 'chicken' && player.headlessTicks > 0) {
+        healPlayer(state, player.maxHp);
+      }
+      healPlayer(state, Math.max(0, player.maxHp - player.hp));
       player.hp = player.maxHp;
       for (const ammoType of NON_MELEE_AMMO_TYPES) {
         player.ammo[ammoType] = player.ammoMax[ammoType];
@@ -665,7 +766,7 @@ export function grantUltraById(
       player.hp = Math.min(player.maxHp, player.hp + 6);
       break;
     case 'melting_b':
-      player.maxHp = Math.max(1, Math.floor(player.maxHp / 2));
+      player.maxHp = Math.max(1, Math.ceil(player.maxHp / 2));
       player.hp = Math.min(player.hp, player.maxHp);
       state.pendingLevelUps += 3;
       break;
@@ -673,7 +774,7 @@ export function grantUltraById(
       player.gunWarrantTicks = 210;
       break;
     case 'rogue_a':
-      player.portalStrikes = Math.min(5, player.portalStrikes + 2);
+      player.portalStrikes = Math.min(6, player.portalStrikes + 2);
       break;
     default:
       break;
@@ -811,10 +912,20 @@ export function loadAreaIntoState(
     healPlayer(state, healAmt);
   }
 
-  // Strong Spirit recharge when entering new area at full HP
-  if (player.strongSpiritRecharging && player.hp >= player.maxHp) {
+  // Strong Spirit: entering a new area makes a spent spirit eligible to recharge;
+  // if already at full HP (before Crown of Luck lowers HP to 1), recharge immediately!
+  if (isTransition && hasMutation(player, 'strong_spirit') && !player.strongSpiritReady) {
+    player.strongSpiritRecharging = true;
+  }
+  if (player.strongSpiritRecharging && !player.strongSpiritReady && player.hp >= player.maxHp) {
     player.strongSpiritReady = true;
     player.strongSpiritRecharging = false;
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndStrongSpiritGain',
+      x: player.x,
+      y: player.y,
+    });
   }
 
   // Fish Ultra B (Gun Warrant): 7 seconds (210 ticks) infinite ammo on area start
@@ -913,6 +1024,23 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
     ? createWeaponSlot(mutantDef.secondaryWeapon)
     : null;
 
+  // Authentic NT starting ammo: 96 bullets (plus starter reserves if carrying a non-bullet golden weapon)
+  const startAmmo: Record<AmmoType, number> = {
+    melee: 0,
+    bullet: 96,
+    shell: 0,
+    bolt: 0,
+    explosive: 0,
+    energy: 0,
+  };
+  for (const slot of [primarySlot, secondarySlot]) {
+    if (!slot) continue;
+    const wDef = getWeaponDef(slot.weaponId);
+    if (wDef.ammoType !== 'melee' && startAmmo[wDef.ammoType] === 0) {
+      startAmmo[wDef.ammoType] = AMMO_PICKUP_AMOUNT[wDef.ammoType] * 2;
+    }
+  }
+
   const placeholderMap = {
     width: 16,
     height: 16,
@@ -963,14 +1091,7 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
       ultra: null,
       strongSpiritReady: false,
       strongSpiritRecharging: false,
-      ammo: {
-        melee: 0,
-        bullet: 96,
-        shell: 16,
-        bolt: 14,
-        explosive: 10,
-        energy: 20,
-      },
+      ammo: startAmmo,
       ammoMax: { ...DEFAULT_AMMO_MAX },
       weapons: [primarySlot, secondarySlot],
       activeSlot: 0,
@@ -1045,6 +1166,12 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
   };
 
   loadAreaIntoState(state, '1-1', 0, opts.populateFn);
+  // Crown of Destiny grants an immediate free mutation choice at run start
+  if (crown === 'destiny' && state.pendingLevelUps > 0) {
+    const destinyRng = SeededRng.fromState(state.rngState);
+    openPendingLevelUp(state, destinyRng);
+    state.rngState = destinyRng.getState();
+  }
   return state;
 }
 
@@ -1056,10 +1183,77 @@ export function checkPortalTrigger(
   // 1. Complete portal transition once player has been pulled inside for 24 ticks
   if (state.phase === 'portal_transition' && state.portal.entered) {
     if (state.portalTransitionTicks >= 24) {
-      // Consume Patience deferred mutation on portal transition
-      const patienceIdx = state.player.mutations.indexOf('patience');
+      const player = state.player;
+      const hasTB = hasMutation(player, 'throne_butt');
+
+      // Sweep any remaining loose floor rads & unopened rad canisters into player XP
+      let sweptRads = 0;
+      for (let i = state.pickups.length - 1; i >= 0; i--) {
+        const pk = state.pickups[i]!;
+        if (pk.kind === 'rad' || pk.kind === 'big_rad') {
+          player.rads += pk.value;
+          state.stats.radsCollected += pk.value;
+          sweptRads += pk.value;
+          state.pickups.splice(i, 1);
+        }
+      }
+      for (let i = state.props.length - 1; i >= 0; i--) {
+        const prop = state.props[i]!;
+        if (prop.opened || prop.mimic) continue;
+        if (prop.kind === 'rad_canister') {
+          const stored = prop.radsStored ?? 10;
+          if (stored > 0) {
+            player.rads += stored;
+            state.stats.radsCollected += stored;
+            sweptRads += stored;
+          }
+          prop.opened = true;
+        } else if (prop.kind === 'weapon_chest' || prop.kind === 'big_weapon_chest') {
+          // Any unopened weapon chest left behind on exit counts toward Big Weapon Chest streak!
+          state.chestSkipStreak += 1;
+          prop.opened = true;
+        }
+      }
+      if (sweptRads > 0) {
+        rolloverPlayerRads(state);
+      }
+
+      // Robot Ultra A (Refined Taste) & Ultra B (Regurgitate): auto-eat leftover floor weapons on portal exit!
+      if (player.mutant === 'robot' && (hasUltra(player, 'robot_a') || hasUltra(player, 'robot_b'))) {
+        let ateAny = false;
+        const isRegurgitate = hasUltra(player, 'robot_b');
+        for (let i = state.pickups.length - 1; i >= 0; i--) {
+          const pk = state.pickups[i]!;
+          if (pk.kind !== 'weapon') continue;
+          state.pickups.splice(i, 1);
+          ateAny = true;
+          const hpGain = hasTB ? 4 : 2;
+          if (player.hp < player.maxHp) {
+            healPlayer(state, hpGain);
+          } else {
+            const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
+            addAmmoToPool(state, ammoType, AMMO_PICKUP_AMOUNT[ammoType] * (hasTB ? 2 : 1));
+          }
+          if (isRegurgitate && rng.chance(0.45)) {
+            const bonusAmmo = rng.pick(NON_MELEE_AMMO_TYPES);
+            addAmmoToPool(state, bonusAmmo, AMMO_PICKUP_AMOUNT[bonusAmmo]);
+          }
+        }
+        if (ateAny) {
+          emitEvent(state, {
+            type: 'sfx',
+            sound: hasTB ? 'sndRobotEatUpg' : 'sndRobotEat',
+            x: player.x,
+            y: player.y,
+          });
+        }
+      }
+
+      // Consume Patience deferred mutation on portal transition (once per run!)
+      const patienceIdx = player.mutations.indexOf('patience');
       if (patienceIdx !== -1) {
-        state.player.mutations.splice(patienceIdx, 1);
+        player.mutations.splice(patienceIdx, 1);
+        patienceConsumedPlayers.add(player);
         state.pendingLevelUps += 1;
       }
 
@@ -1096,22 +1290,50 @@ export function checkPortalTrigger(
     return 'none';
   }
 
-  // If Anomaly triggered early, clear remaining minor enemies into the portal
-  if (hostileCount > 0 && anomalyThreshold > 0) {
-    for (let i = state.enemies.length - 1; i >= 0; i--) {
-      if (!state.enemies[i]!.friendly) {
-        state.enemies.splice(i, 1);
-      }
-    }
-  }
-
   // Position portal safely near last corpse or player
   const lastCorpse = state.corpses[state.corpses.length - 1];
   const anchorX = lastCorpse ? lastCorpse.x : state.player.x + 28;
   const anchorY = lastCorpse ? lastCorpse.y : state.player.y;
   const safe = findNearestFloor(state.map, anchorX, anchorY, 10);
 
+  // If Horror Anomaly triggered early, consume remaining enemies into the portal (crediting kills & rads!)
+  if (hostileCount > 0 && anomalyThreshold > 0) {
+    for (let i = state.enemies.length - 1; i >= 0; i--) {
+      const e = state.enemies[i]!;
+      if (!e.friendly && e.hp > 0 && e.aiState !== 'disguised') {
+        state.stats.kills += 1;
+        state.levelKills += 1;
+        let totalRads = e.radDrop;
+        if (state.crown === 'blood') totalRads = Math.max(0, Math.floor(totalRads * 0.65));
+        const bigRads = Math.floor(totalRads / 10);
+        const smallRads = totalRads % 10;
+        for (let r = 0; r < bigRads; r++) {
+          spawnPickup(state, 'big_rad', e.x, e.y, { value: 10 }, rng);
+        }
+        for (let r = 0; r < smallRads; r++) {
+          spawnPickup(state, 'rad', e.x, e.y, { value: 1 }, rng);
+        }
+        emitEvent(state, {
+          type: 'particle',
+          kind: 'portal_swirl',
+          x: e.x,
+          y: e.y,
+          vx: 0,
+          vy: 0,
+          color: '#7cff6b',
+          size: 5,
+          life: 12,
+        });
+        state.enemies.splice(i, 1);
+      }
+    }
+  }
+
   const next = getNextAreaTransition(state.areaCode, state.loop);
+  const carryingCursed = Boolean(state.player.weapons[0]?.cursed || state.player.weapons[1]?.cursed);
+  const targetArea: AreaCode =
+    state.areaCode === '3-3' && carryingCursed ? '4-?' : next.areaCode;
+
   state.portal.active = true;
   state.portal.x = safe.x;
   state.portal.y = safe.y;
@@ -1119,14 +1341,14 @@ export function checkPortalTrigger(
   state.portal.entered = false;
   state.portal.enterTicks = 0;
   state.portal.carved = false;
-  state.portal.targetArea = next.areaCode;
+  state.portal.targetArea = targetArea;
   state.portal.nextLoop = next.loop;
 
   emitEvent(state, {
     type: 'portal_open',
     x: safe.x,
     y: safe.y,
-    targetArea: next.areaCode,
+    targetArea,
   });
   emitEvent(state, {
     type: 'sfx',
