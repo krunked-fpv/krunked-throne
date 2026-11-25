@@ -1,0 +1,27 @@
+{
+  "name": "krunked-throne",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Krunked Throne — 100% original standalone 16-bit wasteland action roguelike with deterministic 30 Hz simulation and 30/60/120 FPS rendering",
+  "scripts": {
+    "extract": "tsx tools/extract-assets.ts",
+    "oracle": "tsx tools/oracle-dump.ts",
+    "dev": "vite",
+    "play": "vite --port 4173",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify:assets": "tsx scripts/verify/verify-assets.ts",
+    "verify:sim": "tsx scripts/verify/verify-sim.ts",
+    "verify": "npm run typecheck && npm run test && npm run verify:assets && npm run verify:sim"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}

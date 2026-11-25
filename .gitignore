@@ -1,0 +1,32 @@
+# Copyrighted / Extracted Steam Assets (NEVER COMMIT)
+.nt-assets/
+*.win
+*.exe
+*.dll
+*.part
+*.ogg
+*.wav
+*.mp3
+*.yytex
+
+# Build & Dependencies
+node_modules/
+dist/
+coverage/
+.vite/
+.cache/
+
+# Test, Playtest & Temp Artifacts
+playwright-report/
+test-results/
+scratch/
+*.log
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Local Environment / Secrets
+.env
+.env.*
+!.env.example

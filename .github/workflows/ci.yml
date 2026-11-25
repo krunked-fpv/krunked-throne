@@ -1,0 +1,76 @@
+name: CI & GitHub Pages Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify zero copyrighted retail assets in git
+        run: |
+          if git ls-files | grep -iE '(\.nt-assets/|\.win$|\.exe$|\.dll$|\.ogg$|\.wav$|\.yytex$)'; then
+            echo "ERROR: Prohibited binary or extracted retail asset found in git!"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit & Integration Tests
+        run: npm run test
+
+      - name: Verify Assets (CI Fallback Mode)
+        run: npm run verify:assets
+
+      - name: Verify Headless Simulation Soak
+        run: npm run verify:sim
+
+      - name: Build Production Krunked Throne Bundle
+        run: npm run build
+
+      - name: Upload GitHub Pages Artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy-pages:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
