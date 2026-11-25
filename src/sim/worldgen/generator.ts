@@ -1561,12 +1561,30 @@ export function generateWorldMap(
   rng: SeededRng,
   opts?: WorldGenOptions,
 ): WorldMap {
+  const loopSafe = Math.max(0, Math.floor(loop));
+  const loopScale = Math.min(1.6, 1 + loopSafe * 0.18);
+  const loopWalkers = Math.min(3, loopSafe);
+  const isFixedLayout = areaCode === '7-3' || areaCode === 'vault' || areaCode === '0-1';
+
   const profile = getDefaultAreaGenParams(areaCode, biome, loop);
   if (opts?.targetFloors !== undefined) {
-    profile.targetFloors = Math.max(16, Math.floor(opts.targetFloors));
+    const baseFloors = Math.max(16, Math.floor(opts.targetFloors));
+    const scaledFloors = isFixedLayout ? baseFloors : Math.round(baseFloors * loopScale);
+    if (!isFixedLayout) {
+      const maxPlayableArea = (profile.width - OUTER_MARGIN * 2) * (profile.height - OUTER_MARGIN * 2);
+      if (scaledFloors > maxPlayableArea * 0.52) {
+        const grow = Math.min(18, Math.ceil((scaledFloors / 0.52) ** 0.5) - profile.width + 6);
+        if (grow > 0) {
+          profile.width += grow;
+          profile.height += grow;
+        }
+      }
+    }
+    profile.targetFloors = scaledFloors;
   }
   if (opts?.walkerCount !== undefined) {
-    profile.walkerCount = Math.max(1, Math.floor(opts.walkerCount));
+    const baseWalkers = Math.max(1, Math.floor(opts.walkerCount));
+    profile.walkerCount = isFixedLayout ? baseWalkers : Math.min(8, baseWalkers + loopWalkers);
   }
   if (opts?.darkness !== undefined) {
     profile.darkness = Math.max(0, Math.min(1, opts.darkness));

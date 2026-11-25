@@ -1,11 +1,12 @@
 import {
   TILE_SIZE,
+  type AmmoType,
   type BossId,
   type EnemyDef,
   type EnemyEntity,
   type SimState,
 } from '@/contracts';
-import { ENEMIES } from '@/data';
+import { AMMO_PICKUP_AMOUNT, ENEMIES, getWeaponDef } from '@/data';
 import {
   SeededRng,
   allocEntityId,
@@ -14,25 +15,32 @@ import {
   emitEvent,
   findNearestFloor,
   hasLineOfSight,
+  isCircleOverlappingSolid,
   moveCircleWithSlide,
   segmentCircleHit,
 } from '@/sim/core';
 import {
+  NON_MELEE_AMMO_TYPES,
   applyDamageToEnemy,
   applyDamageToPlayer,
   hasMutation,
   spawnEnemyProjectile,
   spawnExplosion,
+  spawnPickup,
 } from '@/sim/combat';
+import { pickTierWeaponId } from '@/sim/progression';
 import {
   createEnemyEntity,
   getAreaRuntime,
   getEnemyMemory,
+  getRunRuntime,
+  spawnBossEntity,
   spawnIdpdWave,
   type EnemyAiMemory,
 } from '@/sim/entities';
 import {
   handleBossDeath,
+  openBossPortal,
   stepBossAi,
   stepBossProjectiles,
 } from './bosses';
@@ -43,18 +51,30 @@ export interface StepEntitiesOptions {
 
 const CORPSE_SPRITE_TO_SPECIAL_DEF: Record<string, string> = {
   sprMSpawnDead: 'maggot_nest',
+  sprBigMaggotDead: 'big_maggot',
   sprRatkingDead: 'big_rat',
+  sprExploderDead: 'ballguy',
   sprSnowTankDead: 'snow_tank',
   sprGoldTankDead: 'gold_snow_tank',
   sprExploFreakDead: 'explo_freak',
   sprExploGuardianDead: 'explo_guardian',
   sprVanDead: 'idpd_van',
+  sprMimicDead: 'mimic',
+  sprWepMimicDead: 'weapon_mimic',
   sprBanditBossDead: 'big_bandit',
   sprScrapBossDead: 'big_dog',
   sprLilHunterDead: 'lil_hunter',
   sprNothingDeath: 'nuclear_throne',
   sprNothing2Death: 'throne_ii',
 };
+
+const BOSS_CORPSE_SPRITES: ReadonlySet<string> = new Set([
+  'sprBanditBossDead',
+  'sprScrapBossDead',
+  'sprLilHunterDead',
+  'sprNothingDeath',
+  'sprNothing2Death',
+]);
 
 function clampInsideMap(state: SimState, x: number, y: number): { x: number; y: number } {
   const ts = state.map.tileSize || TILE_SIZE;
@@ -103,7 +123,8 @@ function moveEnemy(
   dy: number,
   opts: { ignoreWalls?: boolean; carveWalls?: boolean; noSep?: boolean } = {},
 ): { hitWall: boolean } {
-  const snareMult = e.snaredTicks > 0 ? 0.12 : 1.0;
+  // Plant Snare fully roots standard enemies in place (1:1 NT parity)
+  const snareMult = e.snaredTicks > 0 ? 0 : 1.0;
   const sep = opts.noSep ? { sx: 0, sy: 0 } : computeSoftSeparation(state, e);
   const totalDx = (dx + sep.sx + e.vx) * snareMult;
   const totalDy = (dy + sep.sy + e.vy) * snareMult;
@@ -177,7 +198,9 @@ function wakeEnemyAndSquad(
       ally === e ||
       ally.friendly ||
       ally.isBoss ||
+      ally.defId === 'idpd_van' ||
       ally.hp <= 0 ||
+      ally.aiState === 'sleep' ||
       ally.aiState === 'feign' ||
       ally.aiState === 'disguised'
     ) {
@@ -415,8 +438,10 @@ function triggerSpecialDeathEffect(
   }
 
   switch (defId) {
-    case 'maggot_nest': {
-      const spawnCount = Math.min(4, Math.max(0, 14 - countByDefId(state, 'maggot')));
+    case 'maggot_nest':
+    case 'big_maggot': {
+      const want = defId === 'big_maggot' ? 3 : 4;
+      const spawnCount = Math.min(want, Math.max(0, 14 - countByDefId(state, 'maggot')));
       for (let i = 0; i < spawnCount; i++) {
         const ang = (i / Math.max(1, spawnCount)) * Math.PI * 2 + rng.range(-0.2, 0.2);
         const child = createEnemyEntity(state, 'maggot', x + Math.cos(ang) * 10, y + Math.sin(ang) * 10, rng);
@@ -439,6 +464,66 @@ function triggerSpecialDeathEffect(
         cm.aggroTicks = 120;
         cm.lastSeenX = state.player.x;
         cm.lastSeenY = state.player.y;
+      }
+      break;
+    }
+
+    case 'ballguy': {
+      // Toxic Ballguy bursts into a rad-toxic cloud + radial venom pellets on death
+      spawnExplosion(state, x, y, 26, 10, 'enemy', rng, {
+        carveWalls: false,
+        isRad: true,
+        sound: 'sndFrogExplode',
+        cause: 'TOXIC BALLGUY',
+        killerSprite: 'sprExploderIdle',
+      });
+      for (let k = 0; k < 6; k++) {
+        const ang = (k / 6) * Math.PI * 2 + rng.range(-0.12, 0.12);
+        spawnEnemyProjectile(state, {
+          x: x + Math.cos(ang) * 7,
+          y: y + Math.sin(ang) * 7,
+          angle: ang,
+          speed: 3.1,
+          damage: 2,
+          radius: 4,
+          lifeTicks: 52,
+          sprite: 'sprScorpionBullet',
+        });
+      }
+      break;
+    }
+
+    case 'mimic': {
+      // Ammo Mimic drops generous ammo + optional HP medkit (respecting Crown of Life)
+      const heldAmmoTypes: Exclude<AmmoType, 'melee'>[] = [];
+      for (const slot of state.player.weapons) {
+        if (!slot) continue;
+        const wDef = getWeaponDef(slot.weaponId);
+        if (wDef.ammoType !== 'melee') heldAmmoTypes.push(wDef.ammoType);
+      }
+      const ammoPool = heldAmmoTypes.length > 0 ? heldAmmoTypes : NON_MELEE_AMMO_TYPES;
+      for (let i = 0; i < 2; i++) {
+        const ammoType = rng.pick(ammoPool);
+        spawnPickup(
+          state,
+          'ammo',
+          x,
+          y,
+          { ammoType, value: AMMO_PICKUP_AMOUNT[ammoType] },
+          rng,
+        );
+      }
+      if (state.crown !== 'life' && state.player.hp < state.player.maxHp) {
+        spawnPickup(state, 'hp', x, y, { value: 2 }, rng);
+      }
+      break;
+    }
+
+    case 'weapon_mimic': {
+      // Weapon Mimic drops 2 tier-appropriate weapons on death!
+      for (let i = 0; i < 2; i++) {
+        const weaponId = pickTierWeaponId(state, rng);
+        spawnPickup(state, 'weapon', x, y, { weaponId }, rng);
       }
       break;
     }
@@ -527,13 +612,17 @@ function processSpecialDeaths(state: SimState, rng: SeededRng): void {
     }
   }
 
+  const killsIncreased = state.levelKills > rt.lastLevelKills;
   const died: Array<{ defId: string; bossId?: BossId; x: number; y: number }> = [];
   for (const [id, rec] of rt.trackedSpecials.entries()) {
     if (!aliveIds.has(id)) {
-      died.push({ defId: rec.defId, bossId: rec.bossId, x: rec.x, y: rec.y });
+      if (killsIncreased) {
+        died.push({ defId: rec.defId, bossId: rec.bossId, x: rec.x, y: rec.y });
+      }
       rt.trackedSpecials.delete(id);
     }
   }
+  rt.lastLevelKills = state.levelKills;
 
   for (let i = 0; i < state.corpses.length; i++) {
     const c = state.corpses[i]!;
@@ -574,13 +663,19 @@ function resolveEnemyContactDamage(
 ): void {
   const player = state.player;
   if (!player.alive || e.friendly || e.hp <= 0 || e.elevated || e.contactDamage <= 0) return;
-  if (e.aiState === 'sleep' || e.aiState === 'feign' || e.aiState === 'disguised' || e.aiState === 'intro') {
+  if (
+    e.aiState === 'sleep' ||
+    e.aiState === 'feign' ||
+    e.aiState === 'disguised' ||
+    e.aiState === 'intro' ||
+    e.aiState === 'vanish'
+  ) {
     return;
   }
 
   if (!circleOverlap(player.x, player.y, player.radius, e.x, e.y, e.radius)) return;
 
-  if (hasMutation(player, 'gamma_guts')) {
+  if (hasMutation(player, 'gamma_guts') && e.hurtFlashTicks <= 0) {
     const dx = e.x - player.x;
     const dy = e.y - player.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -625,6 +720,10 @@ function reflectShielderProjectiles(state: SimState, shielder: EnemyEntity): voi
       shielder.radius + pr.radius + 6,
     );
     if (hit.hit) {
+      pr.x = hit.hitX;
+      pr.y = hit.hitY;
+      pr.prevX = hit.hitX;
+      pr.prevY = hit.hitY;
       pr.team = 'enemy';
       pr.vx = -pr.vx;
       pr.vy = -pr.vy;
@@ -843,7 +942,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // DESERT: scorpion & gold_scorpion (coil tell -> tight readable venom fan!)
+    // DESERT: scorpion & gold_scorpion (coil tell -> erratic wavy venom stream!)
     // ------------------------------------------------------------------------
     case 'scorpion': {
       const isGold = e.defId === 'gold_scorpion';
@@ -855,30 +954,39 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
           e.aiState = 'fire';
-          e.aiTimer = 14;
-          const count = isGold ? 11 : 7;
-          const arc = isGold ? 1.18 : 0.9;
-          for (let k = 0; k < count; k++) {
-            const frac = count > 1 ? k / (count - 1) - 0.5 : 0;
+          mem.burstLeft = isGold ? 10 : 6;
+          mem.burstGap = 0;
+          e.aiTimer = isGold ? 24 : 18;
+        }
+      } else if (e.aiState === 'fire') {
+        e.aiTimer -= 1;
+        e.facing = dx >= 0 ? 1 : -1;
+        moveEnemy(state, e, 0, 0);
+        if (mem.burstLeft > 0) {
+          if (mem.burstGap <= 0) {
+            const wave = Math.sin(mem.burstLeft * 1.15) * (isGold ? 0.34 : 0.24);
+            const jitter = rng.range(-0.14, 0.14);
+            const ang = e.aimAngle + wave + jitter;
             spawnEnemyProjectile(state, {
-              x: e.x + Math.cos(e.aimAngle) * 10,
-              y: e.y + Math.sin(e.aimAngle) * 10,
-              angle: e.aimAngle + frac * arc,
-              speed: isGold ? 4.4 : 3.7,
+              x: e.x + Math.cos(ang) * 10,
+              y: e.y + Math.sin(ang) * 10,
+              angle: ang,
+              speed: isGold ? rng.range(4.1, 4.9) : rng.range(3.5, 4.2),
               damage: 2,
               radius: 4,
               lifeTicks: 90,
               sprite: 'sprScorpionBullet',
-              sound: k === 0 ? def.sounds.fire : undefined,
+              sound: mem.burstLeft % 3 === 0 ? def.sounds.fire : undefined,
             });
+            mem.burstLeft -= 1;
+            mem.burstGap = isGold ? 1 : 2;
+          } else {
+            mem.burstGap -= 1;
           }
         }
-      } else if (e.aiState === 'fire') {
-        e.aiTimer -= 1;
-        moveEnemy(state, e, 0, 0);
-        if (e.aiTimer <= 0) {
+        if (e.aiTimer <= 0 && mem.burstLeft <= 0) {
           e.aiState = 'idle';
-          e.attackCooldown = isGold ? 48 : 66;
+          e.attackCooldown = isGold ? 46 : 64;
           mem.moveTicks = rng.int(16, 28);
           mem.pauseTicks = 0;
         }
@@ -888,7 +996,7 @@ function stepHostileEnemy(
         });
         if (alerted && e.aiState !== 'alert' && hasLos && e.attackCooldown <= 0) {
           e.aiState = 'tell';
-          e.aiTimer = isGold ? 12 : 15;
+          e.aiTimer = isGold ? 11 : 14;
           e.aimAngle = toPlayer;
         }
       }
@@ -937,7 +1045,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // SEWERS: big_rat (bloat tell -> bubbling vomit cluster + splits on death!)
+    // SEWERS: big_rat (bloat tell -> vomits live green_rat pack + splits on death!)
     // ------------------------------------------------------------------------
     case 'big_rat': {
       if (e.aiState === 'tell') {
@@ -948,18 +1056,58 @@ function stepHostileEnemy(
         if (e.aiTimer <= 0) {
           e.aiState = 'fire';
           e.aiTimer = 12;
-          for (let k = -2; k <= 2; k++) {
-            spawnEnemyProjectile(state, {
-              x: e.x + Math.cos(e.aimAngle) * 11,
-              y: e.y + Math.sin(e.aimAngle) * 11,
-              angle: e.aimAngle + k * 0.22 + rng.range(-0.06, 0.06),
-              speed: rng.range(3.0, 4.1),
-              damage: 2,
-              radius: 4,
-              lifeTicks: 75,
-              sprite: 'sprEnemyBullet1',
-              sound: k === 0 ? def.sounds.fire : undefined,
+          const liveFastRats = countByDefId(state, 'green_rat');
+          if (liveFastRats < 10) {
+            const count = state.loop > 0 && liveFastRats < 9 ? 2 : 1;
+            for (let k = 0; k < count; k++) {
+              const ang = e.aimAngle + (k === 0 ? 0 : rng.range(-0.35, 0.35));
+              const spawned = createEnemyEntity(
+                state,
+                'green_rat',
+                e.x + Math.cos(ang) * 12,
+                e.y + Math.sin(ang) * 12,
+                rng,
+              );
+              spawned.vx = Math.cos(ang) * 2.8;
+              spawned.vy = Math.sin(ang) * 2.8;
+              const sm = getEnemyMemory(state, spawned);
+              sm.alerted = true;
+              sm.aggroTicks = 135;
+              sm.lastSeenX = player.x;
+              sm.lastSeenY = player.y;
+            }
+            emitEvent(state, {
+              type: 'sfx',
+              sound: def.sounds.fire ?? 'sndRatKingVomit',
+              x: e.x,
+              y: e.y,
             });
+            emitEvent(state, {
+              type: 'particle',
+              kind: 'dust',
+              x: e.x + Math.cos(e.aimAngle) * 10,
+              y: e.y + Math.sin(e.aimAngle) * 10,
+              vx: Math.cos(e.aimAngle) * 1.4,
+              vy: Math.sin(e.aimAngle) * 1.4,
+              color: '#76e055',
+              size: 5,
+              life: 10,
+            });
+          } else {
+            // Fallback toxic spit when Green Rat population cap is reached
+            for (let k = -1; k <= 1; k++) {
+              spawnEnemyProjectile(state, {
+                x: e.x + Math.cos(e.aimAngle) * 11,
+                y: e.y + Math.sin(e.aimAngle) * 11,
+                angle: e.aimAngle + k * 0.24 + rng.range(-0.06, 0.06),
+                speed: rng.range(3.2, 4.1),
+                damage: 2,
+                radius: 4,
+                lifeTicks: 75,
+                sprite: 'sprScorpionBullet',
+                sound: k === 0 ? def.sounds.fire : undefined,
+              });
+            }
           }
         }
       } else if (e.aiState === 'fire') {
@@ -967,7 +1115,7 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
           e.aiState = 'idle';
-          e.attackCooldown = rng.int(60, 84);
+          e.attackCooldown = rng.int(64, 88);
         }
       } else {
         const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 200, 54);
@@ -981,7 +1129,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // SEWERS: gator & buff_gator (aim tell -> shotgun / flak blast!)
+    // SEWERS: gator & buff_gator (aim tell -> shotgun / splitting Flak Cannon ball!)
     // ------------------------------------------------------------------------
     case 'gator': {
       const isBuff = e.defId === 'buff_gator';
@@ -993,22 +1141,40 @@ function stepHostileEnemy(
         if (e.aiTimer <= 0) {
           e.aiState = 'fire';
           e.aiTimer = 12;
-          const pellets = isBuff ? 7 : 5;
-          for (let k = 0; k < pellets; k++) {
-            const offset = (k / (pellets - 1) - 0.5) * (isBuff ? 0.54 : 0.44) + rng.range(-0.04, 0.04);
+          if (isBuff) {
+            // Genuine splitting Flak Cannon ball -> bursts at mid-range into 7 bouncing shell pellets!
             spawnEnemyProjectile(state, {
-              x: e.x + Math.cos(e.aimAngle) * 9,
-              y: e.y + Math.sin(e.aimAngle) * 9,
-              angle: e.aimAngle + offset,
-              speed: isBuff ? rng.range(4.2, 5.4) : rng.range(3.7, 4.6),
-              damage: isBuff ? 2 : 1,
-              radius: isBuff ? 5 : 3.5,
-              lifeTicks: 72,
-              sprite: isBuff ? 'sprEnemyBullet4' : 'sprEnemyBullet1',
-              sound: k === 0 ? def.sounds.fire : undefined,
+              kind: 'flak',
+              x: e.x + Math.cos(e.aimAngle) * 10,
+              y: e.y + Math.sin(e.aimAngle) * 10,
+              angle: e.aimAngle + rng.range(-0.04, 0.04),
+              speed: 6.0,
+              damage: 3,
+              radius: 6,
+              explosionRadius: 0,
+              lifeTicks: 16,
+              sprite: 'sprFlakBullet',
+              sound: def.sounds.fire,
             });
+            e.attackCooldown = rng.int(58, 76);
+          } else {
+            const pellets = 5;
+            for (let k = 0; k < pellets; k++) {
+              const offset = (k / (pellets - 1) - 0.5) * 0.44 + rng.range(-0.04, 0.04);
+              spawnEnemyProjectile(state, {
+                x: e.x + Math.cos(e.aimAngle) * 9,
+                y: e.y + Math.sin(e.aimAngle) * 9,
+                angle: e.aimAngle + offset,
+                speed: rng.range(3.7, 4.6),
+                damage: 1,
+                radius: 3.5,
+                lifeTicks: 72,
+                sprite: 'sprEnemyBullet1',
+                sound: k === 0 ? def.sounds.fire : undefined,
+              });
+            }
+            e.attackCooldown = rng.int(50, 70);
           }
-          e.attackCooldown = isBuff ? rng.int(56, 74) : rng.int(50, 70);
         }
       } else if (e.aiState === 'fire') {
         e.aiTimer -= 1;
@@ -1272,11 +1438,30 @@ function stepHostileEnemy(
           e.aiState = 'rush';
         }
       } else {
-        e.facing = dx >= 0 ? 1 : -1;
-        e.aimAngle = toPlayer;
-        moveEnemy(state, e, Math.cos(toPlayer) * def.moveSpeed, Math.sin(toPlayer) * def.moveSpeed);
+        const hasLos = hasLineOfSight(state.map, e.x, e.y, player.x, player.y);
+        if (hasLos) {
+          mem.lastSeenX = player.x;
+          mem.lastSeenY = player.y;
+          e.facing = dx >= 0 ? 1 : -1;
+          e.aimAngle = toPlayer;
+          moveEnemy(state, e, Math.cos(toPlayer) * def.moveSpeed, Math.sin(toPlayer) * def.moveSpeed);
+        } else {
+          // Navigate around cover toward last known player coordinates instead of rubbing walls
+          const ldx = mem.lastSeenX - e.x;
+          const ldy = mem.lastSeenY - e.y;
+          const lDist = Math.hypot(ldx, ldy);
+          const chaseAng = lDist > 12 ? Math.atan2(ldy, ldx) : toPlayer;
+          e.facing = Math.cos(chaseAng) >= 0 ? 1 : -1;
+          e.aimAngle = chaseAng;
+          const mv = moveEnemy(state, e, Math.cos(chaseAng) * def.moveSpeed, Math.sin(chaseAng) * def.moveSpeed);
+          if (mv.hitWall) {
+            const flankAng = chaseAng + mem.strafeDir * 1.15;
+            moveEnemy(state, e, Math.cos(flankAng) * def.moveSpeed * 0.9, Math.sin(flankAng) * def.moveSpeed * 0.9);
+            mem.strafeDir = mem.strafeDir === 1 ? -1 : 1;
+          }
+        }
         if (dist < 32 && e.attackCooldown <= 0) {
-          // Real Nuclear Throne Assassin pipe/blade slash (damages player & swats bullets!)
+          // Real Nuclear Throne Assassin pipe/blade slash (destroys bullets instead of 2x reflecting!)
           state.projectiles.push({
             id: allocEntityId(state),
             kind: 'melee_slash',
@@ -1297,8 +1482,8 @@ function stepHostileEnemy(
             explosionRadius: 0,
             sprite: 'sprSlash',
             hitIds: [],
-            deflectsProjectiles: true,
-            destroysProjectiles: false,
+            deflectsProjectiles: false,
+            destroysProjectiles: true,
             meleeReach: 26,
             meleeArcDeg: 130,
           });
@@ -1356,7 +1541,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // CAVES: laser_crystal & lightning_crystal (sightline laser lock tell!)
+    // CAVES: laser_crystal & lightning_crystal (5 fast pink beams / 5 cyan bolts!)
     // ------------------------------------------------------------------------
     case 'laser_crystal': {
       const isLightning = e.defId === 'lightning_crystal';
@@ -1366,24 +1551,24 @@ function stepHostileEnemy(
         e.aiTimer -= 1;
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
-          const bolts = isLightning ? 5 : 3;
+          const bolts = 5;
           for (let b = 0; b < bolts; b++) {
-            const spread = (b - (bolts - 1) * 0.5) * (isLightning ? 0.22 : 0.08);
+            const spread = (b - (bolts - 1) * 0.5) * (isLightning ? 0.24 : 0.14);
             spawnEnemyProjectile(state, {
-              kind: 'enemy_laser',
+              kind: isLightning ? 'lightning' : 'enemy_laser',
               x: e.x + Math.cos(e.aimAngle + spread) * 12,
               y: e.y + Math.sin(e.aimAngle + spread) * 12,
               angle: e.aimAngle + spread,
-              speed: isLightning ? 13 : 16,
+              speed: isLightning ? 14 : 22,
               damage: isLightning ? 3 : 4,
               radius: 4,
-              lifeTicks: 38,
+              lifeTicks: isLightning ? 34 : 28,
               sprite: isLightning ? 'sprLightningBall' : 'sprLaser',
               sound: b === 0 ? def.sounds.fire : undefined,
             });
           }
           e.aiState = 'idle';
-          e.attackCooldown = isLightning ? 58 : 70;
+          e.attackCooldown = isLightning ? 56 : 68;
         }
       } else {
         const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 235, 92);
@@ -1398,9 +1583,10 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // FROZEN CITY: snowbot (hurls nearby Cars OR wind-up tell -> ice slide charge!)
+    // FROZEN CITY: snowbot (hurls LOS Cars, ice slide charge, headless low-HP berserk!)
     // ------------------------------------------------------------------------
     case 'snowbot': {
+      const headlessBerserk = e.hp <= e.maxHp * 0.4;
       e.facing = dx >= 0 ? 1 : -1;
       if (e.aiState === 'tell') {
         if (e.aiTimer > 4) e.aimAngle = toPlayer;
@@ -1427,7 +1613,7 @@ function stepHostileEnemy(
             e.attackCooldown = 52;
           } else {
             e.aiState = 'fire';
-            e.aiTimer = 22;
+            e.aiTimer = headlessBerserk ? 28 : 22;
             e.targetX = Math.cos(e.aimAngle);
             e.targetY = Math.sin(e.aimAngle);
             emitEvent(state, { type: 'sfx', sound: def.sounds.fire ?? 'sndSnowBotSlideStart', x: e.x, y: e.y });
@@ -1435,16 +1621,17 @@ function stepHostileEnemy(
         }
       } else if (e.aiState === 'fire') {
         e.aiTimer -= 1;
-        const mv = moveEnemy(state, e, e.targetX * (def.moveSpeed * 1.6), e.targetY * (def.moveSpeed * 1.6));
+        const chargeMult = headlessBerserk ? 1.85 : 1.6;
+        const mv = moveEnemy(state, e, e.targetX * (def.moveSpeed * chargeMult), e.targetY * (def.moveSpeed * chargeMult));
         if (state.tick % 2 === 0) {
           emitEvent(state, {
             type: 'particle',
-            kind: 'dust',
+            kind: headlessBerserk ? 'spark' : 'dust',
             x: e.x,
             y: e.y + 4,
             vx: -e.targetX * 0.8,
             vy: -e.targetY * 0.8,
-            color: '#d9ecff',
+            color: headlessBerserk ? '#ff6644' : '#d9ecff',
             size: 3,
             life: 7,
           });
@@ -1453,27 +1640,40 @@ function stepHostileEnemy(
           if (mv.hitWall) {
             emitEvent(state, { type: 'shake', trauma: 0.14 });
             e.aiState = 'stagger';
-            e.aiTimer = 14;
+            e.aiTimer = headlessBerserk ? 8 : 14;
           } else {
             e.aiState = 'idle';
           }
-          e.attackCooldown = 38;
+          e.attackCooldown = headlessBerserk ? 16 : 38;
         }
       } else if (e.aiState === 'stagger') {
         e.aiTimer -= 1;
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) e.aiState = 'idle';
       } else {
-        const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed * 0.72, rng, 215, 0);
-        if (alerted && e.aiState !== 'alert' && hasLos && dist < 175 && e.attackCooldown <= 0) {
-          // Check if an intact Car prop is within grab range!
+        const { hasLos, alerted } = stepTacticalSkirmish(
+          state,
+          e,
+          def.moveSpeed * (headlessBerserk ? 1.05 : 0.72),
+          rng,
+          215,
+          0,
+        );
+        if (alerted && e.aiState !== 'alert' && hasLos && dist < 185 && e.attackCooldown <= 0) {
+          // Check if an intact Car prop with clear LOS is within grab range (never through walls!)
+          const rt = getAreaRuntime(state);
           let carIdx = -1;
-          for (let p = 0; p < state.props.length; p++) {
-            const prop = state.props[p]!;
-            if (prop.kind !== 'car' || prop.hp <= 0) continue;
-            if (Math.hypot(prop.x - e.x, prop.y - e.y) <= 44) {
-              carIdx = p;
-              break;
+          if (!headlessBerserk) {
+            for (let p = 0; p < state.props.length; p++) {
+              const prop = state.props[p]!;
+              if (prop.kind !== 'car' || prop.hp <= 0 || prop.id === rt.venusCarPropId) continue;
+              if (
+                Math.hypot(prop.x - e.x, prop.y - e.y) <= 44 &&
+                hasLineOfSight(state.map, e.x, e.y, prop.x, prop.y)
+              ) {
+                carIdx = p;
+                break;
+              }
             }
           }
           if (carIdx !== -1) {
@@ -1481,7 +1681,7 @@ function stepHostileEnemy(
             mem.carryingCar = true;
           }
           e.aiState = 'tell';
-          e.aiTimer = 13;
+          e.aiTimer = headlessBerserk ? 7 : 13;
           e.aimAngle = toPlayer;
         }
       }
@@ -1639,16 +1839,79 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // LABS: necromancer (keeps distance behind pack + channels corpse revive!)
+    // LABS: necromancer (keeps distance behind pack + telegraphed corpse revive!)
     // ------------------------------------------------------------------------
     case 'necromancer': {
       const rt = getAreaRuntime(state);
       const { alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 225, 114, { kiteDist: 92 });
+
+      if (mem.necroReviveTicks > 0) {
+        mem.necroReviveTicks -= 1;
+        e.aiState = 'tell';
+        if (mem.necroReviveTicks % 3 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'revive',
+            x: mem.necroTargetX,
+            y: mem.necroTargetY,
+            vx: rng.range(-0.4, 0.4),
+            vy: -0.9,
+            color: '#c44dff',
+            size: 10,
+            life: 8,
+          });
+        }
+        if (mem.necroReviveTicks <= 0) {
+          // Only complete revive if corpse still exists (Melting can counterplay by exploding it!)
+          let targetIdx = -1;
+          let bestSq = 28 * 28;
+          for (let c = 0; c < state.corpses.length; c++) {
+            const corpse = state.corpses[c]!;
+            if (BOSS_CORPSE_SPRITES.has(corpse.sprite)) continue;
+            const dSq =
+              (corpse.x - mem.necroTargetX) * (corpse.x - mem.necroTargetX) +
+              (corpse.y - mem.necroTargetY) * (corpse.y - mem.necroTargetY);
+            if (dSq < bestSq) {
+              bestSq = dSq;
+              targetIdx = c;
+            }
+          }
+          if (targetIdx !== -1 && rt.revivedFreakCount < 16) {
+            const corpse = state.corpses[targetIdx]!;
+            state.corpses.splice(targetIdx, 1);
+            const revived = createEnemyEntity(state, 'freak', corpse.x, corpse.y, rng);
+            const rm = getEnemyMemory(state, revived);
+            rm.alerted = true;
+            rm.aggroTicks = 135;
+            rm.lastSeenX = player.x;
+            rm.lastSeenY = player.y;
+            rt.revivedFreakCount += 1;
+            e.aiState = 'fire';
+            emitEvent(state, {
+              type: 'particle',
+              kind: 'revive',
+              x: corpse.x,
+              y: corpse.y,
+              vx: 0,
+              vy: -0.8,
+              color: '#e088ff',
+              size: 14,
+              life: 12,
+            });
+          } else {
+            e.aiState = 'idle';
+          }
+          e.attackCooldown = 68;
+        }
+        break;
+      }
+
       if (alerted && e.aiState !== 'alert' && e.attackCooldown <= 0 && rt.revivedFreakCount < 16 && state.corpses.length > 0) {
         let bestIdx = -1;
         let bestSq = 155 * 155;
         for (let c = 0; c < state.corpses.length; c++) {
           const corpse = state.corpses[c]!;
+          if (BOSS_CORPSE_SPRITES.has(corpse.sprite)) continue;
           const cdx = corpse.x - e.x;
           const cdy = corpse.y - e.y;
           const dSq = cdx * cdx + cdy * cdy;
@@ -1659,16 +1922,10 @@ function stepHostileEnemy(
         }
         if (bestIdx !== -1) {
           const corpse = state.corpses[bestIdx]!;
-          state.corpses.splice(bestIdx, 1);
-          const revived = createEnemyEntity(state, 'freak', corpse.x, corpse.y, rng);
-          const rm = getEnemyMemory(state, revived);
-          rm.alerted = true;
-          rm.aggroTicks = 135;
-          rm.lastSeenX = player.x;
-          rm.lastSeenY = player.y;
-          rt.revivedFreakCount += 1;
-          e.aiState = 'fire';
-          e.attackCooldown = 70;
+          mem.necroTargetX = corpse.x;
+          mem.necroTargetY = corpse.y;
+          mem.necroReviveTicks = 10;
+          e.aiState = 'tell';
           emitEvent(state, {
             type: 'sfx',
             sound: def.sounds.fire ?? 'sndNecromancerRevive',
@@ -1681,10 +1938,10 @@ function stepHostileEnemy(
             x: corpse.x,
             y: corpse.y,
             vx: 0,
-            vy: -0.8,
+            vy: -0.6,
             color: '#c44dff',
             size: 12,
-            life: 12,
+            life: 10,
           });
         }
       } else if (e.aiState !== 'alert') {
@@ -1733,7 +1990,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // PALACE & VAULT: guardian & crown_guardian (alert -> appear tell -> orb fan!)
+    // PALACE & VAULT: guardian & crown_guardian (vanish -> safe teleport -> appear tell -> orb fan!)
     // ------------------------------------------------------------------------
     case 'guardian': {
       const aw = evaluateAwareness(state, e, rng, 235, 80);
@@ -1742,6 +1999,7 @@ function stepHostileEnemy(
       moveEnemy(state, e, 0, 0);
 
       if (e.aiState === 'alert') {
+        e.invulnerable = false;
         e.aiTimer -= 1;
         if (e.aiTimer <= 0) {
           e.aiState = 'idle';
@@ -1749,22 +2007,93 @@ function stepHostileEnemy(
         }
         break;
       }
-      if (!aw.alerted) break;
+      if (!aw.alerted) {
+        e.invulnerable = false;
+        break;
+      }
 
+      if (e.aiState === 'vanish') {
+        e.invulnerable = true;
+        e.aiTimer -= 1;
+        if (e.aiTimer % 4 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'dust',
+            x: e.x,
+            y: e.y,
+            vx: rng.range(-0.6, 0.6),
+            vy: rng.range(-0.6, 0.6),
+            color: '#b8ff7a',
+            size: 4,
+            life: 7,
+          });
+        }
+        if (e.aiTimer <= 0) {
+          let dest: { x: number; y: number } | null = null;
+          for (let attempt = 0; attempt < 16; attempt++) {
+            const ang = rng.range(0, Math.PI * 2);
+            const rad = rng.range(82, 138);
+            const cand = findNearestFloor(
+              state.map,
+              player.x + Math.cos(ang) * rad,
+              player.y + Math.sin(ang) * rad,
+              10,
+            );
+            const dFromPlayer = Math.hypot(cand.x - player.x, cand.y - player.y);
+            if (dFromPlayer >= 68 && !isCircleOverlappingSolid(state.map, cand.x, cand.y, e.radius)) {
+              dest = cand;
+              break;
+            }
+          }
+          if (!dest) {
+            const fallbackAng = toPlayer + Math.PI;
+            dest = findNearestFloor(
+              state.map,
+              player.x + Math.cos(fallbackAng) * 96,
+              player.y + Math.sin(fallbackAng) * 96,
+              12,
+            );
+          }
+          e.x = dest.x;
+          e.y = dest.y;
+          e.prevX = dest.x;
+          e.prevY = dest.y;
+          e.invulnerable = false;
+          e.aiState = 'tell';
+          e.aiTimer = 12;
+          e.attackCooldown = 12;
+          emitEvent(state, {
+            type: 'sfx',
+            sound: e.defId === 'crown_guardian' ? 'sndCrownGuardianAppear' : 'sndGuardianAppear',
+            x: e.x,
+            y: e.y,
+          });
+        }
+        break;
+      }
+
+      if (e.aiState === 'tell') {
+        e.invulnerable = false;
+        e.aiTimer -= 1;
+        if (e.aiTimer <= 0) {
+          e.aiState = 'idle';
+          e.aiTimer = rng.int(72, 108);
+        }
+        break;
+      }
+
+      e.invulnerable = false;
       e.aiTimer -= 1;
       if (e.aiTimer <= 0) {
-        emitEvent(state, { type: 'sfx', sound: 'sndGuardianDisappear', x: e.x, y: e.y });
-        const ang = rng.range(0, Math.PI * 2);
-        const rad = rng.range(78, 134);
-        const dest = findNearestFloor(state.map, player.x + Math.cos(ang) * rad, player.y + Math.sin(ang) * rad, 10);
-        e.x = dest.x;
-        e.y = dest.y;
-        e.prevX = dest.x;
-        e.prevY = dest.y;
-        e.aiState = 'tell';
-        e.aiTimer = rng.int(75, 110);
-        e.attackCooldown = 16;
-        emitEvent(state, { type: 'sfx', sound: 'sndGuardianAppear', x: e.x, y: e.y });
+        emitEvent(state, {
+          type: 'sfx',
+          sound: e.defId === 'crown_guardian' ? 'sndCrownGuardianDisappear' : 'sndGuardianDisappear',
+          x: e.x,
+          y: e.y,
+        });
+        e.aiState = 'vanish';
+        e.aiTimer = 14;
+        e.invulnerable = true;
       } else if (e.attackCooldown <= 0 && dist < 240) {
         e.aiState = 'fire';
         const orbs = e.defId === 'crown_guardian' ? 7 : 5;
@@ -1791,7 +2120,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // PALACE: explo_guardian (charge tell -> explosive orb bursts!)
+    // PALACE: explo_guardian (charge tell -> explosive orb burst / close radial blast!)
     // ------------------------------------------------------------------------
     case 'explo_guardian': {
       if (e.aiState === 'tell') {
@@ -1802,20 +2131,40 @@ function stepHostileEnemy(
         if (e.aiTimer <= 0) {
           e.aiState = 'fire';
           e.aiTimer = 10;
-          for (let k = -1; k <= 1; k++) {
-            spawnEnemyProjectile(state, {
-              kind: 'boss_orb',
-              x: e.x + Math.cos(e.aimAngle) * 10,
-              y: e.y + Math.sin(e.aimAngle) * 10,
-              angle: e.aimAngle + k * 0.24,
-              speed: 3.7,
-              damage: 3,
-              radius: 5,
-              explosionRadius: 20,
-              lifeTicks: 90,
-              sprite: 'sprExploGuardianBullet',
-              sound: k === 0 ? def.sounds.fire : undefined,
-            });
+          if (e.aiPhase === 1) {
+            // Close-range radial explosive charge release
+            for (let k = 0; k < 6; k++) {
+              const ang = (k / 6) * Math.PI * 2 + e.aimAngle;
+              spawnEnemyProjectile(state, {
+                kind: 'boss_orb',
+                x: e.x + Math.cos(ang) * 10,
+                y: e.y + Math.sin(ang) * 10,
+                angle: ang,
+                speed: 3.5,
+                damage: 3,
+                radius: 5,
+                explosionRadius: 20,
+                lifeTicks: 75,
+                sprite: 'sprExploGuardianBullet',
+                sound: k === 0 ? def.sounds.fire : undefined,
+              });
+            }
+          } else {
+            for (let k = -1; k <= 1; k++) {
+              spawnEnemyProjectile(state, {
+                kind: 'boss_orb',
+                x: e.x + Math.cos(e.aimAngle) * 10,
+                y: e.y + Math.sin(e.aimAngle) * 10,
+                angle: e.aimAngle + k * 0.24,
+                speed: 3.7,
+                damage: 3,
+                radius: 5,
+                explosionRadius: 20,
+                lifeTicks: 90,
+                sprite: 'sprExploGuardianBullet',
+                sound: k === 0 ? def.sounds.fire : undefined,
+              });
+            }
           }
           e.attackCooldown = 64;
         }
@@ -1825,9 +2174,10 @@ function stepHostileEnemy(
         if (e.aiTimer <= 0) e.aiState = 'idle';
       } else {
         const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 220, 68);
-        if (alerted && e.aiState !== 'alert' && hasLos && e.attackCooldown <= 0) {
+        if (alerted && e.aiState !== 'alert' && (hasLos || dist < 72) && e.attackCooldown <= 0) {
           e.aiState = 'tell';
           e.aiTimer = 12;
+          e.aiPhase = dist < 72 ? 1 : 0;
           e.aimAngle = toPlayer;
         }
       }
@@ -1835,7 +2185,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // PALACE: guardian_dog (crouch tell -> long leap over walls + orb ring!)
+    // PALACE: guardian_dog (crouch tell -> heavy melee leap over walls, NO orb ring!)
     // ------------------------------------------------------------------------
     case 'guardian_dog': {
       e.facing = dx >= 0 ? 1 : -1;
@@ -1863,27 +2213,27 @@ function stepHostileEnemy(
           e.elevated = false;
           e.elevZ = 0;
           e.aiState = 'idle';
-          e.attackCooldown = 52;
-          emitEvent(state, { type: 'shake', trauma: 0.22 });
+          e.attackCooldown = 46;
+          emitEvent(state, { type: 'shake', trauma: 0.24 });
           for (let k = 0; k < 8; k++) {
             const ang = (k / 8) * Math.PI * 2;
-            spawnEnemyProjectile(state, {
-              kind: 'boss_orb',
-              x: e.x + Math.cos(ang) * 10,
-              y: e.y + Math.sin(ang) * 10,
-              angle: ang,
-              speed: 3.5,
-              damage: 2,
-              radius: 5,
-              lifeTicks: 95,
-              sprite: 'sprGuardianBullet',
+            emitEvent(state, {
+              type: 'particle',
+              kind: 'dust',
+              x: e.x + Math.cos(ang) * 8,
+              y: e.y + Math.sin(ang) * 8,
+              vx: Math.cos(ang) * 1.9,
+              vy: Math.sin(ang) * 1.9,
+              color: '#9ce67a',
+              size: 4,
+              life: 10,
             });
           }
         }
       } else {
         e.elevated = false;
         e.elevZ = 0;
-        const { alerted, hasLos } = stepTacticalSkirmish(state, e, def.moveSpeed * 0.8, rng, 235, 42);
+        const { alerted, hasLos } = stepTacticalSkirmish(state, e, def.moveSpeed * 0.85, rng, 235, 34);
         if (alerted && e.aiState !== 'alert' && (hasLos || dist < 140) && dist < 185 && e.attackCooldown <= 0) {
           e.aiState = 'tell';
           e.aiTimer = 13;
@@ -1894,10 +2244,16 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // IDPD: grunt (tell -> IDPD burst + grenade + combat roll!)
+    // IDPD: grunt (tell -> IDPD burst + grenade + sideways tactical combat roll!)
     // ------------------------------------------------------------------------
     case 'idpd_grunt': {
-      if (e.aiState === 'tell') {
+      if (e.aiState === 'roll') {
+        e.aiTimer -= 1;
+        const mv = moveEnemy(state, e, e.targetX * (def.moveSpeed * 1.75), e.targetY * (def.moveSpeed * 1.75));
+        if (e.aiTimer <= 0 || mv.hitWall) {
+          e.aiState = 'idle';
+        }
+      } else if (e.aiState === 'tell') {
         e.facing = dx >= 0 ? 1 : -1;
         if (e.aiTimer > 3) e.aimAngle = toPlayer;
         e.aiTimer -= 1;
@@ -1936,13 +2292,29 @@ function stepHostileEnemy(
             e.attackCooldown = 46;
           }
           e.aiPhase += 1;
-          e.aiState = 'idle';
+          if (rng.chance(0.48)) {
+            const rollAng = e.aimAngle + (rng.chance(0.5) ? Math.PI * 0.5 : -Math.PI * 0.5);
+            e.targetX = Math.cos(rollAng);
+            e.targetY = Math.sin(rollAng);
+            e.aiState = 'roll';
+            e.aiTimer = 11;
+            emitEvent(state, { type: 'sfx', sound: 'sndRoll', x: e.x, y: e.y, pitchJitter: 0.12 });
+          } else {
+            e.aiState = 'idle';
+          }
         }
       } else {
         const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 225, 78, {
           burstMove: true,
         });
-        if (alerted && e.aiState !== 'alert' && hasLos && e.attackCooldown <= 0) {
+        if (alerted && e.aiState !== 'alert' && e.hurtFlashTicks >= 3 && rng.chance(0.5)) {
+          const rollAng = toPlayer + (rng.chance(0.5) ? Math.PI * 0.5 : -Math.PI * 0.5);
+          e.targetX = Math.cos(rollAng);
+          e.targetY = Math.sin(rollAng);
+          e.aiState = 'roll';
+          e.aiTimer = 11;
+          emitEvent(state, { type: 'sfx', sound: 'sndRoll', x: e.x, y: e.y, pitchJitter: 0.12 });
+        } else if (alerted && e.aiState !== 'alert' && hasLos && e.attackCooldown <= 0) {
           e.aiState = 'tell';
           e.aiTimer = 8;
           e.aimAngle = toPlayer;
@@ -1952,25 +2324,38 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // IDPD: inspector (telekinesis pull -> heavy Popo slug!)
+    // IDPD: inspector (holds stance while channeling telekinesis pull -> Popo slug!)
     // ------------------------------------------------------------------------
     case 'idpd_inspector': {
-      const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 225, 86, {
-        burstMove: true,
-      });
       if (e.aiState === 'fire') {
+        e.facing = dx >= 0 ? 1 : -1;
+        e.aimAngle = toPlayer;
         e.aiTimer -= 1;
+        moveEnemy(state, e, 0, 0);
         if (player.alive && dist < 175 && dist > 18) {
           const mvP = moveCircleWithSlide(
             state.map,
             player.x,
             player.y,
-            (-dx / dist) * 1.1,
-            (-dy / dist) * 1.1,
+            (-dx / dist) * 1.15,
+            (-dy / dist) * 1.15,
             player.radius,
           );
           player.x = mvP.x;
           player.y = mvP.y;
+          if (e.aiTimer % 3 === 0) {
+            emitEvent(state, {
+              type: 'particle',
+              kind: 'dust',
+              x: player.x,
+              y: player.y,
+              vx: (-dx / dist) * 2.2,
+              vy: (-dy / dist) * 2.2,
+              color: '#5ecbff',
+              size: 3,
+              life: 7,
+            });
+          }
         }
         if (e.aiTimer <= 0) {
           e.aiState = 'idle';
@@ -1988,10 +2373,15 @@ function stepHostileEnemy(
           });
           e.attackCooldown = 56;
         }
-      } else if (alerted && e.aiState !== 'alert' && hasLos && e.attackCooldown <= 0) {
-        e.aiState = 'fire';
-        e.aiTimer = 22;
-        emitEvent(state, { type: 'sfx', sound: 'sndInspectorStartM', x: e.x, y: e.y });
+      } else {
+        const { hasLos, alerted } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 225, 86, {
+          burstMove: true,
+        });
+        if (alerted && e.aiState !== 'alert' && hasLos && e.attackCooldown <= 0) {
+          e.aiState = 'fire';
+          e.aiTimer = 22;
+          emitEvent(state, { type: 'sfx', sound: 'sndInspectorStartM', x: e.x, y: e.y });
+        }
       }
       break;
     }
@@ -2007,6 +2397,19 @@ function stepHostileEnemy(
         e.aiTimer -= 1;
         moveEnemy(state, e, 0, 0);
         reflectShielderProjectiles(state, e);
+        if (e.aiTimer % 5 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'spark',
+            x: e.x + rng.range(-8, 8),
+            y: e.y + rng.range(-8, 8),
+            vx: 0,
+            vy: -0.4,
+            color: '#4eb8ff',
+            size: 3,
+            life: 6,
+          });
+        }
         if (e.aiTimer <= 0) {
           e.invulnerable = false;
           e.aiState = 'idle';
@@ -2053,7 +2456,7 @@ function stepHostileEnemy(
     }
 
     // ------------------------------------------------------------------------
-    // IDPD: idpd_van (drives carving walls, stops & deploys IDPD squad!)
+    // IDPD: idpd_van (drives carving walls -> deploys squad & opens HQ hijack boarding -> departs via blue portal!)
     // ------------------------------------------------------------------------
     case 'idpd_van': {
       if (e.aiState === 'drive') {
@@ -2067,41 +2470,99 @@ function stepHostileEnemy(
         );
         if (e.aiTimer <= 0 || dist < 44) {
           e.aiState = 'open';
-          e.aiTimer = 18;
+          e.aiTimer = 50;
+          e.contactDamage = 0;
           emitEvent(state, { type: 'sfx', sound: 'sndVanOpen', x: e.x, y: e.y });
           emitEvent(state, { type: 'shake', trauma: 0.3 });
-        }
-      } else if (e.aiState === 'open') {
-        e.aiTimer -= 1;
-        moveEnemy(state, e, 0, 0, { noSep: true });
-        if (e.aiTimer <= 0 && e.aiPhase === 0) {
-          e.aiPhase = 1;
-          e.aiState = 'parked';
-          const squad = ['idpd_grunt', 'idpd_inspector', 'idpd_shielder'] as const;
-          for (let k = 0; k < squad.length; k++) {
-            const ang = e.aimAngle + Math.PI + (k - 1) * 0.65;
-            createEnemyEntity(
-              state,
-              squad[k]!,
-              e.x + Math.cos(ang) * 20,
-              e.y + Math.sin(ang) * 20,
-              rng,
-            );
+          if (state.loop > 0) {
+            emitEvent(state, {
+              type: 'pickup_text',
+              x: e.x,
+              y: e.y - 16,
+              text: 'VAN OPEN [E]',
+              color: '#5ecbff',
+            });
+          }
+          if (e.aiPhase === 0) {
+            e.aiPhase = 1;
+            const squad = ['idpd_grunt', 'idpd_inspector', 'idpd_shielder'] as const;
+            for (let k = 0; k < squad.length; k++) {
+              const ang = e.aimAngle + Math.PI + (k - 1) * 0.65;
+              createEnemyEntity(
+                state,
+                squad[k]!,
+                e.x + Math.cos(ang) * 20,
+                e.y + Math.sin(ang) * 20,
+                rng,
+              );
+            }
           }
         }
+      } else if (e.aiState === 'open') {
+        e.contactDamage = 0;
+        e.aiTimer -= 1;
+        moveEnemy(state, e, 0, 0, { noSep: true });
+        if (e.aiTimer <= 0) {
+          e.aiState = 'parked';
+          e.aiTimer = 45;
+        }
       } else {
+        // Parked empty van departs cleanly via blue IDPD portal so it NEVER softlocks level exit!
         e.contactDamage = 0;
         moveEnemy(state, e, 0, 0, { noSep: true });
+        const hasOtherHostiles = state.enemies.some(
+          (o) => !o.friendly && o.hp > 0 && o.defId !== 'idpd_van' && o.aiState !== 'disguised',
+        );
+        if (!hasOtherHostiles && e.aiTimer > 8) {
+          e.aiTimer = 8;
+        }
+        e.aiTimer -= 1;
+        if (e.aiTimer <= 0) {
+          const rt = getAreaRuntime(state);
+          // Remove from trackedSpecials BEFORE splicing so portal departure does not explode!
+          rt.trackedSpecials.delete(e.id);
+          const idx = state.enemies.indexOf(e);
+          if (idx !== -1) state.enemies.splice(idx, 1);
+          emitEvent(state, { type: 'sfx', sound: 'sndVanPortal', x: e.x, y: e.y });
+          for (let k = 0; k < 8; k++) {
+            const ang = (k / 8) * Math.PI * 2;
+            emitEvent(state, {
+              type: 'particle',
+              kind: 'spark',
+              x: e.x + Math.cos(ang) * 10,
+              y: e.y + Math.sin(ang) * 10,
+              vx: Math.cos(ang) * 1.8,
+              vy: Math.sin(ang) * 1.8,
+              color: '#4eb8ff',
+              size: 4,
+              life: 12,
+            });
+          }
+        }
       }
       break;
     }
 
     // ------------------------------------------------------------------------
-    // MIMICS: mimic & weapon_mimic (wakes on proximity/damage and bites/fires!)
+    // MIMICS: mimic (breath tell -> melee lunge/bite!) & weapon_mimic (weapon bursts!)
     // ------------------------------------------------------------------------
     case 'mimic': {
       if (e.aiState === 'disguised') {
         moveEnemy(state, e, 0, 0, { noSep: true });
+        // Subtle authentic NT chest-breath / lid-chatter tell while disguised
+        if ((state.tick + e.id * 17) % 90 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'dust',
+            x: e.x,
+            y: e.y - 6,
+            vx: rng.range(-0.3, 0.3),
+            vy: -0.6,
+            color: e.defId === 'weapon_mimic' ? '#ff6b6b' : '#ffe680',
+            size: 2,
+            life: 7,
+          });
+        }
         if (dist <= 64 || e.hp < e.maxHp || e.hurtFlashTicks > 0) {
           mem.alerted = true;
           mem.aggroTicks = 180;
@@ -2109,7 +2570,7 @@ function stepHostileEnemy(
           mem.lastSeenY = player.y;
           e.aiState = 'tell';
           e.aiTimer = 10;
-          e.attackCooldown = 16;
+          e.attackCooldown = 14;
           emitEvent(state, { type: 'sfx', sound: 'sndMimicSlurp', x: e.x, y: e.y });
           emitEvent(state, {
             type: 'enemy_alert',
@@ -2126,26 +2587,71 @@ function stepHostileEnemy(
         if (e.aiTimer <= 0) e.aiState = 'awake';
       } else {
         const isWeaponMimic = e.defId === 'weapon_mimic';
-        const { hasLos } = stepTacticalSkirmish(state, e, def.moveSpeed, rng, 210, isWeaponMimic ? 58 : 0);
-        if (hasLos && e.attackCooldown <= 0) {
-          e.aiState = 'fire';
-          const count = isWeaponMimic ? 4 : 3;
-          for (let k = 0; k < count; k++) {
-            const offset = (k / (count - 1) - 0.5) * 0.42;
-            spawnEnemyProjectile(state, {
-              x: e.x + Math.cos(toPlayer) * 8,
-              y: e.y + Math.sin(toPlayer) * 8,
-              angle: toPlayer + offset,
-              speed: isWeaponMimic ? 5.0 : 4.0,
-              damage: 2,
-              radius: 4,
-              sprite: 'sprEnemyBullet1',
-              sound: k === 0 ? def.sounds.fire : undefined,
-            });
+        const { hasLos } = stepTacticalSkirmish(
+          state,
+          e,
+          isWeaponMimic ? def.moveSpeed : def.moveSpeed * 1.15,
+          rng,
+          215,
+          isWeaponMimic ? 58 : 0,
+        );
+        if (isWeaponMimic) {
+          if (hasLos && e.attackCooldown <= 0) {
+            e.aiState = 'fire';
+            const count = 4;
+            for (let k = 0; k < count; k++) {
+              const offset = (k / (count - 1) - 0.5) * 0.42;
+              spawnEnemyProjectile(state, {
+                x: e.x + Math.cos(toPlayer) * 8,
+                y: e.y + Math.sin(toPlayer) * 8,
+                angle: toPlayer + offset,
+                speed: 5.0,
+                damage: 2,
+                radius: 4,
+                sprite: 'sprEnemyBullet1',
+                sound: k === 0 ? def.sounds.fire : undefined,
+              });
+            }
+            e.attackCooldown = 38;
+          } else {
+            e.aiState = 'awake';
           }
-          e.attackCooldown = isWeaponMimic ? 38 : 50;
         } else {
-          e.aiState = 'awake';
+          // Ammo Mimic: aggressive melee chaser + snapping bite lunge (NO ranged spread!)
+          if (dist < 30 && e.attackCooldown <= 0) {
+            e.aiState = 'fire';
+            e.vx += Math.cos(toPlayer) * 3.4;
+            e.vy += Math.sin(toPlayer) * 3.4;
+            state.projectiles.push({
+              id: allocEntityId(state),
+              kind: 'melee_slash',
+              team: 'enemy',
+              x: e.x + Math.cos(toPlayer) * 10,
+              y: e.y + Math.sin(toPlayer) * 10,
+              prevX: e.x,
+              prevY: e.y,
+              vx: 0,
+              vy: 0,
+              angle: toPlayer,
+              radius: 13,
+              damage: Math.max(3, def.contactDamage),
+              lifeTicks: 3,
+              maxLifeTicks: 3,
+              pierce: 1,
+              bounce: 0,
+              explosionRadius: 0,
+              sprite: 'sprSlash',
+              hitIds: [],
+              deflectsProjectiles: false,
+              destroysProjectiles: false,
+              meleeReach: 22,
+              meleeArcDeg: 110,
+            });
+            emitEvent(state, { type: 'sfx', sound: 'sndMimicMelee', x: e.x, y: e.y });
+            e.attackCooldown = 26;
+          } else {
+            e.aiState = 'awake';
+          }
         }
       }
       break;
@@ -2262,8 +2768,242 @@ function stepScheduledIdpdWaves(state: SimState, rng: SeededRng): void {
 }
 
 /**
+ * Evaluates all authentic Nuclear Throne secret-level & Crown Vault triggers:
+ * - 1-1 Early Big Bandit (chests opened + rad canister broken with <= 1 kill -> Oasis 1-?)
+ * - 2-1 Sewer Manhole explosion -> Pizza Sewers (2-?)
+ * - 3-1 Golden Car repair via Screwdriver -> Y.V.'s Mansion (3-?, entered via E)
+ * - 3-3 Cursed weapon portal redirect -> Cursed Crystal Caves (4-?)
+ * - 3-2 / 5-2 / 7-2 Proto Statue rad absorption + shatter -> Crown Vault (vault)
+ * - Vault exit return-area restoration
+ */
+function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
+  const rt = getAreaRuntime(state);
+  const stillPresent =
+    rt.lastScannedEventIdx > 0 &&
+    state.events[rt.lastScannedEventIdx - 1] === rt.lastScannedEventRef;
+  const startEventIdx = stillPresent ? rt.lastScannedEventIdx : 0;
+
+  // 1. 1-1 Early Big Bandit spawn (Oasis 1-? setup)
+  if (
+    state.areaCode === '1-1' &&
+    !state.boss &&
+    !rt.earlyBigBanditSpawned &&
+    !state.portal.active &&
+    state.levelKills <= 1
+  ) {
+    let chestCount = 0;
+    let allChestsOpened = true;
+    let intactCanister = false;
+    for (let i = 0; i < state.props.length; i++) {
+      const p = state.props[i]!;
+      if (p.kind === 'weapon_chest' || p.kind === 'big_weapon_chest' || p.kind === 'ammo_chest') {
+        chestCount += 1;
+        if (!p.opened) allChestsOpened = false;
+      } else if ((p.kind === 'rad_canister' || p.kind === 'idpd_canister') && p.hp > 0 && !p.opened) {
+        intactCanister = true;
+      }
+    }
+    if (chestCount > 0 && allChestsOpened && !intactCanister) {
+      rt.earlyBigBanditSpawned = true;
+      rt.earlyBigBanditSpawnTick = state.tick;
+      spawnBossEntity(state, 'big_bandit', rng);
+      emitEvent(state, {
+        type: 'pickup_text',
+        x: state.player.x,
+        y: state.player.y - 18,
+        text: 'EARLY BIG BANDIT!',
+        color: '#ffcc55',
+      });
+    }
+  }
+
+  // 2. 2-1 Pizza Sewers manhole grate (opened ONLY by explosion, even if normal portal opened!)
+  if (state.areaCode === '2-1' && rt.pizzaManholePropId !== null && !state.portal.entered) {
+    const mIdx = state.props.findIndex((p) => p.id === rt.pizzaManholePropId);
+    if (mIdx !== -1) {
+      const manhole = state.props[mIdx]!;
+      // Bullets cannot destroy the grate; keep HP capped high and detect nearby explosion events
+      manhole.hp = manhole.maxHp;
+      let hitByExplosion = false;
+      // Only genuine fiery/concussive explosions (grenades/rockets/nukes/barrels), NOT Toxic Ballguy rad gas!
+      for (let i = startEventIdx; i < state.events.length; i++) {
+        const ev = state.events[i]!;
+        if (
+          ev.type === 'particle' &&
+          ev.kind === 'explosion' &&
+          ev.sprite !== 'sprGreenExplosion' &&
+          ev.color !== '#55ff66'
+        ) {
+          if (Math.hypot(ev.x - manhole.x, ev.y - manhole.y) <= Math.max(36, (ev.size ?? 24) + 8)) {
+            hitByExplosion = true;
+            break;
+          }
+        }
+      }
+      if (hitByExplosion) {
+        state.props.splice(mIdx, 1);
+        rt.pizzaManholePropId = null;
+        openBossPortal(state, manhole.x, manhole.y, '2-?', state.loop, 'PIZZA SEWERS!', true);
+      }
+    }
+  }
+
+  // 3. 3-1 Golden Car repair via Screwdriver swing (Y.V.'s Mansion 3-? setup)
+  if (state.areaCode === '3-1' && rt.venusCarPropId !== null) {
+    const car = state.props.find((p) => p.id === rt.venusCarPropId);
+    if (car) {
+      if (!rt.venusCarFixed) {
+        for (let i = 0; i < state.projectiles.length; i++) {
+          const pr = state.projectiles[i]!;
+          if (
+            pr.team !== 'player' ||
+            pr.kind !== 'melee_slash' ||
+            (pr.weaponId !== 'screwdriver' &&
+              pr.weaponId !== 'golden_screwdriver' &&
+              pr.weaponId !== 'energy_screwdriver')
+          ) {
+            continue;
+          }
+          const reach = (pr.meleeReach ?? 26) + car.radius + 8;
+          if (Math.hypot(state.player.x - car.x, state.player.y - car.y) <= reach) {
+            rt.venusCarFixed = true;
+            car.hp = 999;
+            car.maxHp = 999;
+            car.sprite = 'sprVenusCarFixed';
+            emitEvent(state, { type: 'sfx', sound: 'sndWeaponPickup', x: car.x, y: car.y });
+            emitEvent(state, {
+              type: 'pickup_text',
+              x: car.x,
+              y: car.y - 16,
+              text: 'CAR FIXED! [E]',
+              color: '#ffd700',
+            });
+            for (let k = 0; k < 6; k++) {
+              const ang = (k / 6) * Math.PI * 2;
+              emitEvent(state, {
+                type: 'particle',
+                kind: 'spark',
+                x: car.x,
+                y: car.y,
+                vx: Math.cos(ang) * 1.8,
+                vy: Math.sin(ang) * 1.8,
+                color: '#ffd700',
+                size: 3,
+                life: 10,
+              });
+            }
+            break;
+          }
+        }
+      } else {
+        car.hp = car.maxHp;
+        if (state.tick % 24 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'spark',
+            x: car.x + rng.range(-8, 8),
+            y: car.y + rng.range(-6, 6),
+            vx: 0,
+            vy: -0.5,
+            color: '#ffd700',
+            size: 2,
+            life: 8,
+          });
+        }
+      }
+    }
+  }
+
+  // 4. 3-3 Cursed weapon portal redirect -> Cursed Crystal Caves (4-?)
+  if (state.areaCode === '3-3' && state.portal.active && state.portal.targetArea === '4-1') {
+    const holdingCursed = Boolean(state.player.weapons[0]?.cursed || state.player.weapons[1]?.cursed);
+    if (holdingCursed) {
+      state.portal.targetArea = '4-?';
+      emitEvent(state, {
+        type: 'pickup_text',
+        x: state.portal.x,
+        y: state.portal.y - 18,
+        text: 'CURSED CAVES!',
+        color: '#d966ff',
+      });
+    }
+  }
+
+  // 5. 3-2 / 5-2 / 7-2 Proto Statue charging & shattering -> Crown Vault (vault)
+  if (rt.protoStatuePropId !== null && !state.portal.entered) {
+    const statue = state.props.find((p) => p.id === rt.protoStatuePropId);
+    if (statue) {
+      rt.protoStatueX = statue.x;
+      rt.protoStatueY = statue.y;
+      const stored = statue.radsStored ?? 0;
+      if (stored < 30) {
+        // Pull and absorb nearby rads into the statue (activates once damaged or rads drop nearby)
+        const pullRadius = statue.hp < statue.maxHp ? 88 : 64;
+        for (let i = state.pickups.length - 1; i >= 0; i--) {
+          const pk = state.pickups[i]!;
+          if (pk.kind !== 'rad' && pk.kind !== 'big_rad') continue;
+          const pdx = statue.x - pk.x;
+          const pdy = statue.y - pk.y;
+          const pd = Math.hypot(pdx, pdy);
+          if (pd <= 16) {
+            statue.radsStored = (statue.radsStored ?? 0) + pk.value;
+            state.pickups.splice(i, 1);
+            emitEvent(state, { type: 'sfx', sound: 'sndStatueXP', x: statue.x, y: statue.y, pitchJitter: 0.1 });
+          } else if (pd <= pullRadius) {
+            pk.x += (pdx / pd) * 2.4;
+            pk.y += (pdy / pd) * 2.4;
+          }
+        }
+      }
+      if ((statue.radsStored ?? 0) >= 30 && !rt.protoStatueCharged) {
+        rt.protoStatueCharged = true;
+        statue.sprite = 'sprProtoStatueCharge';
+        emitEvent(state, { type: 'sfx', sound: 'sndStatueCharge', x: statue.x, y: statue.y });
+        emitEvent(state, {
+          type: 'pickup_text',
+          x: statue.x,
+          y: statue.y - 16,
+          text: 'STATUE CHARGED!',
+          color: '#7dff8b',
+        });
+      }
+    } else {
+      // Proto Statue was destroyed!
+      rt.protoStatuePropId = null;
+      if (rt.protoStatueCharged) {
+        const returnArea =
+          state.areaCode === '3-2' ? '3-3' : state.areaCode === '5-2' ? '5-3' : '7-3';
+        getRunRuntime(state).vaultReturnArea = returnArea;
+        emitEvent(state, { type: 'sfx', sound: 'sndStatueDead', x: rt.protoStatueX, y: rt.protoStatueY });
+        openBossPortal(state, rt.protoStatueX, rt.protoStatueY, 'vault', state.loop, 'CROWN VAULT!', true);
+      }
+    }
+  }
+
+  // 6. Crown Vault indestructible pedestal + return-area restoration (3-2 -> 3-3, 5-2 -> 5-3, 7-2 -> 7-3)
+  if (state.areaCode === 'vault') {
+    const pedestal = state.props.find((p) => p.kind === 'proto_statue');
+    if (pedestal) {
+      pedestal.hp = pedestal.maxHp;
+    }
+    const runRt = getRunRuntime(state);
+    if (state.portal.active && runRt.vaultReturnArea && state.portal.targetArea === '4-1') {
+      state.portal.targetArea = runRt.vaultReturnArea;
+    }
+    if (state.portal.entered && runRt.vaultReturnArea) {
+      runRt.vaultReturnArea = null;
+    }
+  }
+
+  rt.lastScannedEventIdx = state.events.length;
+  rt.lastScannedEventRef =
+    state.events.length > 0 ? state.events[state.events.length - 1]! : null;
+}
+
+/**
  * Steps all hostile enemies, all 5 Bosses, special death payoffs, boss missiles/orbs,
- * destructible prop timers, scheduled IDPD reinforcement waves, and enemy contact damage.
+ * destructible prop timers, scheduled IDPD reinforcement waves, secret-world triggers,
+ * and enemy contact damage.
  */
 export function stepEntitiesAndAi(
   state: SimState,
@@ -2303,4 +3043,5 @@ export function stepEntitiesAndAi(
 
   processSpecialDeaths(state, rng);
   stepScheduledIdpdWaves(state, rng);
+  stepSecretAndWorldMechanics(state, rng);
 }

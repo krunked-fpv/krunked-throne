@@ -196,7 +196,7 @@ export function carveCircle(
       const cx = (tx + 0.5) * ts;
       const dx = cx - worldX;
       if (dx * dx + dy * dy > rSq) continue;
-      if (getTile(map, tx, ty) === TileType.Wall) {
+      if (isSolidTile(getTile(map, tx, ty))) {
         if (setTile(map, tx, ty, TileType.FloorCracked)) {
           carved += 1;
           if (tx < changedMinX) changedMinX = tx;
@@ -524,6 +524,10 @@ export function moveCircleWithSlide(
   let hitX = false;
   let hitY = false;
 
+  const startX = cx;
+  const startY = cy;
+  const startedWalkable = !isWorldSolid(map, cx, cy);
+
   // Escape any pre-existing overlap before moving
   if (isCircleOverlappingSolid(map, cx, cy, r, extraSolidBoxes)) {
     for (let iter = 0; iter < 6; iter++) {
@@ -533,6 +537,11 @@ export function moveCircleWithSlide(
       if (dep.pushedX) hitX = true;
       if (dep.pushedY) hitY = true;
       if (!isCircleOverlappingSolid(map, cx, cy, r, extraSolidBoxes)) break;
+    }
+    // Guard against oscillating depenetration pushing a large-radius entity's center into a solid tile
+    if (startedWalkable && isWorldSolid(map, cx, cy)) {
+      cx = startX;
+      cy = startY;
     }
   }
 
