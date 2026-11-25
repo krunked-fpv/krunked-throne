@@ -9,21 +9,33 @@ import {
   type RenderSettings,
   type SimEvent,
   type SimState,
+  type SpriteDef,
+  type TpagRect,
   type WorldMap,
 } from '@/contracts';
 import { createFallbackBundle, createFallbackManifest, loadAssets, type AssetBundle } from '@/assets';
-import { CameraController, GameRenderer, lerpPosSafe } from '@/render';
+import { MUTANTS } from '@/data/mutants';
+import { BitmapFontRenderer, CameraController, GameRenderer, lerpPosSafe } from '@/render';
 import {
   ALL_MUTANT_IDS,
   DEFAULT_CROWNS,
   DEFAULT_MUTANTS,
+  DEFAULT_MUTATIONS,
   DEFAULT_UI_DATA_PROVIDER,
   HudRenderer,
   MenuSystem,
+  OPAQUE_MENU_BACKDROP,
+  PORTAL_INDICATOR_PAD_TOP,
+  SaveManager,
   computeAmmoIconFrame,
+  computeCampfireDetailsLayout,
   computeUltraIconFrame,
   createDefaultSaveData,
+  resolveBossDisplayName,
   resolveCorpseFrame,
+  resolveDisplaySpriteFrame,
+  resolvePortalIndicatorStyle,
+  resolveRunProgressIndex,
   selectLoadingTip,
   validateSaveData,
 } from '@/ui';
@@ -601,8 +613,22 @@ describe('parity-render-ui: HUD Fixes (Ultra Rads, Sleeping Boss, Back Muscle 4:
     expect(mockSleep.fillTexts.some((t) => t.includes('9999'))).toBe(false);
     expect(mockSleep.fillTexts.some((t) => t.includes('KRUNKED THRONE'))).toBe(false);
 
-    // 2. Wake boss: Boss HP bar & intro appear cleanly
+    // 2. Wake boss (introTicks > 0): Boss Intro splash takes over full screen & hides normal HUD (matching NT!)
     sleepingBossEnt.aiState = 'idle';
+    const mockIntro = createMockCtx();
+    hud.render(mockIntro.ctx, {
+      state,
+      camera: cam,
+      renderSettings: DEFAULT_RENDER_SETTINGS,
+      fps: 120,
+      width: LOGICAL_WIDTH_16_9,
+      height: LOGICAL_HEIGHT,
+    });
+    expect(mockIntro.fillRects[0]).toMatchObject({ x: 0, y: 0, w: LOGICAL_WIDTH_16_9, h: LOGICAL_HEIGHT });
+    expect(mockIntro.fillRects.length).toBeGreaterThan(20);
+
+    // 3. After Boss Intro completes (introTicks === 0): normal HUD + beveled Boss HP bar render together
+    bossHudState.introTicks = 0;
     const mockAwake = createMockCtx();
     hud.render(mockAwake.ctx, {
       state,
@@ -677,7 +703,7 @@ describe('parity-render-ui: Menus Parity (Campfire 12 Mutants, Gold Guard, Ultra
     state.player.ultra = 'fish_a';
     state.player.lastDamageCause = 'THE KRUNKED THRONE';
 
-    // 1. Ultra Select cards enlarged to 136x136 with dark backdrop
+    // 1. Ultra Select balanced cards with opaque dark backdrop (alpha >= 0.94)
     const ultraMock = createMockCtx();
     menus.render(ultraMock.ctx, {
       screen: 'ultra_select',
@@ -688,10 +714,11 @@ describe('parity-render-ui: Menus Parity (Campfire 12 Mutants, Gold Guard, Ultra
       timeSec: 1.0,
       returnScreenFromOptions: 'title',
     });
-    expect(ultraMock.fillRects[0]?.style).toBe('rgba(10, 9, 14, 0.92)');
+    expect(ultraMock.fillRects[0]?.style).toBe(OPAQUE_MENU_BACKDROP);
     const ultraCard0 = menus.getHitRegions().find((r) => r.id === 'ultra_card_0')!;
     expect(ultraCard0.w).toBeGreaterThanOrEqual(136);
-    expect(ultraCard0.h).toBeGreaterThanOrEqual(136);
+    expect(ultraCard0.h).toBeGreaterThanOrEqual(110);
+    expect(ultraCard0.h).toBeLessThanOrEqual(126);
 
     // 2. Pause menu keeps all 4 action buttons + hoverable mutation & ultra regions cleanly
     const pauseMock = createMockCtx();
@@ -744,6 +771,353 @@ describe('parity-render-ui: Menus Parity (Campfire 12 Mutants, Gold Guard, Ultra
     const goRegions = menus.getHitRegions();
     expect(goRegions.find((r) => r.id === 'end_retry')).toBeDefined();
     expect(goRegions.find((r) => r.id === 'end_campfire')).toBeDefined();
+  });
+
+  it('flows Campfire PASSIVE/ACTIVE/TB/BEST dynamically without overlap for all 12 mutants, aligns loadout bar, and keeps 1.0x mutant scale', () => {
+    const bundle = createFallbackBundle();
+    const fonts = new BitmapFontRenderer(bundle);
+
+    // Check every single one of the 12 real mutants (including Rogue, Horror, Melting, Y.V., Robot)
+    for (const m of Object.values(MUTANTS)) {
+      for (const maxW of [126, 130]) {
+        const lay = computeCampfireDetailsLayout(fonts, m, maxW, 35, 156, true);
+        expect(lay.passiveY + lay.passiveH).toBeLessThan(lay.activeY);
+        expect(lay.activeY + lay.activeH).toBeLessThan(lay.tbY);
+        expect(lay.tbY + lay.tbH).toBeLessThan(lay.bestY);
+        expect(lay.bestY + 6).toBeLessThanOrEqual(158);
+      }
+    }
+
+    // Verify uniform loadout row alignment (SKIN, CROWN, GOLD, GO! share identical y and h)
+    const menus = new MenuSystem(bundle);
+    const save = createDefaultSaveData();
+    save.selectedMutant = 'horror';
+    save.selectedCrown = 'protection';
+    for (const vw of [LOGICAL_WIDTH_4_3, LOGICAL_WIDTH_16_9]) {
+      const mock = createMockCtx();
+      menus.render(mock.ctx, {
+        screen: 'campfire',
+        save,
+        simState: null,
+        width: vw,
+        height: LOGICAL_HEIGHT,
+        timeSec: 1.5,
+        returnScreenFromOptions: 'title',
+      });
+      const regs = menus.getHitRegions();
+      const skin = regs.find((r) => r.id === 'camp_skin')!;
+      const crown = regs.find((r) => r.id === 'camp_crown')!;
+      const gold = regs.find((r) => r.id === 'camp_golden')!;
+      const go = regs.find((r) => r.id === 'camp_go')!;
+      expect(skin.y).toBe(go.y);
+      expect(crown.y).toBe(go.y);
+      expect(gold.y).toBe(go.y);
+      expect(skin.h).toBe(go.h);
+      expect(crown.h).toBe(go.h);
+      expect(gold.h).toBe(go.h);
+      // Full CROWN OF PROTECTION fits without mid-word truncation
+      expect(crown.w).toBeGreaterThanOrEqual(100);
+      // No non-integer fractional scaling on campfire mutant draws (every scaleX/scaleY is integer or +/-1!)
+      for (const dc of mock.drawCalls) {
+        expect(Math.abs(Math.abs(dc.scaleX) - Math.round(Math.abs(dc.scaleX)))).toBeLessThan(1e-4);
+        expect(Math.abs(Math.abs(dc.scaleY) - Math.round(Math.abs(dc.scaleY)))).toBeLessThan(1e-4);
+      }
+    }
+
+    // Verify no double-emitted sndHover/sndClick on Campfire mutant nav & confirm, and sndClickBack on Back!
+    const blankSnap = {
+      pointer: { logicalX: 0, logicalY: 0, down: false, clicked: false, rightClicked: false, moved: false },
+      navUp: false,
+      navDown: false,
+      navLeft: false,
+      navRight: false,
+      confirm: false,
+      back: false,
+      retry: false,
+    };
+    const campCtx = {
+      screen: 'campfire' as const,
+      save,
+      simState: null,
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+      timeSec: 1,
+      returnScreenFromOptions: 'title' as const,
+    };
+    const nextMutActs = menus.update({ ...blankSnap, navRight: true }, campCtx);
+    expect(nextMutActs.some((a) => a.type === 'select_mutant')).toBe(true);
+    expect(nextMutActs.some((a) => a.type === 'ui_sfx')).toBe(false);
+
+    const startActs = menus.update({ ...blankSnap, confirm: true }, campCtx);
+    expect(startActs.some((a) => a.type === 'start_run')).toBe(true);
+    expect(startActs.some((a) => a.type === 'ui_sfx')).toBe(false);
+
+    const backActs = menus.update({ ...blankSnap, back: true }, campCtx);
+    expect(backActs).toContainEqual({ type: 'ui_sfx', sound: 'sndClickBack' });
+  });
+
+function makeTestSpriteDef(
+  name: string,
+  width: number,
+  height: number,
+  originX: number,
+  originY: number,
+  frames: TpagRect[],
+): SpriteDef {
+  return {
+    id: 0,
+    name,
+    width,
+    height,
+    originX,
+    originY,
+    bboxLeft: 0,
+    bboxRight: width - 1,
+    bboxTop: 0,
+    bboxBottom: height - 1,
+    bboxMode: 0,
+    sepMasks: 0,
+    playbackSpeed: 1,
+    playbackSpeedType: 0,
+    frames,
+  };
+}
+
+  it('draws sprExpBarLevel BEFORE sprExpBar, enforces Portal padTop >= 42 & colors, avoids ctx.arc, and unifies Boss Intro naming', () => {
+    const baseBundle = createFallbackBundle();
+    // Create a Steam-like bundle where sprExpBarLevel (16x26) sits at distinct srcX=900 vs sprExpBar at srcX=100
+    const sprExpBarLevel = makeTestSpriteDef('sprExpBarLevel', 16, 26, 1, 1, [
+      { textureId: 0, srcX: 900, srcY: 10, srcW: 16, srcH: 26, targetX: 0, targetY: 0, targetW: 16, targetH: 26, boundW: 16, boundH: 26 },
+    ]);
+    const sprExpBar = makeTestSpriteDef(
+      'sprExpBar',
+      14,
+      24,
+      0,
+      0,
+      Array.from({ length: 16 }, () => ({
+        textureId: 0,
+        srcX: 100,
+        srcY: 10,
+        srcW: 14,
+        srcH: 24,
+        targetX: 0,
+        targetY: 0,
+        targetW: 14,
+        targetH: 24,
+        boundW: 14,
+        boundH: 24,
+      })),
+    );
+    const fakeTex = {} as unknown as HTMLCanvasElement;
+    const customSprites: Record<string, SpriteDef> = {
+      ...baseBundle.manifest.sprites,
+      sprExpBar,
+      sprExpBarLevel,
+    };
+    const steamLikeBundle: AssetBundle = {
+      ...baseBundle,
+      sourceMode: 'steam',
+      manifest: { ...baseBundle.manifest, sprites: customSprites },
+      getSprite: (n) => customSprites[n],
+      getTexture: () => fakeTex,
+    };
+
+    const hud = new HudRenderer(steamLikeBundle);
+    const cam = new CameraController();
+    cam.setViewport(LOGICAL_WIDTH_4_3, LOGICAL_HEIGHT);
+    cam.snapTo(128, 128);
+
+    const drawSeq: Array<{ sx: number; w: number; h: number }> = [];
+    let arcCalls = 0;
+    const mock = createMockCtx();
+    const rawCtx = mock.ctx as unknown as {
+      drawImage: (...args: unknown[]) => void;
+      arc: (...args: unknown[]) => void;
+    };
+    const origDraw = rawCtx.drawImage;
+    rawCtx.drawImage = (...args: unknown[]) => {
+      if (args.length >= 9) {
+        drawSeq.push({ sx: Number(args[1]), w: Number(args[3]), h: Number(args[4]) });
+      }
+      origDraw(...args);
+    };
+    rawCtx.arc = () => {
+      arcCalls += 1;
+    };
+
+    const state = makeSimState({
+      tick: 0, // Math.floor(0/6)%2 === 0 -> level glow active!
+      pendingLevelUps: 1,
+    });
+    state.player.mutations = ['strong_spirit'];
+    state.player.strongSpiritReady = true;
+    state.player.weapons[1]!.reloadTicks = 9;
+    state.player.weapons[1]!.maxReloadTicks = 18;
+    // Melting full 2/2 HP check
+    state.player.mutant = 'melting';
+    state.player.hp = 2;
+    state.player.maxHp = 2;
+
+    hud.render(mock.ctx, {
+      state,
+      camera: cam,
+      renderSettings: DEFAULT_RENDER_SETTINGS,
+      fps: 120,
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+    });
+
+    const levelIdx = drawSeq.findIndex((d) => d.sx === 900 && d.w === 16 && d.h === 26);
+    const barIdx = drawSeq.findIndex((d) => d.sx === 100 && d.w === 14 && d.h === 24);
+    expect(levelIdx).toBeGreaterThanOrEqual(0);
+    expect(barIdx).toBeGreaterThanOrEqual(0);
+    expect(levelIdx).toBeLessThan(barIdx); // sprExpBarLevel MUST draw BEFORE sprExpBar!
+    expect(arcCalls).toBe(0); // Strong Spirit must NEVER use smooth anti-aliased ctx.arc!
+
+    // Portal indicator padTop & destination colors
+    expect(PORTAL_INDICATOR_PAD_TOP).toBeGreaterThanOrEqual(42);
+    expect(resolvePortalIndicatorStyle('1-?').fill).toBe('#38c8ff'); // Oasis blue
+    expect(resolvePortalIndicatorStyle('vault').fill).toBe('#52ff7a'); // Vault green
+    expect(resolvePortalIndicatorStyle('hq-1').fill).toBe('#52a8ff'); // HQ blue
+    expect(resolvePortalIndicatorStyle('1-2').fill).toBe('#d16bff'); // Standard violet
+
+    // Boss display naming unified across Steam & Built-In
+    expect(resolveBossDisplayName('nuclear_throne', 'THE KRUNKED THRONE', true)).toBe('THE THRONE');
+    expect(resolveBossDisplayName('nuclear_throne', 'THE KRUNKED THRONE', false)).toBe('THE KRUNKED THRONE');
+  });
+
+  it('maps Vault on road map cleanly, selects non-blank Horror/Y.V./explosion Game Over frames, emits sndMutHover, and fixes Patience copy', () => {
+    // 1. Vault road map index never maps to 0 (1-1)!
+    expect(resolveRunProgressIndex('vault')).toBe(7);
+    expect(resolveRunProgressIndex('1-1')).toBe(0);
+    expect(resolveRunProgressIndex('7-3')).toBe(14);
+    expect(resolveRunProgressIndex('0-1')).toBe(14);
+    expect(resolveRunProgressIndex('hq-1')).toBe(13);
+
+    // 2. Horror sprMutant11Dead skips 2x11 & 1x1 dissolve tail frames -> picks frame 4
+    const horrorDead = makeTestSpriteDef('sprMutant11Dead', 48, 48, 24, 24, [
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 26, srcH: 23, targetX: 7, targetY: 10, targetW: 26, targetH: 23, boundW: 48, boundH: 48 },
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 47, srcH: 45, targetX: 0, targetY: 1, targetW: 47, targetH: 45, boundW: 48, boundH: 48 },
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 48, srcH: 45, targetX: 0, targetY: 2, targetW: 48, targetH: 45, boundW: 48, boundH: 48 },
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 48, srcH: 43, targetX: 0, targetY: 5, targetW: 48, targetH: 43, boundW: 48, boundH: 48 },
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 18, srcH: 12, targetX: 13, targetY: 15, targetW: 18, targetH: 12, boundW: 48, boundH: 48 },
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 2, srcH: 11, targetX: 21, targetY: 17, targetW: 2, targetH: 11, boundW: 48, boundH: 48 },
+      { textureId: 0, srcX: 0, srcY: 0, srcW: 1, srcH: 1, targetX: 0, targetY: 0, targetW: 1, targetH: 1, boundW: 48, boundH: 48 },
+    ]);
+    expect(resolveDisplaySpriteFrame(horrorDead, 'sprMutant11Dead')).toBe(4);
+
+    // Y.V. sprMutant6Dead skips final 1x1 blank frame 18 -> picks frame 17
+    const yvDead = makeTestSpriteDef(
+      'sprMutant6Dead',
+      48,
+      48,
+      24,
+      24,
+      Array.from({ length: 19 }, (_, idx) => ({
+        textureId: 0,
+        srcX: 0,
+        srcY: 0,
+        srcW: idx === 18 ? 1 : 36,
+        srcH: idx === 18 ? 1 : 17,
+        targetX: 0,
+        targetY: 0,
+        targetW: idx === 18 ? 1 : 36,
+        targetH: idx === 18 ? 1 : 17,
+        boundW: 48,
+        boundH: 48,
+      })),
+    );
+    expect(resolveDisplaySpriteFrame(yvDead, 'sprMutant6Dead')).toBe(17);
+
+    // Explosion skips solid-white frame 0 -> picks mid-frame 3!
+    const exploSpr = makeTestSpriteDef(
+      'sprExplosion',
+      48,
+      48,
+      24,
+      24,
+      Array.from({ length: 9 }, () => ({
+        textureId: 0,
+        srcX: 0,
+        srcY: 0,
+        srcW: 37,
+        srcH: 37,
+        targetX: 6,
+        targetY: 4,
+        targetW: 37,
+        targetH: 37,
+        boundW: 48,
+        boundH: 48,
+      })),
+    );
+    expect(resolveDisplaySpriteFrame(exploSpr, 'sprExplosion')).toBe(3);
+
+    // 3. Mutation Select emits sndMutHover & Pause supports keyboard mutation inspection
+    const bundle = createFallbackBundle();
+    const menus = new MenuSystem(bundle);
+    const save = createDefaultSaveData();
+    const state = makeSimState({
+      pendingMutations: ['sharp_teeth', 'boiling_veins', 'strong_spirit'],
+    });
+    state.player.mutations = ['rhino_skin', 'long_arms'];
+    state.player.ultra = 'fish_a';
+
+    const mutMock = createMockCtx();
+    const mutCtx = {
+      screen: 'mutation_select' as const,
+      save,
+      simState: state,
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+      timeSec: 1,
+      returnScreenFromOptions: 'title' as const,
+    };
+    menus.render(mutMock.ctx, mutCtx);
+    const card1 = menus.getHitRegions().find((r) => r.id === 'mut_card_1')!;
+    const hoverActs = menus.update(
+      {
+        pointer: { logicalX: card1.x + 5, logicalY: card1.y + 5, down: false, clicked: false, rightClicked: false, moved: true },
+        navUp: false,
+        navDown: false,
+        navLeft: false,
+        navRight: false,
+        confirm: false,
+        back: false,
+        retry: false,
+      },
+      mutCtx,
+    );
+    expect(hoverActs).toContainEqual({ type: 'ui_sfx', sound: 'sndMutHover' });
+
+    // Pause keyboard L/R inspection cycles through owned mutations + ultra
+    const pauseCtx = { ...mutCtx, screen: 'paused' as const };
+    const blankSnap = {
+      pointer: { logicalX: 0, logicalY: 0, down: false, clicked: false, rightClicked: false, moved: false },
+      navUp: false,
+      navDown: false,
+      navLeft: false,
+      navRight: false,
+      confirm: false,
+      back: false,
+      retry: false,
+    };
+    menus.update({ ...blankSnap, navRight: true }, pauseCtx);
+    expect(menus.getPauseInspectIndex()).toBe(0);
+    menus.update({ ...blankSnap, navRight: true }, pauseCtx);
+    expect(menus.getPauseInspectIndex()).toBe(1);
+    menus.update({ ...blankSnap, navRight: true }, pauseCtx);
+    expect(menus.getPauseInspectIndex()).toBe(2); // Ultra
+
+    // 4. Patience copy in data-provider matches NT ("MUTATE LATER", not "WITH EXTRA CHOICE")
+    const patience = DEFAULT_MUTATIONS.find((m) => m.id === 'patience')!;
+    expect(patience.description).toBe('@gMUTATE@s LATER');
+
+    // 5. Keybind conflict swap via SaveManager
+    const sm = new SaveManager();
+    const rebound = sm.rebindKey('up', 'KeyS');
+    expect(rebound.up).toBe('KeyS');
+    expect(rebound.down).toBe('KeyW');
   });
 });
 

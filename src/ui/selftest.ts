@@ -25,6 +25,7 @@ import {
   ALL_MUTANT_IDS,
   LEGACY_SAVE_STORAGE_KEY,
   MenuSystem,
+  OPAQUE_MENU_BACKDROP,
   SAVE_STORAGE_KEY,
   SaveManager,
   computePortraitFrame,
@@ -562,7 +563,7 @@ function testVisualUiParityFixes(): void {
       timeSec: 1,
       returnScreenFromOptions: 'title',
     });
-    assert.equal(mMock.fillRects[0]?.style, 'rgba(10, 9, 14, 0.92)', `${scr} must use dark backdrop`);
+    assert.equal(mMock.fillRects[0]?.style, OPAQUE_MENU_BACKDROP, `${scr} must use opaque dark backdrop`);
   }
 
   // RT-07: Options modal non-overlapping header/tabs & single-line AIM button in both 320x240 and 426x240

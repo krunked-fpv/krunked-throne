@@ -26,6 +26,8 @@ export {
   SaveManager,
   createDefaultMutantProgress,
   createDefaultSaveData,
+  deduplicateKeybinds,
+  resolveKeybindUpdate,
   validateSaveData,
   type RunSummaryInput,
   type StorageLike,
@@ -33,21 +35,30 @@ export {
 
 export {
   HudRenderer,
+  PORTAL_INDICATOR_PAD_TOP,
   computeAmmoIconFrame,
   computeUltraIconFrame,
+  resolveBossDisplayName,
   resolveHealthFillFrame,
+  resolvePortalIndicatorStyle,
   type HudRenderContext,
 } from './hud';
 
 export {
   MenuSystem,
+  OPAQUE_MENU_BACKDROP,
+  computeCampfireDetailsLayout,
   computePortraitFrame,
   computeTitleLogoFrame,
   cycleTargetFps,
   formatTargetFpsLabel,
   resolveCorpseFrame,
+  resolveDisplaySpriteFrame,
+  resolveRunProgressIndex,
+  type CampfireDetailsLayout,
   type HitRegion,
   type MenuAction,
   type MenuRenderContext,
   type OptionsTab,
+  type UiSfxName,
 } from './menus';

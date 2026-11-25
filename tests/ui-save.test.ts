@@ -21,7 +21,9 @@ import {
   SaveManager,
   createDefaultSaveData,
   cycleTargetFps,
+  deduplicateKeybinds,
   formatTargetFpsLabel,
+  resolveKeybindUpdate,
   validateSaveData,
   type StorageLike,
 } from '@/ui';
@@ -277,6 +279,51 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     expect(sm120.wasRecoveredFromCorruption()).toBe(false);
     expect(sm120.getData().render.targetFps).toBe(120);
     expect(sm120.getData().render.classic30Fps).toBe(false);
+  });
+
+  it('swaps conflicting keybinds cleanly in SaveManager and deduplicates loaded saves', () => {
+    const storage = new MockStorage();
+    const sm = new SaveManager(storage);
+
+    // Default: up=KeyW, down=KeyS -> rebinding up to KeyS must swap down to KeyW!
+    const swapped = sm.rebindKey('up', 'KeyS');
+    expect(swapped.up).toBe('KeyS');
+    expect(swapped.down).toBe('KeyW');
+    expect(new Set(Object.values(swapped)).size).toBe(8);
+
+    // Rebinding swap to KeyE (currently pickup) swaps pickup to KeyQ
+    const swapped2 = sm.updateKeybinds({ swap: 'KeyE' });
+    expect(swapped2.swap).toBe('KeyE');
+    expect(swapped2.pickup).toBe('KeyQ');
+    expect(new Set(Object.values(swapped2)).size).toBe(8);
+
+    // Pure helper handles simultaneous conflicting partial cleanly
+    const resolved = resolveKeybindUpdate(swapped2, { left: 'KeyD' });
+    expect(resolved.left).toBe('KeyD');
+    expect(resolved.right).toBe('KeyA');
+    expect(new Set(Object.values(resolved)).size).toBe(8);
+
+    // Corrupted/hand-edited save with duplicate keys is deduplicated on validateSaveData
+    const sanitized = validateSaveData({
+      keybinds: { up: 'KeyS', down: 'KeyS', left: 'KeyS', right: 'KeyD' },
+    });
+    expect(new Set(Object.values(sanitized.keybinds)).size).toBe(8);
+    expect(sanitized.keybinds.up).toBe('KeyS');
+    expect(sanitized.keybinds.down).not.toBe('KeyS');
+    expect(sanitized.keybinds.left).not.toBe('KeyS');
+
+    // Direct deduplicateKeybinds guarantees uniqueness
+    const dedup = deduplicateKeybinds({
+      up: 'KeyX',
+      down: 'KeyX',
+      left: 'KeyX',
+      right: 'KeyX',
+      swap: 'KeyQ',
+      pickup: 'KeyE',
+      pause: 'Escape',
+      activeAlt: 'Space',
+    });
+    expect(new Set(Object.values(dedup)).size).toBe(8);
   });
 });
 
