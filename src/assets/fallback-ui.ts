@@ -32,32 +32,26 @@ const LOGO_GLYPHS: Record<string, readonly string[]> = {
   O: ['01110', '11111', '11011', '11011', '11011', '11111', '01110'],
 };
 
-/** Bottom-row anchored drip columns for each letter of "KRUNKED" so drips hang seamlessly from letter strokes. */
+/** Bottom-row anchored drip columns for each letter of "KRUNKED" — kept strictly above "THRONE" (zero bleed!). */
 const KRUNKED_DRIPS: ReadonlyArray<{ col: number; len: number; subCol?: number; subLen?: number }> = [
-  { col: 0, len: 10, subCol: 4, subLen: 5 }, // K
-  { col: 3, len: 6, subCol: 0, subLen: 4 }, // R
-  { col: 2, len: 12 }, // U
-  { col: 4, len: 7, subCol: 0, subLen: 5 }, // N
-  { col: 1, len: 9, subCol: 3, subLen: 4 }, // K
-  { col: 3, len: 11, subCol: 0, subLen: 5 }, // E
-  { col: 2, len: 8 }, // D
+  { col: 0, len: 6, subCol: 4, subLen: 3 }, // K
+  { col: 3, len: 4, subCol: 0, subLen: 3 }, // R
+  { col: 2, len: 6 }, // U
+  { col: 4, len: 5, subCol: 0, subLen: 3 }, // N
+  { col: 1, len: 6, subCol: 3, subLen: 3 }, // K
+  { col: 3, len: 5, subCol: 0, subLen: 3 }, // E
+  { col: 2, len: 5 }, // D
 ];
 
-function drawSlimeTendril(ctx: DrawCtx, dx: number, dy: number, dLen: number, withDroplet: boolean): void {
-  // Heavy 2px ink outline around dripping tendril
+function drawSlimeTendril(ctx: DrawCtx, dx: number, dy: number, dLen: number): void {
+  // Heavy 2px ink outline around dripping tendril (cleanly contained above THRONE)
   rect(ctx, dx - 2, dy - 1, 8, dLen + 2, '#0c0812');
   rect(ctx, dx - 1, dy + dLen, 6, 2, '#0c0812');
   // 3-tone radioactive slime fill
   rect(ctx, dx, dy - 1, 4, dLen, '#22b830');
   rect(ctx, dx, dy - 1, 3, Math.max(2, dLen - 1), '#46e842');
-  rect(ctx, dx + 1, dy, 2, Math.max(2, dLen - 3), '#9aff5e');
-  px(ctx, dx + 1, dy + Math.max(1, dLen - 2), '#e8ffd4');
-  // Detached glowing droplet hanging below longer tendrils
-  if (withDroplet) {
-    outlinedBox(ctx, dx - 1, dy + dLen + 3, 6, 5, '#46e842', '#0c0812', true);
-    rect(ctx, dx + 1, dy + dLen + 4, 2, 2, '#b8ff80');
-    px(ctx, dx + 1, dy + dLen + 4, '#ffffff');
-  }
+  rect(ctx, dx + 1, dy, 2, Math.max(1, dLen - 2), '#9aff5e');
+  px(ctx, dx + 1, dy + Math.max(0, dLen - 2), '#d9ffba');
 }
 
 function drawLogoWord(
@@ -100,26 +94,25 @@ function drawLogoWord(
         const bx = lx + c * cellW;
         const by = startY + r * cellH;
         if (style === 'krunked') {
-          // Rich 3-tone (+ deep rim) radioactive toxic-green gradient
-          const fill = r <= 1 ? '#94ff59' : r <= 3 ? '#46e842' : r <= 5 ? '#22b830' : '#148224';
+          // Clean 3-tone cel-shaded radioactive toxic-green gradient (ZERO noisy stray 1px white speckles!)
+          const fill = r <= 1 ? '#8ff754' : r <= 3 ? '#46e842' : r <= 5 ? '#22b830' : '#148224';
           rect(ctx, bx, by, cellW, cellH, fill);
-          // Glossy wet top rim highlight
+          // Smooth glossy top rim highlight along exposed upper letter edges
           if (r === 0 || glyph[r - 1]![c] !== '1') {
-            rect(ctx, bx, by, cellW, 2, '#dcffa8');
-            if (c === 0 || rowStr[c - 1] !== '1') {
-              rect(ctx, bx, by, 2, 1, '#ffffff');
+            rect(ctx, bx, by, cellW, 2, '#d4ff9c');
+            if (r === 0 && (c === 0 || rowStr[c - 1] !== '1')) {
+              rect(ctx, bx, by, 3, 1, '#f4ffe0');
+            }
+          }
+          // Subtle soft inner vertical sheen on left stroke edges
+          if (c === 0 || rowStr[c - 1] !== '1') {
+            if (r >= 1 && r <= 4) {
+              rect(ctx, bx, by, 1, cellH, '#aaff75');
             }
           }
           // Deep toxic slime bottom bevel
           if (r === 6 || glyph[r + 1]?.[c] !== '1') {
             rect(ctx, bx, by + cellH - 1, cellW, 1, '#0e5c1a');
-          }
-          // Glowing white/lime specular slime bubbles inside letters
-          if ((i * 3 + r * 2 + c) % 5 === 0 && r >= 1 && r <= 4) {
-            rect(ctx, bx + 1, by + 1, 2, 2, '#d9ffba');
-            px(ctx, bx + 1, by + 1, '#ffffff');
-          } else if ((i + r + c * 2) % 7 === 0 && r >= 2 && r <= 5) {
-            px(ctx, bx + 3, by + 2, '#b8ff80');
           }
         } else {
           // Riveted brushed wasteland steel
@@ -138,20 +131,20 @@ function drawLogoWord(
           // Corner bolt rivets on outer structural cells
           if ((r === 0 || r === 6) && (c === 0 || c === 4)) {
             rect(ctx, bx + 2, by + 2, 2, 2, '#1c212b');
-            px(ctx, bx + 2, by + 2, '#f4f8fc');
+            px(ctx, bx + 2, by + 2, '#dce6f2');
           }
         }
       }
     }
 
-    // Dripping neon-green radioactive slime tendrils hanging below "KRUNKED" over the metallic console
+    // Crisp compact neon-green slime drips hanging above the console seam (never bleeding onto THRONE!)
     if (style === 'krunked') {
       const spec = KRUNKED_DRIPS[i % KRUNKED_DRIPS.length]!;
       const dy = startY + 7 * cellH;
       const dx = lx + spec.col * cellW + 1;
-      drawSlimeTendril(ctx, dx, dy, spec.len, spec.len >= 10);
+      drawSlimeTendril(ctx, dx, dy, spec.len);
       if (spec.subCol !== undefined && spec.subLen !== undefined) {
-        drawSlimeTendril(ctx, lx + spec.subCol * cellW + 1, dy, spec.subLen, false);
+        drawSlimeTendril(ctx, lx + spec.subCol * cellW + 1, dy, spec.subLen);
       }
     }
   }
@@ -255,16 +248,13 @@ function registerLogoSprites(b: FallbackAtlasBuilder): void {
       drawLogoWord(ctx, 'THRONE', x + 26, y + 52, 6, 5, 5, 'throne', revealedLetters);
     }
 
-    // Frame 7 finishing sheen, reactor jewel & gleaming specular glints
+    // Frame 7 finishing sheen & central reactor jewel (clean emblem, zero stray sparkle clutter)
     if (f === 7) {
       outlinedBox(ctx, x + 123, y + 43, 12, 7, '#2ad446', '#0c0812', true);
       rect(ctx, x + 125, y + 44, 8, 5, '#6eff80');
       rect(ctx, x + 127, y + 45, 4, 3, '#f0ffe6');
-      // Crisp 4-point sparkle glints on KRUNKED & THRONE
-      const sparks: ReadonlyArray<[number, number]> = [
-        [24, 9], [102, 8], [206, 10], [58, 55], [192, 55],
-      ];
-      for (const [sx, sy] of sparks) {
+      // Two crisp deliberate 4-point specular glints on outer emblem corners
+      for (const [sx, sy] of [[24, 9], [206, 9]] as const) {
         rect(ctx, x + sx - 1, y + sy, 3, 1, '#ffffff');
         rect(ctx, x + sx, y + sy - 1, 1, 3, '#ffffff');
       }
@@ -988,7 +978,7 @@ function drawMutantBigPortrait(ctx: DrawCtx, x: number, y: number, w: number, h:
 }
 
 function drawCharSelectCard(ctx: DrawCtx, x: number, y: number, f: number): void {
-  // Frame 0 = Random ?, Frames 1..12 = Mutants 1..12, 13..17 = bonus
+  // Frame 0 = Random ?, Frames 1..12 = 12 DISTINCT recognizable mutant silhouettes (NOT identical Lego pegs!), 13..17 = bonus
   if (f === 0 || f > 12) {
     outlinedBox(ctx, x + 1, y + 1, 14, 22, '#241e30', INK);
     rect(ctx, x + 2, y + 2, 12, 2, '#4a3f61');
@@ -1000,46 +990,233 @@ function drawCharSelectCard(ctx: DrawCtx, x: number, y: number, f: number): void
   }
 
   const s = BUST_STYLES_24[(f - 1) * 2]!;
+  const cx = x + 8;
   outlinedBox(ctx, x + 1, y + 1, 14, 22, s.bgBot, INK);
   rect(ctx, x + 2, y + 2, 12, 9, s.bgTop);
-  // Tapered mini shoulders
-  outlinedTrapezoid(ctx, x + 8, y + 15, 6, 12, 7, s.skin, INK);
-  rect(ctx, x + 6, y + 16, 4, 4, s.skinHi);
-  if (f === 6) {
-    // Y.V. 3D triangle
-    for (let r = 0; r < 10; r++) {
-      const hw = Math.floor((r + 2) * 0.55);
-      rect(ctx, x + 8 - hw, y + 5 + r, hw * 2, 1, r < 4 ? s.skinHi : s.skin);
+
+  switch (f) {
+    case 1: {
+      // FISH: curved 3-spine dorsal fin crest + rounded amphibian head + gill cheeks + diagonal leather strap
+      outlinedTrapezoid(ctx, cx, y + 16, 6, 11, 6, s.skin, INK);
+      drawPixelLine(ctx, x + 4, y + 16, x + 11, y + 21, s.gear, 2);
+      px(ctx, cx, y + 18, '#ffe066');
+      // Tall curved dorsal fin crest
+      outlinedTrapezoid(ctx, cx, y + 2, 2, 6, 5, s.accent, INK);
+      px(ctx, cx - 1, y + 3, s.rim);
+      outlinedEllipse(ctx, cx, y + 11, 5, 5, s.skin, INK);
+      fillPixelEllipse(ctx, cx - 1, y + 9, 3, 2, s.skinHi);
+      rect(ctx, x + 4, y + 10, 3, 2, s.eye);
+      rect(ctx, x + 9, y + 10, 3, 2, s.eye);
+      px(ctx, x + 5, y + 11, INK);
+      px(ctx, x + 10, y + 11, INK);
+      rect(ctx, x + 5, y + 13, 6, 1, INK);
+      px(ctx, x + 6, y + 13, '#f5efe6');
+      px(ctx, x + 9, y + 13, '#f5efe6');
+      break;
     }
-    rect(ctx, x + 6, y + 10, 4, 2, INK);
-    rect(ctx, x + 7, y + 10, 2, 1, '#ffffff');
-    rect(ctx, x + 5, y + 16, 6, 2, s.gear);
-  } else if (f === 2) {
-    // Crystal faceted diamond head
-    outlinedDiamond(ctx, x + 8, y + 9, 4, 5, s.skin, INK);
-    rect(ctx, x + 6, y + 6, 2, 4, s.skinHi);
-    px(ctx, x + 6, y + 9, s.eye);
-    px(ctx, x + 9, y + 9, s.eye);
-  } else {
-    outlinedBox(ctx, x + 3, y + 5, 10, 10, s.skin, INK, true);
-    rect(ctx, x + 4, y + 6, 8, 2, s.skinHi);
-    if (f === 5) {
-      rect(ctx, x + 4, y + 6, 8, 7, s.gear);
-      rect(ctx, x + 5, y + 10, 6, 2, '#ffffff');
-    } else if (f === 8 || f === 12) {
-      rect(ctx, x + 4, y + 8, 8, 4, '#101824');
-      rect(ctx, x + 5, y + 9, 6, 2, s.eye);
-    } else {
+
+    case 2: {
+      // CRYSTAL: jagged faceted gem spires + diamond head + sharp side shoulder shards
+      outlinedTrapezoid(ctx, cx, y + 16, 8, 12, 6, s.skinDark, INK);
+      outlinedTrapezoid(ctx, cx - 5, y + 11, 1, 4, 9, s.skin, INK);
+      outlinedTrapezoid(ctx, cx + 5, y + 11, 1, 4, 9, s.skinDark, INK);
+      outlinedDiamond(ctx, cx, y + 10, 5, 6, s.skin, INK);
+      fillTrapezoid(ctx, cx - 2, y + 6, 1, 4, 8, s.skinHi);
+      px(ctx, cx - 2, y + 7, '#ffffff');
+      rect(ctx, x + 5, y + 10, 2, 2, s.eye);
+      rect(ctx, x + 9, y + 10, 2, 2, s.eye);
+      break;
+    }
+
+    case 3: {
+      // EYES: bulbous psychic cobalt cranium + floating brow + 3+ staring white eyes!
+      outlinedTrapezoid(ctx, cx, y + 16, 6, 10, 6, s.skin, INK);
+      outlinedEllipse(ctx, cx, y + 10, 5, 6, s.skin, INK);
+      fillPixelEllipse(ctx, cx - 1, y + 7, 3, 2, s.skinHi);
+      rect(ctx, x + 5, y + 3, 6, 2, s.gearHi);
+      // 3 unmistakable staring eyes (top forehead third eye + twin wide eyes + cheek eye)
+      rect(ctx, x + 7, y + 6, 2, 2, s.eye);
+      px(ctx, x + 8, y + 7, INK);
+      rect(ctx, x + 4, y + 9, 3, 3, s.eye);
+      rect(ctx, x + 9, y + 9, 3, 3, s.eye);
+      px(ctx, x + 5, y + 10, INK);
+      px(ctx, x + 10, y + 10, INK);
+      rect(ctx, x + 6, y + 13, 3, 2, s.eye);
+      px(ctx, x + 7, y + 13, INK);
+      break;
+    }
+
+    case 4: {
+      // MELTING: gaunt cracked skull dome + hollow dark sockets + flesh drip + exposed bone ribcage
+      outlinedTrapezoid(ctx, cx, y + 16, 5, 10, 6, s.gearDark, INK);
+      rect(ctx, x + 5, y + 17, 6, 1, s.skinHi);
+      rect(ctx, x + 5, y + 19, 6, 1, s.skin);
+      outlinedEllipse(ctx, cx, y + 9, 5, 4, s.skin, INK);
+      rect(ctx, x + 5, y + 6, 5, 2, s.skinHi);
+      // Gaunt narrow jaw + melting drip on left cheek
+      outlinedBox(ctx, x + 5, y + 12, 6, 4, s.skin, INK);
+      rect(ctx, x + 3, y + 11, 2, 5, s.skinDark);
+      // Deep sunken skull eye sockets + teeth
+      rect(ctx, x + 5, y + 9, 2, 2, INK);
+      rect(ctx, x + 9, y + 9, 2, 2, INK);
+      px(ctx, x + 6, y + 14, INK);
+      px(ctx, x + 8, y + 14, INK);
+      break;
+    }
+
+    case 5: {
+      // PLANT: slender green stalk + splayed collar leaves + wide snapping crimson flytrap jaw with white fangs!
+      outlinedTrapezoid(ctx, cx, y + 15, 4, 6, 7, s.skin, INK);
+      rect(ctx, x + 3, y + 17, 4, 2, s.skinHi);
+      rect(ctx, x + 9, y + 17, 4, 2, s.skinHi);
+      // Wide snapping carnivorous crimson flytrap dome
+      outlinedEllipse(ctx, cx, y + 9, 6, 5, s.gear, INK);
+      rect(ctx, x + 4, y + 5, 6, 2, s.gearHi);
+      px(ctx, x + 4, y + 6, s.eye);
+      px(ctx, x + 10, y + 6, s.eye);
+      // Snapping black mouth lined with interlocking white fangs!
+      rect(ctx, x + 3, y + 9, 10, 4, '#180610');
+      px(ctx, x + 4, y + 9, '#ffffff');
+      px(ctx, x + 7, y + 9, '#ffffff');
+      px(ctx, x + 10, y + 9, '#ffffff');
+      px(ctx, x + 5, y + 12, '#ffffff');
+      px(ctx, x + 9, y + 12, '#ffffff');
+      break;
+    }
+
+    case 6: {
+      // Y.V.: crisp shaded 3D ivory pyramid + giant cyclops eye + gleaming gold chain
+      outlinedTrapezoid(ctx, cx, y + 16, 8, 12, 6, '#302a3d', INK);
+      for (let r = 0; r < 11; r++) {
+        const hw = Math.floor((r + 2) * 0.52);
+        rect(ctx, cx - hw - 1, y + 4 + r, (hw + 1) * 2, 1, INK);
+        if (r > 0 && r < 10) {
+          rect(ctx, cx - hw, y + 4 + r, Math.max(1, hw), 1, r < 5 ? s.skinHi : s.skin);
+          rect(ctx, cx, y + 4 + r, hw, 1, r > 7 ? s.skinDark : '#d6d2e3');
+        }
+      }
+      rect(ctx, x + 6, y + 10, 4, 2, INK);
+      rect(ctx, x + 7, y + 10, 2, 1, '#ffffff');
+      rect(ctx, x + 5, y + 16, 6, 2, s.gear);
+      rect(ctx, x + 7, y + 18, 2, 2, s.gearHi);
+      break;
+    }
+
+    case 7: {
+      // STEROIDS: MASSIVE wide muscular shoulders filling card + V-cut white lab coat + round scientist glasses!
+      outlinedTrapezoid(ctx, cx, y + 12, 10, 14, 10, s.skin, INK);
+      // Shredded white lab coat V-lapels
+      rect(ctx, x + 2, y + 15, 4, 6, s.gearHi);
+      rect(ctx, x + 10, y + 15, 4, 6, s.gear);
+      rect(ctx, x + 7, y + 15, 2, 5, s.skinDark);
+      // Chiseled muscular head + gleaming round blue glasses
+      outlinedBox(ctx, x + 4, y + 4, 8, 9, s.skin, INK, true);
+      rect(ctx, x + 5, y + 5, 6, 2, s.skinHi);
+      outlinedBox(ctx, x + 4, y + 7, 4, 4, s.eye, INK);
+      outlinedBox(ctx, x + 8, y + 7, 4, 4, s.eye, INK);
+      px(ctx, x + 5, y + 8, '#ffffff');
+      px(ctx, x + 9, y + 8, '#ffffff');
+      rect(ctx, x + 6, y + 11, 4, 2, '#f7f4ed');
+      break;
+    }
+
+    case 8: {
+      // ROBOT: tall antenna + glowing red orb + beveled brushed-steel CRT monitor head + glowing green visor!
+      rect(ctx, cx - 1, y + 2, 2, 4, INK);
+      rect(ctx, cx - 1, y + 2, 2, 2, s.accent);
+      px(ctx, cx - 1, y + 2, '#ffffff');
+      outlinedTrapezoid(ctx, cx, y + 16, 8, 12, 6, s.skinDark, INK);
+      rect(ctx, x + 5, y + 17, 6, 3, s.gearDark);
+      px(ctx, x + 6, y + 18, s.gearHi);
+      px(ctx, x + 9, y + 18, s.gearHi);
+      // Chamfered steel CRT head + recessed glowing scanline visor
+      outlinedBox(ctx, x + 3, y + 5, 10, 10, s.skin, INK, true);
+      rect(ctx, x + 4, y + 6, 8, 2, s.skinHi);
+      outlinedBox(ctx, x + 4, y + 7, 8, 6, '#0d1519', INK);
+      rect(ctx, x + 5, y + 8, 6, 4, s.eye);
+      rect(ctx, x + 5, y + 10, 6, 1, '#ffffff');
+      break;
+    }
+
+    case 9: {
+      // CHICKEN: bold 3-lobe scarlet rooster comb crest + white feathered head + crimson bandana + golden beak!
+      outlinedTrapezoid(ctx, cx, y + 16, 6, 11, 6, s.skin, INK);
+      drawPixelLine(ctx, x + 5, y + 16, x + 10, y + 21, s.gear, 2);
+      // Prominent 3-lobe red comb on top
+      outlinedBox(ctx, x + 5, y + 2, 6, 4, s.gear, INK);
+      rect(ctx, x + 7, y + 2, 2, 3, s.gearHi);
+      outlinedEllipse(ctx, cx, y + 11, 5, 5, s.skin, INK);
+      // Flowing crimson martial headband + trailing left ribbon
+      rect(ctx, x + 2, y + 8, 11, 2, s.gear);
+      rect(ctx, x + 4, y + 8, 7, 1, s.gearHi);
+      px(ctx, x + 5, y + 10, INK);
+      px(ctx, x + 10, y + 10, INK);
+      // Sharp golden hooked beak
+      outlinedTrapezoid(ctx, cx, y + 11, 5, 2, 4, s.accent, INK);
+      px(ctx, cx, y + 12, '#fff5a6');
+      break;
+    }
+
+    case 10: {
+      // REBEL: sharply peaked desert cloth hood + deep black shadow face + glowing amber eyes + wrapped desert scarf!
+      outlinedTrapezoid(ctx, cx, y + 15, 8, 12, 7, s.skin, INK);
+      // Peaked nomad hood tapering at crown
+      outlinedTrapezoid(ctx, cx, y + 3, 2, 10, 6, s.skin, INK);
+      outlinedBox(ctx, x + 3, y + 8, 10, 8, s.skin, INK);
+      rect(ctx, x + 4, y + 7, 4, 2, s.skinHi);
+      // Pitch-black hood interior + blazing amber eyes
+      rect(ctx, x + 4, y + 8, 8, 4, '#100c14');
       rect(ctx, x + 5, y + 9, 2, 2, s.eye);
       rect(ctx, x + 9, y + 9, 2, 2, s.eye);
-      if (f === 1) rect(ctx, x + 6, y + 3, 4, 2, s.accent);
-      if (f === 9) {
-        rect(ctx, x + 6, y + 3, 4, 2, s.gear);
-        rect(ctx, x + 4, y + 7, 8, 2, s.gear);
-      }
-      if (f === 10) {
-        rect(ctx, x + 4, y + 12, 8, 3, s.gear);
-      }
+      px(ctx, x + 5, y + 9, '#ffffff');
+      // Layered desert cloth scarf draping down left shoulder
+      outlinedBox(ctx, x + 3, y + 12, 10, 4, s.gear, INK);
+      rect(ctx, x + 4, y + 13, 8, 1, s.gearHi);
+      rect(ctx, x + 4, y + 16, 3, 5, s.gear);
+      break;
+    }
+
+    case 11: {
+      // HORROR: glowing neon-green rad-hound/slime beast with orbiting rad droplets & luminous maw!
+      outlinedTrapezoid(ctx, cx, y + 15, 7, 10, 7, s.skinDark, INK);
+      fillTrapezoid(ctx, cx, y + 16, 5, 7, 5, s.skin);
+      outlinedEllipse(ctx, cx, y + 10, 5, 5, s.skinDark, INK);
+      fillPixelEllipse(ctx, cx, y + 10, 4, 4, s.skin);
+      fillPixelEllipse(ctx, cx - 1, y + 8, 2, 2, s.skinHi);
+      // Orbiting floating radioactive globules breaking silhouette
+      outlinedBox(ctx, x + 2, y + 4, 3, 3, s.gear, INK);
+      outlinedBox(ctx, x + 11, y + 6, 3, 3, s.skinHi, INK);
+      px(ctx, x + 3, y + 5, '#ffffff');
+      // Sunken dark core eyes + glowing toothy rad maw
+      rect(ctx, x + 5, y + 9, 2, 2, s.eye);
+      rect(ctx, x + 9, y + 9, 2, 2, s.eye);
+      px(ctx, x + 6, y + 9, s.accent);
+      px(ctx, x + 10, y + 9, s.accent);
+      rect(ctx, x + 5, y + 12, 6, 2, s.eye);
+      px(ctx, x + 6, y + 12, '#ffffff');
+      px(ctx, x + 9, y + 12, '#ffffff');
+      break;
+    }
+
+    default: {
+      // ROGUE: sloped aerodynamic cobalt IDPD helmet + white center crest + glowing cyan visor + white pauldrons!
+      outlinedTrapezoid(ctx, cx, y + 15, 7, 12, 7, s.skinDark, INK);
+      // Crisp white armored shoulder pauldrons
+      outlinedBox(ctx, x + 2, y + 15, 4, 5, s.gear, INK);
+      outlinedBox(ctx, x + 10, y + 15, 4, 5, s.gear, INK);
+      px(ctx, x + 3, y + 16, '#ffffff');
+      // Left comms antenna
+      rect(ctx, x + 3, y + 3, 1, 6, s.gearHi);
+      px(ctx, x + 3, y + 3, s.eye);
+      // Aerodynamic sloped helmet + raised white center crest ridge
+      outlinedTrapezoid(ctx, cx, y + 4, 6, 10, 6, s.skin, INK);
+      outlinedTrapezoid(ctx, cx, y + 10, 10, 7, 5, s.skin, INK);
+      rect(ctx, x + 7, y + 3, 2, 5, s.gearHi);
+      // Sleek curved glowing cyan tactical visor
+      outlinedBox(ctx, x + 4, y + 8, 8, 4, '#0c1324', INK);
+      rect(ctx, x + 5, y + 9, 6, 2, s.eye);
+      rect(ctx, x + 5, y + 9, 3, 1, '#ffffff');
+      break;
     }
   }
 }
@@ -1603,6 +1780,397 @@ function drawMutationEmblem(ctx: DrawCtx, cx: number, cy: number, idx: number, t
   }
 }
 
+/**
+ * 24 BESPOKE iconic pixel-art Ultra Mutation emblems (one handcrafted motif per mutant Ultra A/B — ZERO generic crosses!).
+ * Symbols: '1'=dark, '2'=fg, '3'=fgHi, '4'=accent, '5'=accentHi, 'w'=white.
+ */
+const ULTRA_THEMES_24: readonly MutCardTheme[] = [
+  // 0: Fish A (Confiscate) — emerald/gold mini loot chest
+  { bg: '#133024', bgHi: '#215440', dark: '#754614', fg: '#d9982b', fgHi: '#ffe073', accent: '#4de878', accentHi: '#ffffff' },
+  // 1: Fish B (Gun Warrant) — sheriff star + infinite brass ammo
+  { bg: '#152b3b', bgHi: '#244963', dark: '#946511', fg: '#f2c138', fgHi: '#fff59e', accent: '#6ef2ff', accentHi: '#ffffff' },
+  // 2: Crystal A (Fortress) — amethyst crystal citadel + heart
+  { bg: '#2b1245', bgHi: '#4a2075', dark: '#5e1a8f', fg: '#b852eb', fgHi: '#f0b8ff', accent: '#ff3b5c', accentHi: '#ffc2cc' },
+  // 3: Crystal B (Juggernaut) — armored amethyst juggernaut charge
+  { bg: '#33123d', bgHi: '#59206b', dark: '#75208c', fg: '#d966ff', fgHi: '#ffffff', accent: '#ffe047', accentHi: '#fff8bd' },
+  // 4: Eyes A (Projectile Style) — psychic eye suspending bullets
+  { bg: '#12224d', bgHi: '#1f3b82', dark: '#24479e', fg: '#5496ff', fgHi: '#bddeff', accent: '#f5cc47', accentHi: '#ffffff' },
+  // 5: Eyes B (Monster Style) — fierce psychic repulsion wave
+  { bg: '#261447', bgHi: '#43247a', dark: '#52299e', fg: '#8f66ff', fgHi: '#dcd1ff', accent: '#ff5288', accentHi: '#ffffff' },
+  // 6: Melting A (Brain Capacity) — exploding skull blast
+  { bg: '#3b1418', bgHi: '#662229', dark: '#8c7e6b', fg: '#ebe2d1', fgHi: '#ffffff', accent: '#ff5c26', accentHi: '#ffe866' },
+  // 7: Melting B (Detachment) — split skull shedding 3 rad orbs
+  { bg: '#1c2b21', bgHi: '#2f4d39', dark: '#857766', fg: '#e3d9c6', fgHi: '#ffffff', accent: '#59ff73', accentHi: '#d9ffe0' },
+  // 8: Plant A (Trapper) — colossal crimson thorny snare jaws
+  { bg: '#113318', bgHi: '#1f592b', dark: '#1c752b', fg: '#4be05c', fgHi: '#b8ffc0', accent: '#eb2f42', accentHi: '#ffffff' },
+  // 9: Plant B (Killer) — fierce snapping sapling swarm
+  { bg: '#2b1224', bgHi: '#4d2040', dark: '#21782e', fg: '#59e864', fgHi: '#c4ffca', accent: '#ff385c', accentHi: '#ffe866' },
+  // 10: Y.V. A (Ima Gun God) — crowned golden triangle + twin guns
+  { bg: '#2b203b', bgHi: '#4a3766', dark: '#9e6b11', fg: '#f5c736', fgHi: '#fff7ad', accent: '#ffffff', accentHi: '#ffeb78' },
+  // 11: Y.V. B (Back 2 Bizniz) — VIP cash stack + triple burst
+  { bg: '#1a301d', bgHi: '#2d5432', dark: '#1f7a32', fg: '#4ce065', fgHi: '#c4ffd0', accent: '#f5c736', accentHi: '#ffffff' },
+  // 12: Steroids A (Ambidextrous) — mirrored twin heavy guns
+  { bg: '#292238', bgHi: '#473b61', dark: '#546173', fg: '#9cb0c7', fgHi: '#e6f0fa', accent: '#ff9633', accentHi: '#fff599' },
+  // 13: Steroids B (Get Loaded) — overflowing multi-ammo crate
+  { bg: '#332414', bgHi: '#593e22', dark: '#8a5819', fg: '#e6b235', fgHi: '#fff299', accent: '#59ff73', accentHi: '#ff4252' },
+  // 14: Robot A (Refined Taste) — royal crown + gourmet plasma gun
+  { bg: '#132a36', bgHi: '#21495e', dark: '#4d6070', fg: '#9ab4c7', fgHi: '#e3f2fc', accent: '#f5c736', accentHi: '#59ff7a' },
+  // 15: Robot B (Regurgitate) — open robot jaw spawning loot chest
+  { bg: '#182b29', bgHi: '#2b4d49', dark: '#475966', fg: '#8da3b3', fgHi: '#d6e6f2', accent: '#59ff7a', accentHi: '#ffe047' },
+  // 16: Chicken A (Harder To Kill) — blazing phoenix bandana + flame
+  { bg: '#3d1518', bgHi: '#6b2429', dark: '#9e1c26', fg: '#f03240', fgHi: '#ff949c', accent: '#ffae26', accentHi: '#fff7a6' },
+  // 17: Chicken B (Determination) — boomerang teleporting katana arc
+  { bg: '#16243b', bgHi: '#263e66', dark: '#546880', fg: '#b5cde6', fgHi: '#ffffff', accent: '#5ce8ff', accentHi: '#ff4757' },
+  // 18: Rebel A (Personal Guard) — twin hooded allies + gold shield
+  { bg: '#21301f', bgHi: '#395436', dark: '#4c6348', fg: '#8fad8a', fgHi: '#d4ebd0', accent: '#f5c736', accentHi: '#ffffff' },
+  // 19: Rebel B (Riot) — rallied rebel fist + gunfire burst
+  { bg: '#361a1f', bgHi: '#5e2d36', dark: '#785e42', fg: '#c9a97c', fgHi: '#faebd2', accent: '#ff5247', accentHi: '#ffe866' },
+  // 20: Horror A (Stalker) — biohazard rad-cloud skull burst
+  { bg: '#0c3315', bgHi: '#175926', dark: '#17822c', fg: '#4dff6a', fgHi: '#d4ffd9', accent: '#d6ff47', accentHi: '#ffffff' },
+  // 21: Horror B (Anomaly) — early swirling green-violet warp vortex
+  { bg: '#21123b', bgHi: '#3b2069', dark: '#5d24a8', fg: '#b85eff', fgHi: '#f0ccff', accent: '#4dff78', accentHi: '#ffffff' },
+  // 22: Rogue A (Super Portal Strike) — triple orbital cobalt beams
+  { bg: '#102047', bgHi: '#1c387a', dark: '#1e54bd', fg: '#4da6ff', fgHi: '#c4f4ff', accent: '#ffe047', accentHi: '#ffffff' },
+  // 23: Rogue B (Super Blast Armor) — armored chestplate shockwave
+  { bg: '#122940', bgHi: '#1f476e', dark: '#2b5ea8', fg: '#6bb8ff', fgHi: '#e6f7ff', accent: '#6ef5ff', accentHi: '#ffffff' },
+];
+
+const ULTRA_GRIDS_16: Readonly<Record<number, readonly string[]>> = {
+  0: [
+    // FISH A: CONFISCATE — gleaming mini loot chest popping open with green rad/ammo sparks
+    '....4..5..4.....',
+    '.....4.5.4......',
+    '..333333333322..',
+    '.33222222222211.',
+    '.22111455411111.',
+    '.33333355333321.',
+    '.32222155122221.',
+    '.32222144122211.',
+    '.22222222222211.',
+    '..111111111111..',
+  ],
+  1: [
+    // FISH B: GUN WARRANT — gleaming 5-point sheriff badge + infinite loop bar
+    '.......3........',
+    '......332.......',
+    '.....33222......',
+    '.33333w5w22221..',
+    '..22235452221...',
+    '....2322221.....',
+    '...3322.2221....',
+    '..322.....221...',
+    '..4444.5.4444...',
+    '..45545554554...',
+  ],
+  2: [
+    // CRYSTAL A: FORTRESS — amethyst crystal castle battlements cradling crimson heart
+    '.32...332...32..',
+    '.321..321..321..',
+    '.3322233222321..',
+    '.3222222222211..',
+    '.322454.442211..',
+    '.2245444444211..',
+    '.2224444442211..',
+    '..22244442211...',
+    '..22224422211...',
+    '...111111111....',
+  ],
+  3: [
+    // CRYSTAL B: JUGGERNAUT — spiked amethyst crystal shield battering forward with gold sparks
+    '.....33322...4..',
+    '...33322221.45..',
+    '..33w222221..4..',
+    '.33ww2222221454.',
+    '.33222222221.54.',
+    '.32222222211454.',
+    '..222222211..4..',
+    '...2222211..45..',
+    '.....1111....4..',
+  ],
+  4: [
+    // EYES A: PROJECTILE STYLE — psychic eye encircled by suspended orbiting gold bullets
+    '.....45...45....',
+    '....444...444...',
+    '....33333322....',
+    '..3322wwww2211..',
+    '.322ww1111ww211.',
+    '.322ww1w11ww211.',
+    '..2222wwww2211..',
+    '....11111111....',
+    '..45.........45.',
+    '..444.......444.',
+  ],
+  5: [
+    // EYES B: MONSTER STYLE — fierce psychic eye firing outward repulsion chevrons
+    '.4.....33.....4.',
+    '45...332222...54',
+    '4...32wwww21...4',
+    '45.32ww11ww21.54',
+    '4..32ww11ww21..4',
+    '45..22wwww21..54',
+    '.4...111111...4.',
+    '..4..........4..',
+  ],
+  6: [
+    // MELTING A: BRAIN CAPACITY — exploding skull erupting in fiery blast rays
+    '.5..4..5..4..5..',
+    '..54454544545...',
+    '...455555554....',
+    '...333333322....',
+    '..33wwwwwww21...',
+    '..32..w.w..21...',
+    '..2222w.w2211...',
+    '...222222211....',
+    '....2.2.2.1.....',
+    '....1111111.....',
+  ],
+  7: [
+    // MELTING B: DETACHMENT — cracked skull splitting open into 3 bright rad mutation orbs
+    '..54...54...54..',
+    '.5444.5444.5444.',
+    '..44...44...44..',
+    '..3332....3322..',
+    '.33www....ww221.',
+    '.32..w....w..21.',
+    '.22221....12211.',
+    '..2221....1221..',
+    '...1.1....1.1...',
+  ],
+  8: [
+    // PLANT A: TRAPPER — giant snapping serrated thorny snare jaws
+    '.32..........23.',
+    '3321..4444..1223',
+    '321.44555544.122',
+    '221.4w4444w4.121',
+    '221.4.w..w.4.121',
+    '221.4..ww..4.121',
+    '221.4w4444w4.121',
+    '.221.444444.121.',
+    '..2211....1121..',
+    '....11111111....',
+  ],
+  9: [
+    // PLANT B: KILLER — twin fierce fanged killer saplings sprouting upward
+    '..444......444..',
+    '.45544....45544.',
+    '.4w4w4....4w4w4.',
+    '..444..44..444..',
+    '...32.4554.32...',
+    '..332.4ww4.321..',
+    '.32221.44.32221.',
+    '..1221.32.1221..',
+    '...1113321111...',
+    '......1111......',
+  ],
+  10: [
+    // Y.V. A: IMA GUN GOD — radiant haloed golden Y.V. pyramid apex + twin muzzles
+    '...5555555555...',
+    '.......3........',
+    '......332.......',
+    '.....33222......',
+    '....3322222.....',
+    '.w.332444221.w..',
+    'www3224w4221www.',
+    '.w.222222221.w..',
+    '..22222222211...',
+    '.1111111111111..',
+  ],
+  11: [
+    // Y.V. B: BACK 2 BIZNIZ — gleaming VIP dollar cash stack + golden crown bursts
+    '....45555554....',
+    '...4544554454...',
+    '..333333333322..',
+    '.33222455422211.',
+    '.32224522222211.',
+    '.32222455422211.',
+    '.22222222542211.',
+    '.22224554222211.',
+    '..111111111111..',
+  ],
+  12: [
+    // STEROIDS A: AMBIDEXTROUS — mirrored twin heavy automatic guns blazing outward!
+    '54............45',
+    '5443333223333445',
+    '54.3222112222.45',
+    '...2221..1222...',
+    '....221..122....',
+    '....111..111....',
+    '..54........45..',
+    '.544332..233445.',
+    '..54221..12245..',
+  ],
+  13: [
+    // STEROIDS B: GET LOADED — overflowing multi-ammo crate (bullets, shells, bolts, energy!)
+    '..55..44..ww..33',
+    '..55..44..ww..33',
+    '.33333333333322.',
+    '.32222222222211.',
+    '.322554433ww211.',
+    '.322554433ww211.',
+    '.22222222222211.',
+    '.22111111111111.',
+    '..111111111111..',
+  ],
+  14: [
+    // ROBOT A: REFINED TASTE — gleaming royal golden crown above sleek high-tier laser gun
+    '...4...44...4...',
+    '...44.4444.44...',
+    '...4444444444...',
+    '...1111111111...',
+    '..333333333322..',
+    '.33225555552211.',
+    '.22222222222211.',
+    '..221......111..',
+    '..111...........',
+  ],
+  15: [
+    // ROBOT B: REGURGITATE — open mechanical robot jaws spitting out a glowing golden chest
+    '..333333333322..',
+    '.33222222222211.',
+    '.32244222244211.',
+    '.22222222222211.',
+    '..11........11..',
+    '....55555555....',
+    '...5444w44445...',
+    '...5444444445...',
+    '..111111111111..',
+    '..333333333322..',
+  ],
+  16: [
+    // CHICKEN A: HARDER TO KILL — blazing phoenix flame rising from crimson warrior bandana
+    '.......5........',
+    '......554.......',
+    '.....45544......',
+    '....4544444.....',
+    '...445433444....',
+    '..333333333322..',
+    '.33222222222211.',
+    '332211111111221.',
+    '21..............',
+  ],
+  17: [
+    // CHICKEN B: DETERMINATION — curved glowing cyan teleport arc + flying katana sword!
+    '.....444444.....',
+    '...44w....w44...',
+    '..44........44..',
+    '.44......333.44.',
+    '.44.....33w2.44.',
+    '..44...33w2.....',
+    '...44.33w2......',
+    '.....5522.......',
+    '....551.........',
+  ],
+  18: [
+    // REBEL A: PERSONAL GUARD — twin hooded loyal allies flanking a gleaming golden shield!
+    '..32........32..',
+    '.3221..44..1223.',
+    '.3441.4554.1443.',
+    '.2221.45w4.1222.',
+    '.2221.4444.1222.',
+    '.2221..44..1222.',
+    '.1221..44..1221.',
+    '.1111......1111.',
+  ],
+  19: [
+    // REBEL B: RIOT — raised rebel fist surrounded by blazing gunfire sparks & crowd!
+    '.5..4......4..5.',
+    '..54.33333.45...',
+    '....3323232.....',
+    '....3222221.....',
+    '....3222221.....',
+    '.....22221......',
+    '..32.22221.32...',
+    '.3221.111.1223..',
+    '.1111.....1111..',
+  ],
+  20: [
+    // HORROR A: STALKER — billowing radioactive biohazard skull cloud!
+    '....44....44....',
+    '..334433334422..',
+    '.33322222222211.',
+    '.32211222211211.',
+    '.32211222211211.',
+    '..222221122211..',
+    '.44222222222244.',
+    '454.22122122.454',
+    '.44..111111..44.',
+  ],
+  21: [
+    // HORROR B: ANOMALY — early swirling emerald-and-violet dimensional warp vortex!
+    '....4444444.....',
+    '..44333333224...',
+    '.43322....2214..',
+    '.432..3332..14..',
+    '.432.33ww21.14..',
+    '.432.32ww21.14..',
+    '.422..2221..14..',
+    '..4221....124...',
+    '...411222214....',
+    '.....444444.....',
+  ],
+  22: [
+    // ROGUE A: SUPER PORTAL STRIKE — triple orbital cobalt laser strikes smashing down!
+    '..3w...3w...3w..',
+    '..3w...3w...3w..',
+    '..2w...2w...2w..',
+    '..2w...2w...2w..',
+    '..2w...2w...2w..',
+    '.42w4.42w4.42w4.',
+    '4555545555455554',
+    '.44444444444444.',
+    '..111111111111..',
+  ],
+  23: [
+    // ROGUE B: SUPER BLAST ARMOR — armored blue chestplate radiating huge cyan shockwave ring!
+    '....44444444....',
+    '..44w......w44..',
+    '.44..333333..44.',
+    '.4..33222221..4.',
+    '.4..322ww221..4.',
+    '.4..322ww221..4.',
+    '.4..22222211..4.',
+    '.44..111111..44.',
+    '..44w......w44..',
+    '....44444444....',
+  ],
+};
+
+function drawUltraEmblem(ctx: DrawCtx, cx: number, cy: number, idx: number, t: MutCardTheme, compact: boolean): void {
+  const palette: Record<string, string> = {
+    '1': t.dark,
+    '2': t.fg,
+    '3': t.fgHi,
+    '4': t.accent,
+    '5': t.accentHi,
+    w: '#ffffff',
+  };
+  const grid = ULTRA_GRIDS_16[idx] ?? ULTRA_GRIDS_16[0]!;
+  const gh = grid.length;
+  const gw = grid[0]!.length;
+
+  if (!compact) {
+    drawPixelGrid(ctx, cx - Math.floor(gw / 2), cy - Math.floor(gh / 2), grid, palette, 1, INK);
+    return;
+  }
+
+  // Crisp 10x10 HUD emblem downsample preserving bright accents & highlights
+  const dstW = 10;
+  const dstH = 10;
+  const ox = cx - 5;
+  const oy = cy - 5;
+  for (let dy = 0; dy < dstH; dy++) {
+    const sy = Math.min(gh - 1, Math.floor((dy * gh) / dstH));
+    for (let dx = 0; dx < dstW; dx++) {
+      const sx = Math.min(gw - 1, Math.floor((dx * gw) / dstW));
+      const ch = grid[sy]![sx];
+      if (ch && ch !== '.' && ch !== ' ') {
+        const col = palette[ch];
+        if (col) px(ctx, ox + dx, oy + dy, col);
+      }
+    }
+  }
+}
+
 function registerSkillAndCrownSprites(b: FallbackAtlasBuilder): void {
   // 29 Bespoke Mutation Cards: sprSkillIcon (24x32, 30 frames) & sprSkillIconHUD (16x16, 30 frames)
   b.addSprite('sprSkillIcon', 24, 32, 12, 16, 30, (ctx, x, y, w, h, f) => {
@@ -1627,33 +2195,27 @@ function registerSkillAndCrownSprites(b: FallbackAtlasBuilder): void {
     drawMutationEmblem(ctx, x + 8, y + 8, f, t, true);
   });
 
-  // 24 Bespoke Ultra Mutation Cards (sprEGSkillIcon 24x32x24 & sprEGIconHUD 16x16x24)
+  // 24 BESPOKE Ultra Mutation Cards (sprEGSkillIcon 24x32x24 & sprEGIconHUD 16x16x24)
   b.addSprite('sprEGSkillIcon', 24, 32, 12, 16, 24, (ctx, x, y, w, h, f) => {
-    const mutantIdx = Math.floor(f / 2);
     const isSlotB = f % 2 === 1;
-    const bust = BUST_STYLES_24[mutantIdx * 2 + (isSlotB ? 1 : 0)]!;
-    outlinedBox(ctx, x + 1, y + 1, w - 2, h - 2, '#2e2214', '#ffe047', true);
-    rect(ctx, x + 2, y + 2, w - 4, h - 4, bust.bgBot);
-    fillPixelEllipse(ctx, x + 12, y + 15, 9, 11, bust.bgTop);
-    rect(ctx, x + 2, y + 2, w - 4, 2, '#ffe047');
-    rect(ctx, x + 2, y + h - 4, w - 4, 2, '#c98e1c');
-    // Glowing golden Ultra gem star + mutant-colored faceted crystal core
-    outlinedDiamond(ctx, x + 12, y + 15, 7, 8, bust.skin, INK);
-    fillDiamond(ctx, x + 11, y + 14, 4, 5, bust.skinHi);
-    rect(ctx, x + 11, y + 6, 2, 18, isSlotB ? '#ff78d4' : '#ffe047');
-    rect(ctx, x + 4, y + 14, 16, 2, isSlotB ? '#ff78d4' : '#ffe047');
-    rect(ctx, x + 10, y + 13, 4, 4, '#ffffff');
+    const t = ULTRA_THEMES_24[f % ULTRA_THEMES_24.length]!;
+    const frameGold = isSlotB ? '#f5b836' : '#ffe047';
+    outlinedBox(ctx, x + 1, y + 1, w - 2, h - 2, '#1d1626', frameGold, true);
+    rect(ctx, x + 2, y + 2, w - 4, h - 4, t.bg);
+    fillPixelEllipse(ctx, x + 12, y + 16, 9, 10, t.bgHi);
+    // Regal gilded Ultra card top/bottom trim + corner rivets
+    rect(ctx, x + 2, y + 2, w - 4, 2, frameGold);
+    rect(ctx, x + 2, y + h - 4, w - 4, 2, '#9e6b14');
+    px(ctx, x + 3, y + 2, '#ffffff');
+    px(ctx, x + w - 4, y + 2, '#ffffff');
+    drawUltraEmblem(ctx, x + 12, y + 16, f, t, false);
   });
 
   b.addSprite('sprEGIconHUD', 16, 16, 8, 8, 24, (ctx, x, y, w, h, f) => {
-    const mutantIdx = Math.floor(f / 2);
-    const isSlotB = f % 2 === 1;
-    const bust = BUST_STYLES_24[mutantIdx * 2 + (isSlotB ? 1 : 0)]!;
-    outlinedBox(ctx, x + 1, y + 1, w - 2, h - 2, bust.bgTop, '#ffe047');
-    fillDiamond(ctx, x + 8, y + 8, 4, 4, bust.skin);
-    rect(ctx, x + 7, y + 3, 2, 10, isSlotB ? '#ff78d4' : '#ffe047');
-    rect(ctx, x + 3, y + 7, 10, 2, isSlotB ? '#ff78d4' : '#ffe047');
-    rect(ctx, x + 7, y + 7, 2, 2, '#ffffff');
+    const t = ULTRA_THEMES_24[f % ULTRA_THEMES_24.length]!;
+    outlinedBox(ctx, x + 1, y + 1, w - 2, h - 2, t.bg, '#ffe047');
+    rect(ctx, x + 2, y + 2, w - 4, 1, t.fgHi);
+    drawUltraEmblem(ctx, x + 8, y + 8, f, t, true);
   });
   b.addAlias('sprUltraIcon', 'sprEGSkillIcon');
 
@@ -1906,13 +2468,30 @@ function registerHudSprites(b: FallbackAtlasBuilder): void {
     outlinedBox(ctx, x + 2, y + 2, 6, 6, cols[f % cols.length]!, INK, true);
     px(ctx, x + 3, y + 3, '#ffffff');
   });
-  b.addSprite('sprKillsIcon', 10, 10, 5, 5, 1, (ctx, x, y) => {
-    outlinedBox(ctx, x + 1, y + 1, 8, 6, '#f0ece4', INK, true);
-    outlinedBox(ctx, x + 2, y + 6, 6, 3, '#d6cfc2', INK);
-    rect(ctx, x + 3, y + 3, 2, 2, INK);
-    rect(ctx, x + 6, y + 3, 2, 2, INK);
-    px(ctx, x + 4, y + 7, INK);
-    px(ctx, x + 6, y + 7, INK);
+  // Crisp native 8x8 pixel-perfect arcade skull (exact 1:1 with HUD 8x8 icon slot — zero scaling blur!)
+  b.addSprite('sprKillsIcon', 8, 8, 4, 4, 1, (ctx, x, y) => {
+    drawPixelGrid(
+      ctx,
+      x,
+      y,
+      [
+        '..3332..',
+        '.333222.',
+        '33222221',
+        '3OO22OO1',
+        '2OO22OO1',
+        '.22OO21.',
+        '.2O22O1.',
+        '..OOOO..',
+      ],
+      {
+        O: INK,
+        '1': '#b8afa0',
+        '2': '#ebe4d6',
+        '3': '#ffffff',
+      },
+      1,
+    );
   });
   b.addSprite('sprGameOverSkull', 8, 6, 4, 3, 1, (ctx, x, y) => {
     outlinedBox(ctx, x, y, 8, 5, '#f0ece4', INK, true);

@@ -525,12 +525,12 @@ const PIXEL_FONT_4X5: Record<number, readonly number[]> = {
   78: [9, 13, 11, 9, 9], // 'N'
   79: [6, 9, 9, 9, 6], // 'O'
   80: [14, 9, 14, 8, 8], // 'P'
-  81: [6, 9, 9, 11, 7], // 'Q'
+  81: [6, 9, 9, 13, 5], // 'Q' (5x5 crisp override below)
   82: [14, 9, 14, 10, 9], // 'R'
   83: [7, 8, 6, 1, 14], // 'S'
   84: [14, 4, 4, 4, 4], // 'T'
   85: [9, 9, 9, 9, 6], // 'U'
-  86: [10, 10, 10, 10, 4], // 'V'
+  86: [9, 9, 9, 5, 2], // 'V' (5x5 crisp override below)
   87: [9, 9, 9, 15, 9], // 'W' (5x5 crisp override below)
   88: [9, 9, 6, 9, 9], // 'X'
   89: [10, 10, 4, 4, 4], // 'Y'
@@ -625,11 +625,14 @@ const PIXEL_FONT_5X7: Record<number, readonly number[]> = {
 
 /**
  * Wide 5x5 native overrides for `fntSmall` glyphs that need an odd center column
- * (`M` and `W`) so words like `STEAM`, `PAW`, and `CLEAN-ROOM` read razor-sharp.
+ * (`M`, `V`, `W`) or protruding diagonal tail (`Q`) so words like `STEAM`, `ACTIVE`,
+ * `LV1`, `Q` swap badge, `PAW`, and `CLEAN-ROOM` read razor-sharp.
  * Packed as 5 rows of 5-bit masks (MSB = bit 4 = leftmost pixel).
  */
 const PIXEL_FONT_SMALL_WIDE_5X5: Record<number, readonly number[]> = {
   77: [17, 27, 21, 17, 17], // 'M' (#...# / ##.## / #.#.# / #...# / #...#)
+  81: [12, 18, 18, 22, 13], // 'Q' (.#.# -> .##.. / #..#. / #..#. / #.##. / .##.#)
+  86: [17, 17, 10, 10, 4],  // 'V' (#...# / #...# / .#.#. / .#.#. / ..#..)
   87: [17, 17, 21, 27, 17], // 'W' (#...# / #...# / #.#.# / ##.## / #...#)
 };
 

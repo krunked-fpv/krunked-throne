@@ -44,11 +44,12 @@ describe('assets: Procedural Fallback Manifest Integrity', () => {
     for (const spr of Object.values(manifest.sprites)) {
       expect(spr.frames.length).toBeGreaterThan(0);
       for (const f of spr.frames) {
-        expect(f.textureId).toBe(0);
+        const page = manifest.textures[f.textureId];
+        expect(page, `Missing texture page ${f.textureId} for ${spr.name}`).toBeDefined();
         expect(f.srcX).toBeGreaterThanOrEqual(0);
         expect(f.srcY).toBeGreaterThanOrEqual(0);
-        expect(f.srcX + f.srcW).toBeLessThanOrEqual(tex.width);
-        expect(f.srcY + f.srcH).toBeLessThanOrEqual(tex.height);
+        expect(f.srcX + f.srcW).toBeLessThanOrEqual(page!.width);
+        expect(f.srcY + f.srcH).toBeLessThanOrEqual(page!.height);
       }
     }
 
@@ -88,6 +89,73 @@ describe('assets: Procedural Fallback Manifest Integrity', () => {
     ]) {
       expect(manifest.sounds[snd], `Missing fallback sound ${snd}`).toBeDefined();
     }
+
+    // Wave 2 Art Overhaul: 32x32 calm biome floor slabs across all 16 biomes
+    for (const code of [0, 1, 2, 3, 4, 5, 6, 7, 100, 101, 102, 103, 104, 105, 106, 107]) {
+      const floorSpr = manifest.sprites[`sprFloor${code}`];
+      expect(floorSpr, `Missing biome floor sprFloor${code}`).toBeDefined();
+      expect(floorSpr!.width).toBe(32);
+      expect(floorSpr!.height).toBe(32);
+      expect(floorSpr!.frames.length).toBeGreaterThanOrEqual(4);
+    }
+
+    // Wave 2 Art Overhaul: authentic biome/secret props, portals, chests, bosses & VFX parity
+    for (const key of [
+      'sprPillar',
+      'sprPalacePillar',
+      'sprProtoStatueIdle',
+      'sprProtoStatueCharge',
+      'sprPizzaEntrance',
+      'sprIceFlowerIdle',
+      'sprProtoPortal',
+      'sprPopoPortal',
+      'sprCrownPedIdle',
+      'sprGoldChest',
+      'sprGoldChestOpen',
+      'sprCursedChest',
+      'sprCursedChestOpen',
+      'sprHealthChest',
+      'sprHealthChestOpen',
+      'sprProtoChest',
+      'sprProtoChestOpen',
+      'sprCrystalProp',
+      'sprCrystalProp1',
+      'sprCrystalPropBlue',
+      'sprCrystalPropGreen',
+      'sprStreetLight',
+      'sprHydrant',
+      'sprSodaMachine',
+      'sprMoneyPile',
+      'sprYVStatue',
+      'sprMutantTube',
+      'sprCoral',
+      'sprAnchor',
+      'sprOasisBarrel',
+      'sprPizzaBox',
+      'sprBigFlowerIdle',
+      'sprServer',
+      'sprVenusCarFixed',
+      'sprThroneCorpseIdle',
+      'sprNothingOff',
+      'sprScrapBossSleep',
+      'sprRogueStrike',
+      'sprNuke',
+      'sprToxicGas',
+      'sprHorrorBullet',
+      'sprShieldDisappear',
+    ]) {
+      expect(manifest.sprites[key], `Missing fallback overhaul sprite ${key}`).toBeDefined();
+    }
+
+    // Crisp native 5x5 fntSmall V & Q glyphs (distinct from U/0/9), native 8x8 skull, 24 bespoke Ultra frames
+    const fntSmall = manifest.fonts.fntSmall!;
+    expect(fntSmall.glyphs[86]!.w).toBe(5); // 'V'
+    expect(fntSmall.glyphs[81]!.w).toBe(5); // 'Q'
+    expect(manifest.sprites.sprKillsIcon!.width).toBe(8);
+    expect(manifest.sprites.sprKillsIcon!.height).toBe(8);
+    expect(manifest.sprites.sprEGSkillIcon!.frames.length).toBe(24);
+    expect(manifest.sprites.sprEGIconHUD!.frames.length).toBe(24);
+    expect(manifest.sprites.sprCharSelect!.frames.length).toBe(18);
   });
 
   it('supports CameraController boss focus bias with exact transform invertibility and GameRenderer combat FX events', () => {

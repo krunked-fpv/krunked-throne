@@ -434,11 +434,46 @@ function registerAllMutants(b: FallbackAtlasBuilder): void {
   b.addSprite('sprShieldB', 26, 26, 13, 13, 4, (ctx, x, y, _w, _h, f) =>
     drawCrystalShield(ctx, x, y, f, '#a66b14', '#f2bd38', '#fff7ba'),
   );
+  b.addSprite('sprShieldDisappear', 26, 26, 13, 13, 4, (ctx, x, y, _w, _h, f) => {
+    // Faceted Crystal Shield shattering outward into gleaming amethyst shards
+    const cx = x + 13;
+    const cy = y + 13;
+    const spread = 3 + f * 2;
+    const sz = Math.max(1, 4 - f);
+    const dirs: ReadonlyArray<[number, number]> = [
+      [-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0],
+    ];
+    for (let i = 0; i < dirs.length; i++) {
+      const [dx, dy] = dirs[i]!;
+      const sx = Math.round(cx + dx * spread);
+      const sy = Math.round(cy + dy * spread);
+      if (f < 3) {
+        outlinedDiamond(ctx, sx, sy, sz, sz, i % 2 === 0 ? '#c96eff' : '#8e2ed4', INK);
+        px(ctx, sx, sy, '#ffffff');
+      } else {
+        rect(ctx, sx, sy, 2, 2, '#f0c4ff');
+        px(ctx, sx, sy, '#ffffff');
+      }
+    }
+  });
   b.addSprite('sprStrongSpirit', 20, 20, 10, 10, 4, (ctx, x, y, _w, _h, f) => {
-    const bob = f % 2;
-    fillPixelEllipse(ctx, x + 10, y + 4 + bob, 6, 2, '#3ba6d9');
-    fillPixelEllipse(ctx, x + 10, y + 4 + bob, 5, 1, '#9cf5ff');
-    fillPixelEllipse(ctx, x + 10, y + 4 + bob, 3, 1, '#ffffff');
+    // Sleek hollow glowing spirit halo ring hovering cleanly above mutant (NOT a filled blue beanie!)
+    const cx = x + 10;
+    const hy = y + 2 + (f === 1 || f === 2 ? -1 : 0);
+    // Subtle dark-cyan outer rim pixels on top/bottom ring edges
+    rect(ctx, cx - 5, hy, 10, 1, '#2ca8db');
+    rect(ctx, cx - 6, hy + 1, 2, 2, '#4fd6ff');
+    rect(ctx, cx + 4, hy + 1, 2, 2, '#4fd6ff');
+    rect(ctx, cx - 5, hy + 3, 10, 1, '#4fd6ff');
+    // Bright luminous inner ring contour (center stays hollow/transparent!)
+    rect(ctx, cx - 4, hy, 8, 1, '#c4f8ff');
+    rect(ctx, cx - 5, hy + 1, 2, 1, '#ffffff');
+    rect(ctx, cx + 3, hy + 1, 2, 1, '#ffffff');
+    rect(ctx, cx - 4, hy + 2, 8, 1, '#9cf5ff');
+    // Animated twinkling white light glint gliding around the halo
+    const glintX = [-4, -1, 2, 4][f % 4]!;
+    rect(ctx, cx + glintX, hy, 2, 1, '#ffffff');
+    px(ctx, cx + glintX, hy + 2, '#ffffff');
   });
 }
 
@@ -505,23 +540,23 @@ function getEnemyVisual(def: EnemyDef): EnemyVisualSpec {
     case 'buff_gator': return { shape: 'gator', sizeW: 26, sizeH: 24, body: '#34753e', hi: '#68ba70', dark: '#183f20', accent: '#e05538', eye: '#ff4242' };
     case 'ballguy': return { shape: 'ballguy', sizeW: 18, sizeH: 18, body: '#72bd46', hi: '#b8ff73', dark: '#33631d', accent: '#dcff52', eye: '#18141a' };
     case 'fireballer': return { shape: 'ballguy', sizeW: 20, sizeH: 20, body: '#e65826', hi: '#ffb84d', dark: '#87210e', accent: '#fff266', eye: '#ffffff' };
-    case 'raven': return { shape: 'raven', sizeW: 20, sizeH: 20, body: '#3b3e4f', hi: '#6d738f', dark: '#1a1b24', accent: '#f5bc38', eye: '#ff4242' };
+    case 'raven': return { shape: 'raven', sizeW: 20, sizeH: 20, body: '#2c3042', hi: '#5a6382', dark: '#13151f', accent: '#f5be38', eye: '#ff3b3b' };
     case 'sniper': return { shape: 'sniper', sizeW: 18, sizeH: 20, body: '#63705f', hi: '#96a690', dark: '#333b31', accent: '#26232e', eye: '#ff2138' };
     case 'salamander': return { shape: 'salamander', sizeW: 22, sizeH: 18, body: '#de4c28', hi: '#ff9157', dark: '#7d200f', accent: '#ffe347', eye: '#fff27d' };
     case 'assassin': return { shape: 'assassin', sizeW: 18, sizeH: 18, body: '#4a4254', hi: '#7d718c', dark: '#221d29', accent: '#e0e4eb', eye: '#ffffff' };
     case 'jungle_assassin': return { shape: 'assassin', sizeW: 18, sizeH: 18, body: '#2f5e35', hi: '#5e9c63', dark: '#15301a', accent: '#b0ed7d', eye: '#ffe647' };
-    case 'spider': return { shape: 'spider', sizeW: 20, sizeH: 18, body: '#a845e0', hi: '#e699ff', dark: '#52187d', accent: '#ff70e8', eye: '#ffffff' };
+    case 'spider': return { shape: 'spider', sizeW: 20, sizeH: 18, body: '#d470ff', hi: '#fae0ff', dark: '#6d1fa3', accent: '#ff94f0', eye: '#ffffff' };
     case 'laser_crystal': return { shape: 'crystal', sizeW: 26, sizeH: 26, body: '#cc52e0', hi: '#fbb0ff', dark: '#6b1982', accent: '#ff3878', eye: '#ffffff' };
     case 'lightning_crystal': return { shape: 'crystal', sizeW: 26, sizeH: 26, body: '#4aa8ed', hi: '#b0f0ff', dark: '#1a528a', accent: '#fff259', eye: '#ffffff' };
-    case 'snowbot': return { shape: 'snowbot', sizeW: 20, sizeH: 20, body: '#9ab2c7', hi: '#e0f2ff', dark: '#4c6278', accent: '#e64238', eye: '#ff3838' };
-    case 'wolf': return { shape: 'wolf', sizeW: 20, sizeH: 18, body: '#c4d6e3', hi: '#f2f9ff', dark: '#6a8094', accent: '#8c9eb0', eye: '#ffe859' };
+    case 'snowbot': return { shape: 'snowbot', sizeW: 20, sizeH: 22, body: '#8fa9bf', hi: '#dceeff', dark: '#3d5166', accent: '#e63e35', eye: '#ff3838' };
+    case 'wolf': return { shape: 'wolf', sizeW: 22, sizeH: 18, body: '#aebfcf', hi: '#e6f2fc', dark: '#4d5d6e', accent: '#768899', eye: '#ffe847' };
     case 'snow_tank': return { shape: 'tank', sizeW: 28, sizeH: 24, body: '#627c94', hi: '#a1bed6', dark: '#2f4050', accent: '#de3838', eye: '#ff3838' };
     case 'gold_snow_tank': return { shape: 'tank', sizeW: 28, sizeH: 24, body: '#ebbc34', hi: '#fff491', dark: '#8c610e', accent: '#ff4238', eye: '#ff2b2b' };
     case 'freak': return { shape: 'freak', sizeW: 16, sizeH: 18, body: '#759e74', hi: '#a8d4a3', dark: '#3c593c', accent: '#cf3842', eye: '#e8ff78' };
     case 'rhino_freak': return { shape: 'rhino', sizeW: 26, sizeH: 24, body: '#5f8560', hi: '#91bd8f', dark: '#2f4731', accent: '#f0e7d8', eye: '#ff4242' };
     case 'explo_freak': return { shape: 'freak', sizeW: 18, sizeH: 18, body: '#abc44b', hi: '#e6ff7d', dark: '#5c6b20', accent: '#ff5238', eye: '#fff266' };
     case 'necromancer': return { shape: 'necro', sizeW: 18, sizeH: 20, body: '#5e467a', hi: '#9c7ebf', dark: '#291b3d', accent: '#59ff7a', eye: '#80ff96' };
-    case 'turret': return { shape: 'turret', sizeW: 18, sizeH: 18, body: '#7e8c9c', hi: '#bcccd9', dark: '#3d4652', accent: '#ff3838', eye: '#ff4d4d' };
+    case 'turret': return { shape: 'turret', sizeW: 18, sizeH: 18, body: '#b3c4d6', hi: '#f0f7ff', dark: '#465466', accent: '#f5c742', eye: '#ff3344' };
     case 'guardian': return { shape: 'guardian', sizeW: 22, sizeH: 26, body: '#4b8263', hi: '#85c79e', dark: '#214532', accent: '#5eff87', eye: '#b2ffc2' };
     case 'explo_guardian': return { shape: 'guardian', sizeW: 22, sizeH: 26, body: '#6ca84c', hi: '#b0f07d', dark: '#325920', accent: '#ebff59', eye: '#ffffff' };
     case 'crown_guardian': return { shape: 'guardian', sizeW: 24, sizeH: 26, body: '#52678f', hi: '#8fa8d9', dark: '#26324a', accent: '#f7c942', eye: '#80ffec' };
@@ -718,17 +753,34 @@ function drawRegularEnemy(
     }
 
     case 'raven': {
-      // Feathered scrapyard raven with splayed shaded wings & hooked golden beak
-      const wingSpread = state === 'fire' || state === 'walk' ? 4 : 1;
-      outlinedBox(ctx, cx - 5 - wingSpread, ty - 2, 4 + wingSpread, 5, dark, INK, true);
-      outlinedBox(ctx, cx + 1, ty - 2, 4 + wingSpread, 5, dark, INK, true);
-      rect(ctx, cx - 4 - wingSpread, ty - 1, 2 + wingSpread, 1, body);
-      outlinedEllipse(ctx, cx, ty - 1, 4, 5, body, INK);
-      rect(ctx, cx - 3, ty - 5, 5, 2, hi);
-      outlinedBox(ctx, cx + 2, ty - 3, 5, 3, accent, INK);
-      px(ctx, cx + 3, ty - 2, '#fff5a6');
-      rect(ctx, cx - 1, ty - 4, 2, 2, eye);
-      px(ctx, cx - 1, ty - 4, '#ffffff');
+      // Unmistakable dark corvid/crow silhouette with tapered tail, feathered wings & hooked golden beak
+      const flying = state === 'fire';
+      const flap = flying ? (frame % 2 === 0 ? -3 : 2) : 0;
+      // Splayed dark tail feathers behind torso
+      outlinedTrapezoid(ctx, cx - 5, ty + 2, 4, 2, 4, dark, INK);
+      // Folded or flapping dark corvid wings with cool slate feather sheen
+      if (flying) {
+        outlinedTrapezoid(ctx, cx - 6, ty - 5 + flap, 7, 3, 6, dark, INK);
+        outlinedTrapezoid(ctx, cx + 6, ty - 5 - flap, 7, 3, 6, dark, INK);
+        rect(ctx, cx - 8, ty - 4 + flap, 4, 1, hi);
+        rect(ctx, cx + 4, ty - 4 - flap, 4, 1, hi);
+      } else {
+        outlinedEllipse(ctx, cx - 4, ty + 1, 3, 4, dark, INK);
+        rect(ctx, cx - 5, ty - 1, 2, 3, hi);
+      }
+      // Hunched dark feathered crow torso & sculpted head
+      outlinedEllipse(ctx, cx, ty + 1, 4, 5, body, INK);
+      outlinedEllipse(ctx, cx + 1, ty - 4, 4, 3, body, INK);
+      rect(ctx, cx - 1, ty - 6, 4, 1, hi);
+      rect(ctx, cx - 2, ty + 3, 5, 2, dark);
+      // Hooked golden crow beak + sharp gleaming crimson eye
+      outlinedTrapezoid(ctx, cx + 5, ty - 4, 5, 2, 3, accent, INK);
+      px(ctx, cx + 4, ty - 4, '#fff5a6');
+      rect(ctx, cx + 1, ty - 5, 2, 2, eye);
+      px(ctx, cx + 1, ty - 5, '#ffffff');
+      // Bird talons
+      rect(ctx, cx - 2 + stride, ty + 6, 2, 2, accent);
+      rect(ctx, cx + 1 - stride, ty + 6, 2, 2, accent);
       break;
     }
 
@@ -784,19 +836,23 @@ function drawRegularEnemy(
     }
 
     case 'spider': {
-      // Translucent crystal-cave spider with 8 jointed legs, glossy translucent shell & clustered white eyes!
+      // High-contrast glowing amethyst Caves Spider with crisp dark outline, rim-lit carapace & bright jointed legs!
       for (let leg = -1; leg <= 1; leg++) {
         const lOff = leg * 3 + (leg % 2 === 0 ? stride : -stride);
-        drawPixelLine(ctx, cx - 5, ty + leg * 2, cx - 9, ty + lOff - 1, INK, 2);
-        drawPixelLine(ctx, cx - 5, ty + leg * 2, cx - 8, ty + lOff - 1, dark, 1);
-        drawPixelLine(ctx, cx + 5, ty + leg * 2, cx + 9, ty + lOff - 1, INK, 2);
-        drawPixelLine(ctx, cx + 5, ty + leg * 2, cx + 8, ty + lOff - 1, dark, 1);
+        drawPixelLine(ctx, cx - 4, ty + leg * 2, cx - 9, ty + lOff - 1, INK, 3);
+        drawPixelLine(ctx, cx - 4, ty + leg * 2, cx - 8, ty + lOff - 1, body, 1);
+        px(ctx, cx - 8, ty + lOff - 1, hi);
+        drawPixelLine(ctx, cx + 4, ty + leg * 2, cx + 9, ty + lOff - 1, INK, 3);
+        drawPixelLine(ctx, cx + 4, ty + leg * 2, cx + 8, ty + lOff - 1, body, 1);
+        px(ctx, cx + 8, ty + lOff - 1, hi);
       }
+      // Glossy rim-lit crystal spider abdomen & cephalothorax (pops sharply on dark cavern stone!)
       outlinedEllipse(ctx, cx, ty, 6, 5, dark, INK);
       fillPixelEllipse(ctx, cx, ty, 5, 4, body);
-      fillPixelEllipse(ctx, cx - 1, ty - 1, 3, 2, hi);
-      // Translucent crystalline sheen & glistening eyes
-      px(ctx, cx - 2, ty - 2, '#ffffff');
+      // Bright specular top rim arc so silhouette reads unmistakably
+      rect(ctx, cx - 3, ty - 3, 6, 1, hi);
+      rect(ctx, cx - 2, ty - 2, 4, 1, '#ffffff');
+      // Clustered glowing eyes + luminous fang tips
       px(ctx, cx - 2, ty + 1, eye);
       px(ctx, cx, ty + 1, eye);
       px(ctx, cx + 2, ty + 1, eye);
@@ -818,36 +874,62 @@ function drawRegularEnemy(
     }
 
     case 'snowbot': {
-      // Frosty rusted winter robot with sparkling snow cap, icicles, steel bevel & red optic!
-      outlinedBox(ctx, cx - 6, ty - 6, 12, 12, body, INK, true);
-      rect(ctx, cx - 5, ty + 2, 10, 3, dark);
-      // Frosty snowdrift cap & icicle teeth on top
-      rect(ctx, cx - 5, ty - 6, 10, 3, '#ebf7ff');
-      rect(ctx, cx - 4, ty - 5, 6, 1, '#ffffff');
-      px(ctx, cx - 4, ty - 3, '#c4e6ff');
-      px(ctx, cx + 3, ty - 3, '#c4e6ff');
-      // Glowing crimson visor eye + rust rivets
-      outlinedBox(ctx, cx - 4, ty - 2, 8, 3, '#18141f', INK);
-      rect(ctx, cx - 2, ty - 1, 4, 1, eye);
-      px(ctx, cx - 1, ty - 1, '#ffffff');
-      px(ctx, cx - 4, ty + 3, accent);
-      rect(ctx, cx - 5 + stride, ty + 6, 3, 2, INK);
-      rect(ctx, cx + 2 - stride, ty + 6, 3, 2, INK);
+      // Armored bipedal arctic Snowbot with sloped pauldrons, tapered waist & glowing crimson visor (NOT a toaster!)
+      // Hydraulic articulated side arms with heavy industrial claws
+      outlinedBox(ctx, cx - 9, ty - 2 + stride, 4, 6, dark, INK);
+      rect(ctx, cx - 8, ty - 1 + stride, 2, 3, body);
+      outlinedBox(ctx, cx + 5, ty - 2 - stride, 4, 6, dark, INK);
+      rect(ctx, cx + 6, ty - 1 - stride, 2, 3, body);
+      // Armored tapered chest torso & sloped frost-dusted shoulder dome
+      outlinedTrapezoid(ctx, cx, ty - 7, 8, 14, 7, body, INK);
+      outlinedTrapezoid(ctx, cx, ty, 12, 8, 6, dark, INK);
+      // Sunlit arctic armor sheen + frost trim on top shoulders
+      rect(ctx, cx - 4, ty - 6, 8, 2, hi);
+      rect(ctx, cx - 3, ty - 7, 6, 1, '#ffffff');
+      // Armored crimson shoulder stripe & recessed cyclops optic visor
+      rect(ctx, cx - 6, ty - 2, 2, 2, accent);
+      rect(ctx, cx + 4, ty - 2, 2, 2, accent);
+      outlinedBox(ctx, cx - 4, ty - 4, 8, 4, '#14111c', INK);
+      rect(ctx, cx - 3, ty - 3, 6, 2, state === 'fire' ? '#ffe047' : eye);
+      rect(ctx, cx - 1, ty - 3, 2, 1, '#ffffff');
+      // Chest radiator grille
+      rect(ctx, cx - 3, ty + 2, 6, 1, hi);
+      rect(ctx, cx - 2, ty + 4, 4, 1, body);
+      // Heavy stomping arctic tread boots
+      outlinedBox(ctx, cx - 5 + stride, ty + 6, 4, 3, '#263140', INK);
+      outlinedBox(ctx, cx + 1 - stride, ty + 6, 4, 3, '#263140', INK);
       break;
     }
 
     case 'wolf': {
-      // Fierce frosted snow-wolf with pointed ears & glowing amber eye
-      outlinedEllipse(ctx, cx, ty + 1, 6, 4, dark, INK);
-      fillPixelEllipse(ctx, cx, ty, 5, 3, body);
-      rect(ctx, cx - 4, ty - 2, 7, 2, hi);
-      outlinedBox(ctx, cx + 2, ty - 5, 6, 5, body, INK, true);
-      rect(ctx, cx + 2, ty - 7, 2, 2, dark);
-      rect(ctx, cx + 6, ty - 7, 2, 2, dark);
+      // Lean aggressive grey-white predatory Snow Wolf (angular snout, swept tail, pointed ears — NOT a fluffy sheep!)
+      // Swept bushy predator tail behind hindquarters
+      drawPixelLine(ctx, cx - 9, ty - 2 + (frame & 1), cx - 5, ty + 1, INK, 3);
+      drawPixelLine(ctx, cx - 9, ty - 2 + (frame & 1), cx - 5, ty + 1, dark, 2);
+      px(ctx, cx - 9, ty - 2 + (frame & 1), hi);
+      // Lean crouching lupine torso with dark slate dorsal fur & pale grey belly
+      outlinedTrapezoid(ctx, cx - 1, ty - 2, 11, 13, 6, body, INK);
+      rect(ctx, cx - 6, ty - 2, 10, 2, dark);
+      rect(ctx, cx - 5, ty, 8, 2, hi);
+      // Sharp angled wolf head, swept predator ears & jutting snout with white fangs!
+      outlinedTrapezoid(ctx, cx + 4, ty - 5, 5, 7, 5, body, INK);
+      outlinedBox(ctx, cx + 5, ty - 3, 5, 3, body, INK);
+      rect(ctx, cx + 6, ty - 3, 3, 1, hi);
+      px(ctx, cx + 9, ty - 2, INK); // black wolf nose
+      px(ctx, cx + 7, ty - 1, '#ffffff'); // bared fang
+      // Swept pointed wolf ears
+      outlinedTrapezoid(ctx, cx + 2, ty - 8, 1, 3, 4, dark, INK);
+      outlinedTrapezoid(ctx, cx + 5, ty - 8, 1, 3, 4, dark, INK);
+      // Piercing amber predator eye
       rect(ctx, cx + 4, ty - 4, 2, 2, eye);
       px(ctx, cx + 4, ty - 4, '#ffffff');
-      rect(ctx, cx - 5 + stride, ty + 4, 2, 3, dark);
-      rect(ctx, cx + 3 - stride, ty + 4, 2, 3, dark);
+      // Lean striding lupine legs
+      rect(ctx, cx - 6 + stride, ty + 4, 2, 4, INK);
+      px(ctx, cx - 6 + stride, ty + 5, dark);
+      rect(ctx, cx - 3 - stride, ty + 4, 2, 3, INK);
+      rect(ctx, cx + 2 - stride, ty + 4, 2, 4, INK);
+      px(ctx, cx + 2 - stride, ty + 5, body);
+      rect(ctx, cx + 5 + stride, ty + 4, 2, 3, INK);
       break;
     }
 
@@ -921,13 +1003,24 @@ function drawRegularEnemy(
     }
 
     case 'turret': {
-      // Mounted armored automated lab gun turret
-      outlinedTrapezoid(ctx, cx, ty + 1, 8, 12, 6, dark, INK);
+      // High-contrast titanium-silver Labs Turret with hazard stripe base, bright rim highlight & blazing crimson lens!
+      outlinedTrapezoid(ctx, cx, ty + 1, 10, 14, 6, dark, INK);
+      // High-visibility yellow/black lab hazard collar so turret pops sharply on dark teal floor!
+      rect(ctx, cx - 5, ty + 3, 10, 2, '#181a21');
+      rect(ctx, cx - 4, ty + 3, 2, 2, accent);
+      rect(ctx, cx, ty + 3, 2, 2, accent);
+      rect(ctx, cx + 4, ty + 3, 1, 2, accent);
+      // Bright brushed silver armored turret dome with crisp specular top edge
       outlinedBox(ctx, cx - 5, ty - 5, 10, 7, body, INK, true);
       rect(ctx, cx - 4, ty - 4, 8, 2, hi);
-      outlinedBox(ctx, cx + 3, ty - 3, 6, 3, body, INK);
+      rect(ctx, cx - 3, ty - 4, 5, 1, '#ffffff');
+      // Heavy twin-braced gun barrel
+      outlinedBox(ctx, cx + 3, ty - 3, 6, 4, body, INK);
       rect(ctx, cx + 4, ty - 2, 4, 1, hi);
-      rect(ctx, cx - 2, ty - 2, 3, 2, state === 'fire' ? '#ffffff' : eye);
+      px(ctx, cx + 7, ty - 2, '#ffffff');
+      // Glowing crimson targeting sensor optic
+      outlinedBox(ctx, cx - 3, ty - 2, 4, 3, state === 'fire' ? '#ffffff' : eye, INK);
+      px(ctx, cx - 2, ty - 1, '#ffffff');
       break;
     }
 
@@ -1139,10 +1232,11 @@ function drawBigBandit(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idl
   }
 }
 
-function drawBigDog(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idle' | 'walk' | 'hurt' | 'dead' | 'fire' | 'charge'): void {
+function drawBigDog(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idle' | 'walk' | 'hurt' | 'dead' | 'fire' | 'charge' | 'sleep'): void {
   const cx = x + 28;
   const cy = y + 28;
   if (mode === 'dead') {
+    fillPixelEllipse(ctx, cx, cy + 12, 24, 9, 'rgba(10, 8, 12, 0.5)');
     outlinedEllipse(ctx, cx, cy + 8, 22, 11, '#3b2e29', INK);
     fillPixelEllipse(ctx, cx, cy + 6, 16, 7, '#241c1a');
     rect(ctx, cx - 10, cy + 2, 20, 6, '#5c463b');
@@ -1150,44 +1244,75 @@ function drawBigDog(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idle' 
     return;
   }
   const hurt = mode === 'hurt';
-  const hull = hurt ? '#ffffff' : '#856552';
-  const hullHi = hurt ? '#ffffff' : '#c29a7f';
-  const hullDark = hurt ? '#ffcccc' : '#4a3328';
-  const steel = hurt ? '#ffdddd' : '#5e6873';
-  const bob = mode === 'walk' ? (f % 2 === 0 ? -1 : 1) : (f & 1);
-  const legOff = mode === 'walk' ? (f % 2 === 0 ? 2 : -2) : 0;
+  const sleep = mode === 'sleep';
+  const hull = hurt ? '#ffffff' : sleep ? '#6e5243' : '#856552';
+  const hullHi = hurt ? '#ffffff' : sleep ? '#9e7a64' : '#c29a7f';
+  const hullDark = hurt ? '#ffcccc' : '#452f24';
+  const rust = hurt ? '#ffcccc' : '#9e4c2b';
+  const steel = hurt ? '#ffdddd' : '#57616e';
+  const bob = sleep ? 2 : mode === 'walk' ? (f % 2 === 0 ? -1 : 1) : (f & 1);
+  const legOff = sleep ? 0 : mode === 'walk' ? (f % 2 === 0 ? 2 : -2) : 0;
   const ty = cy + bob;
 
-  // 4 Articulated spider-tank hydraulic piston legs
-  const legCoords: Array<[number, number]> = [
-    [-22, -10 + legOff], [12, -10 - legOff],
-    [-24, 6 - legOff], [14, 6 + legOff],
+  // Heavy grounded hull shadow beneath Big Dog
+  fillPixelEllipse(ctx, cx, cy + 16, 23, 8, 'rgba(10, 8, 12, 0.52)');
+
+  // 4 Rusted articulated hydraulic spider-tank legs (upper iron femur + piston rod + armored knee + clawed foot!)
+  const legSpecs: ReadonlyArray<{ side: -1 | 1; oy: number; shift: number }> = [
+    { side: -1, oy: -9, shift: legOff },
+    { side: 1, oy: -9, shift: -legOff },
+    { side: -1, oy: 6, shift: -legOff },
+    { side: 1, oy: 6, shift: legOff },
   ];
-  for (const [lx, ly] of legCoords) {
-    outlinedBox(ctx, cx + lx, ty + ly, 10, 7, steel, INK, true);
-    rect(ctx, cx + lx + 2, ty + ly + 2, 6, 2, '#a3b2c2');
-    outlinedBox(ctx, cx + lx + (lx < 0 ? -2 : 4), ty + ly + 5, 7, 6, '#333840', INK);
-    px(ctx, cx + lx + (lx < 0 ? -1 : 5), ty + ly + 6, '#7b8794');
+  for (const leg of legSpecs) {
+    const s = leg.side;
+    const kneeX = cx + s * (sleep ? 17 : 20);
+    const kneeY = ty + leg.oy + leg.shift;
+    const hipX = cx + s * 13;
+    const hipY = ty + leg.oy + 2;
+    const footX = cx + s * (sleep ? 19 : 23);
+    const footY = kneeY + (sleep ? 5 : 8);
+    // Upper rusted steel strut + gleaming hydraulic piston rod
+    drawPixelLine(ctx, hipX, hipY, kneeX, kneeY, INK, 6);
+    drawPixelLine(ctx, hipX, hipY, kneeX, kneeY, steel, 4);
+    drawPixelLine(ctx, hipX, hipY - 1, kneeX, kneeY - 1, rust, 2);
+    drawPixelLine(ctx, hipX, hipY + 1, kneeX, kneeY + 1, '#b5c4d4', 1);
+    // Lower articulated piston shin + oxidized iron plating
+    drawPixelLine(ctx, kneeX, kneeY, footX, footY, INK, 6);
+    drawPixelLine(ctx, kneeX, kneeY, footX, footY, '#424954', 4);
+    drawPixelLine(ctx, kneeX - s, kneeY + 1, footX - s, footY - 1, rust, 2);
+    // Riveted knee joint cap
+    outlinedEllipse(ctx, kneeX, kneeY, 3, 3, steel, INK);
+    px(ctx, kneeX - 1, kneeY - 1, '#c4d2e0');
+    // Heavy clawed scrap-steel foot pad
+    outlinedBox(ctx, footX - 3, footY - 2, 7, 4, '#2b3038', INK);
+    rect(ctx, footX - 2, footY - 1, 5, 1, '#6d7887');
   }
 
-  // Colossal riveted dome hull with 3-tone shading
+  // Colossal riveted weathered dome hull with 3-tone shading & rust weathering
   outlinedEllipse(ctx, cx, ty, 19, 16, hull, INK);
   fillPixelEllipse(ctx, cx - 2, ty - 4, 15, 9, hullHi);
   fillPixelEllipse(ctx, cx + 2, ty + 6, 16, 7, hullDark);
+  // Weathered rust blotches on armor plates
+  if (!hurt) {
+    rect(ctx, cx - 14, ty - 7, 5, 3, rust);
+    rect(ctx, cx + 8, ty + 4, 6, 3, rust);
+    rect(ctx, cx - 8, ty + 7, 4, 2, '#73341d');
+  }
   // Armor plate weld seams & bright specular rivets
   rect(ctx, cx - 16, ty, 32, 2, INK);
   rect(ctx, cx - 1, ty - 14, 2, 28, INK);
-  for (const [rx, ry] of [[-10, -9], [9, -9], [-12, 4], [11, 4]] as const) {
+  for (const [rx, ry] of [[-10, -9], [9, -9], [-12, 4], [11, 4], [-5, -11], [5, -11]] as const) {
     rect(ctx, cx + rx, ty + ry, 2, 2, '#2e221d');
     px(ctx, cx + rx, ty + ry, '#ebd2ba');
   }
 
   // Twin side gatling turrets & missile pods with hazard trim
   outlinedBox(ctx, cx - 24, ty - 5, 10, 11, steel, INK, true);
-  rect(ctx, cx - 23, ty - 3, 8, 2, '#f5cc47');
+  rect(ctx, cx - 23, ty - 3, 8, 2, '#e6b83c');
   rect(ctx, cx - 23, ty + 1, 8, 2, '#3a424d');
   outlinedBox(ctx, cx + 14, ty - 5, 10, 11, steel, INK, true);
-  rect(ctx, cx + 15, ty - 3, 8, 2, '#f5cc47');
+  rect(ctx, cx + 15, ty - 3, 8, 2, '#e6b83c');
   rect(ctx, cx + 15, ty + 1, 8, 2, '#3a424d');
   if (mode === 'fire') {
     rect(ctx, cx - 27, ty - 3, 4, 7, '#ffe047');
@@ -1196,11 +1321,20 @@ function drawBigDog(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idle' 
     rect(ctx, cx + 24, ty - 1, 2, 3, '#ffffff');
   }
 
-  // Central blazing multi-ring crimson cyclops laser optic
+  // Central cyclops laser optic (dimmed armored shutter when sleeping!)
   outlinedEllipse(ctx, cx, ty + 1, 8, 7, '#21181f', INK);
-  fillPixelEllipse(ctx, cx, ty + 1, 6, 5, mode === 'charge' ? '#ffe047' : '#ff3024');
-  fillPixelEllipse(ctx, cx, ty + 1, 4, 3, '#ff9e59');
-  rect(ctx, cx - 2, ty - 1, 3, 2, '#ffffff');
+  if (sleep) {
+    fillPixelEllipse(ctx, cx, ty + 1, 6, 5, '#3b242a');
+    rect(ctx, cx - 5, ty, 10, 2, '#1c151c');
+    rect(ctx, cx - 3, ty + 2, 6, 1, '#7a2024');
+    // Subtle idle vent steam puff while dormant
+    const steamY = ty - 16 - (f & 1) * 2;
+    fillPixelEllipse(ctx, cx + 5, steamY, 3, 2, 'rgba(200, 215, 225, 0.55)');
+  } else {
+    fillPixelEllipse(ctx, cx, ty + 1, 6, 5, mode === 'charge' ? '#ffe047' : '#ff3024');
+    fillPixelEllipse(ctx, cx, ty + 1, 4, 3, '#ff9e59');
+    rect(ctx, cx - 2, ty - 1, 3, 2, '#ffffff');
+  }
 }
 
 function drawLilHunter(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idle' | 'walk' | 'hurt' | 'dead' | 'lift' | 'land'): void {
@@ -1248,7 +1382,7 @@ function drawLilHunter(ctx: DrawCtx, x: number, y: number, f: number, mode: 'idl
   outlinedBox(ctx, cx + 1 - stride, ty + 8, 4, 5, armorDark, INK);
 }
 
-function drawKrunkedThrone(ctx: DrawCtx, x: number, y: number, f: number, mode: 'on' | 'activate' | 'beam' | 'death'): void {
+function drawKrunkedThrone(ctx: DrawCtx, x: number, y: number, f: number, mode: 'off' | 'on' | 'activate' | 'beam' | 'death'): void {
   const cx = x + 48;
   const cy = y + 44;
   if (mode === 'death') {
@@ -1263,47 +1397,84 @@ function drawKrunkedThrone(ctx: DrawCtx, x: number, y: number, f: number, mode: 
     return;
   }
 
+  const off = mode === 'off';
   const pulse = f % 2 === 0 ? 1 : 0;
-  const stone = '#2a3247';
-  const stoneHi = '#526085';
-  const stoneDark = '#151926';
-  const gold = '#e3b84b';
-  const goldHi = '#fff299';
-  const radBright = mode === 'beam' ? '#dcffe0' : pulse ? '#5cff75' : '#3be057';
-  const radCore = mode === 'beam' ? '#ffffff' : '#d4ffd9';
+  const stone = off ? '#23293b' : '#2a334a';
+  const stoneMid = off ? '#333c54' : '#3d4969';
+  const stoneHi = off ? '#465270' : '#5c6d96';
+  const stoneDark = '#131724';
+  const gold = off ? '#9e7f34' : '#deb447';
+  const goldHi = off ? '#c9ad59' : '#fff099';
+  const radDeep = off ? '#10291b' : '#16632a';
+  const radBright = off ? '#1d4a2d' : mode === 'beam' ? '#dcffe0' : pulse ? '#59ff73' : '#36db54';
+  const radCore = off ? '#2d6b42' : mode === 'beam' ? '#ffffff' : '#d4ffd9';
 
-  // Tiered stepped obsidian dais base with gilded royal inlay trim
+  // Heavy grounded dais drop shadow + floor power conduits feeding into flanks
+  fillPixelEllipse(ctx, cx, cy + 33, 45, 10, 'rgba(6, 7, 14, 0.62)');
+  outlinedBox(ctx, cx - 47, cy + 18, 8, 7, '#2b3242', INK);
+  outlinedBox(ctx, cx + 39, cy + 18, 8, 7, '#2b3242', INK);
+  rect(ctx, cx - 46, cy + 20, 6, 3, radBright);
+  rect(ctx, cx + 40, cy + 20, 6, 3, radBright);
+
+  // Tiered stepped obsidian dais base with carved stone joints & riveted gilded trim
   outlinedBox(ctx, cx - 44, cy + 20, 88, 18, stoneDark, INK);
+  rect(ctx, cx - 42, cy + 21, 84, 3, stone);
   outlinedBox(ctx, cx - 40, cy + 14, 80, 12, stone, INK);
   rect(ctx, cx - 38, cy + 15, 76, 2, stoneHi);
   rect(ctx, cx - 36, cy + 26, 72, 2, gold);
   rect(ctx, cx - 34, cy + 26, 24, 1, goldHi);
+  // Recessed stone stair seams & rivets on dais
+  for (const sx of [-28, -14, 14, 28]) {
+    rect(ctx, cx + sx, cy + 15, 1, 10, stoneDark);
+    px(ctx, cx + sx + 2, cy + 29, stoneHi);
+  }
 
-  // Flank pressurized rad coolant pipes + metallic containment clamps + rising bubbles!
-  outlinedBox(ctx, cx - 43, cy - 14, 13, 34, '#363f52', INK, true);
-  outlinedBox(ctx, cx + 30, cy - 14, 13, 34, '#363f52', INK, true);
-  rect(ctx, cx - 40, cy - 10, 7, 26, '#1c8c32');
+  // Flank pressurized rad coolant tanks + metallic containment clamps + rivets + rising bubbles
+  outlinedBox(ctx, cx - 43, cy - 14, 13, 34, '#363f54', INK, true);
+  outlinedBox(ctx, cx + 30, cy - 14, 13, 34, '#363f54', INK, true);
+  rect(ctx, cx - 42, cy - 13, 2, 32, '#5a6885');
+  rect(ctx, cx + 40, cy - 13, 2, 32, '#1d2230');
+  rect(ctx, cx - 40, cy - 10, 7, 26, radDeep);
   rect(ctx, cx - 39, cy - 10, 5, 26, radBright);
   rect(ctx, cx - 39, cy - 10, 2, 24, radCore);
-  rect(ctx, cx + 33, cy - 10, 7, 26, '#1c8c32');
+  rect(ctx, cx + 33, cy - 10, 7, 26, radDeep);
   rect(ctx, cx + 34, cy - 10, 5, 26, radBright);
   rect(ctx, cx + 34, cy - 10, 2, 24, radCore);
-  // Pipe containment clamps & specular rivets
-  for (const bandY of [-4, 6]) {
+  for (const bandY of [-5, 5, 14]) {
     rect(ctx, cx - 42, cy + bandY, 11, 3, gold);
     rect(ctx, cx + 31, cy + bandY, 11, 3, gold);
     px(ctx, cx - 41, cy + bandY, goldHi);
     px(ctx, cx + 32, cy + bandY, goldHi);
+    px(ctx, cx - 33, cy + bandY + 1, INK);
+    px(ctx, cx + 40, cy + bandY + 1, INK);
   }
-  // Rising luminous pipe bubbles
-  px(ctx, cx - 36, cy - 6 + pulse * 3, '#ffffff');
-  px(ctx, cx + 36, cy + 2 - pulse * 3, '#ffffff');
+  if (!off) {
+    px(ctx, cx - 36, cy - 6 + pulse * 3, '#ffffff');
+    px(ctx, cx + 36, cy + 2 - pulse * 3, '#ffffff');
+  }
 
-  // Towering beveled obsidian monolith backrest
+  // Towering beveled carved obsidian monolith backrest with deep masonry shading & weathered cracks
   outlinedTrapezoid(ctx, cx, cy - 38, 50, 58, 54, stone, INK);
-  rect(ctx, cx - 24, cy - 36, 48, 4, stoneHi);
+  fillTrapezoid(ctx, cx - 12, cy - 36, 20, 24, 50, stoneMid);
+  rect(ctx, cx - 24, cy - 36, 48, 3, stoneHi);
   rect(ctx, cx - 25, cy - 34, 4, 46, stoneHi);
-  rect(ctx, cx + 21, cy - 34, 4, 46, stoneDark);
+  rect(ctx, cx + 21, cy - 34, 5, 46, stoneDark);
+  // Carved architectural masonry block seams & metallic corner rivets
+  rect(ctx, cx - 24, cy - 26, 48, 1, stoneDark);
+  rect(ctx, cx - 26, cy - 10, 52, 1, stoneDark);
+  for (const [rx, ry] of [[-21, -33], [19, -33], [-23, -22], [21, -22], [-25, -4], [23, -4]] as const) {
+    rect(ctx, cx + rx, cy + ry, 2, 2, stoneDark);
+    px(ctx, cx + rx, cy + ry, '#8d9ec4');
+  }
+  // Weathered carved stone fissure cracks
+  drawPixelLine(ctx, cx - 19, cy - 31, cx - 15, cy - 25, stoneDark, 1);
+  drawPixelLine(ctx, cx + 17, cy - 29, cx + 13, cy - 23, stoneDark, 1);
+  drawPixelLine(ctx, cx - 21, cy - 16, cx - 17, cy - 12, stoneDark, 1);
+  // Embedded vertical glowing emerald power conduits inside backrest stone
+  rect(ctx, cx - 19, cy - 24, 2, 18, radDeep);
+  rect(ctx, cx - 19, cy - 22, 1, 14, radBright);
+  rect(ctx, cx + 17, cy - 24, 2, 18, radDeep);
+  rect(ctx, cx + 18, cy - 22, 1, 14, radBright);
 
   // Sculpted gothic gilded crown spires towering at apex (strictly within 96x88)
   outlinedTrapezoid(ctx, cx - 19, cy - 42, 4, 10, 7, stoneHi, INK);
@@ -1311,35 +1482,43 @@ function drawKrunkedThrone(ctx: DrawCtx, x: number, y: number, f: number, mode: 
   outlinedTrapezoid(ctx, cx, cy - 43, 6, 16, 10, gold, INK);
   fillTrapezoid(ctx, cx - 1, cy - 42, 3, 7, 7, goldHi);
   outlinedDiamond(ctx, cx, cy - 37, 3, 3, radBright, INK);
-  px(ctx, cx, cy - 38, '#ffffff');
+  if (!off) px(ctx, cx, cy - 38, '#ffffff');
 
-  // Heavy sculpted obsidian armrests with gilded edge plates
+  // Heavy sculpted obsidian armrests with gilded edge plates & iron bolts
   outlinedBox(ctx, cx - 34, cy - 4, 14, 24, stoneHi, INK, true);
   outlinedBox(ctx, cx + 20, cy - 4, 14, 24, stoneHi, INK, true);
   rect(ctx, cx - 32, cy, 10, 16, stoneDark);
   rect(ctx, cx + 22, cy, 10, 16, stoneDark);
+  rect(ctx, cx - 30, cy + 2, 6, 12, stone);
+  rect(ctx, cx + 24, cy + 2, 6, 12, stone);
   rect(ctx, cx - 32, cy - 3, 10, 2, gold);
   rect(ctx, cx + 22, cy - 3, 10, 2, gold);
+  px(ctx, cx - 31, cy - 3, goldHi);
+  px(ctx, cx + 23, cy - 3, goldHi);
+  px(ctx, cx - 29, cy + 16, '#8d9ec4');
+  px(ctx, cx + 29, cy + 16, '#8d9ec4');
 
   // Ornate glowing emerald reactor core chamber in center of the Throne!
   outlinedBox(ctx, cx - 16, cy - 24, 32, 34, stoneDark, INK, true);
   rect(ctx, cx - 14, cy - 18, 28, 3, radBright);
   rect(ctx, cx - 14, cy - 6, 28, 3, radBright);
-  rect(ctx, cx - 13, cy - 18, 26, 1, radCore);
-  // Colossal multi-ring glowing reactor jewel
-  outlinedEllipse(ctx, cx, cy - 10, 11 + (mode === 'beam' ? 2 : 0), 11 + (mode === 'beam' ? 2 : 0), '#155924', INK);
+  if (!off) rect(ctx, cx - 13, cy - 18, 26, 1, radCore);
+  // Colossal multi-ring reactor jewel
+  outlinedEllipse(ctx, cx, cy - 10, 11 + (mode === 'beam' ? 2 : 0), 11 + (mode === 'beam' ? 2 : 0), radDeep, INK);
   fillPixelEllipse(ctx, cx, cy - 10, 8, 8, radBright);
-  fillPixelEllipse(ctx, cx, cy - 10, 4 + pulse, 4 + pulse, radCore);
-  px(ctx, cx - 2, cy - 12, '#ffffff');
+  fillPixelEllipse(ctx, cx, cy - 10, 4 + (off ? 0 : pulse), 4 + (off ? 0 : pulse), radCore);
+  if (!off) px(ctx, cx - 2, cy - 12, '#ffffff');
 
   // Lower royal seat & forward mega-beam cannon emitter
-  outlinedBox(ctx, cx - 14, cy + 6, 28, 12, stoneHi, INK);
+  outlinedBox(ctx, cx - 14, cy + 6, 28, 12, stoneMid, INK);
+  rect(ctx, cx - 12, cy + 7, 24, 2, stoneHi);
   outlinedBox(ctx, cx - 8, cy + 12, 16, 16, '#1f2536', INK);
   rect(ctx, cx - 5, cy + 14, 10, 12, mode === 'beam' ? '#ffffff' : radBright);
   rect(ctx, cx - 3, cy + 15, 6, 10, radCore);
   if (mode === 'beam') {
-    rect(ctx, cx - 9, cy + 24, 18, 14, '#78ff90');
-    rect(ctx, cx - 5, cy + 24, 10, 14, '#ffffff');
+    rect(ctx, cx - 10, cy + 24, 20, 14, '#59ff80');
+    rect(ctx, cx - 6, cy + 24, 12, 14, '#d9ffe3');
+    rect(ctx, cx - 3, cy + 24, 6, 14, '#ffffff');
   } else if (mode === 'activate') {
     rect(ctx, cx - 22, cy - 30, 44, 2, '#b8ffc9');
   }
@@ -1425,6 +1604,7 @@ function registerAllEnemiesAndBosses(b: FallbackAtlasBuilder): void {
 
   // Big Dog (56x56)
   b.addSprite('sprScrapBossIdle', 56, 56, 28, 28, 2, (ctx, x, y, _w, _h, f) => drawBigDog(ctx, x, y, f, 'idle'));
+  b.addSprite('sprScrapBossSleep', 56, 56, 28, 28, 2, (ctx, x, y, _w, _h, f) => drawBigDog(ctx, x, y, f, 'sleep'));
   b.addSprite('sprScrapBossWalk', 56, 56, 28, 28, 4, (ctx, x, y, _w, _h, f) => drawBigDog(ctx, x, y, f, 'walk'));
   b.addSprite('sprScrapBossHurt', 56, 56, 28, 28, 1, (ctx, x, y, _w, _h, f) => drawBigDog(ctx, x, y, f, 'hurt'));
   b.addSprite('sprScrapBossDead', 56, 56, 28, 28, 1, (ctx, x, y, _w, _h, f) => drawBigDog(ctx, x, y, f, 'dead'));
@@ -1454,7 +1634,8 @@ function registerAllEnemiesAndBosses(b: FallbackAtlasBuilder): void {
     outlinedBox(ctx, x + 3, y + 6, 4, 3, '#1e3c78', INK);
   });
 
-  // The Krunked Throne (96x88) + NT-faithful 36x24 vertical mega-beam segment
+  // The Krunked Throne (96x88) + seamless continuous emerald-white 36x24 vertical mega-beam
+  b.addSprite('sprNothingOff', 96, 88, 48, 44, 1, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'off'));
   b.addSprite('sprNothingOn', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'on'));
   b.addAlias('sprNothingIdle', 'sprNothingOn');
   b.addAlias('sprNothingWalk', 'sprNothingOn');
@@ -1462,21 +1643,23 @@ function registerAllEnemiesAndBosses(b: FallbackAtlasBuilder): void {
   b.addSprite('sprNothingActivate', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'activate'));
   b.addSprite('sprNothingFire', 96, 88, 48, 44, 2, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'beam'));
   b.addSprite('sprNothingBeam', 36, 24, 18, 12, 3, (ctx, x, y, w, h, f) => {
-    // Vertical emerald mega-beam segment (36x24 matching NT sprNothingBeam proportions)
-    const wobble = f === 0 ? 0 : f === 1 ? 1 : -1;
-    // Outer dark emerald energy sheath
-    rect(ctx, x + 2, y, w - 4, h, '#14692c');
-    // Vivid rad green plasma body
-    rect(ctx, x + 5 + wobble, y, w - 10, h, '#38e864');
-    rect(ctx, x + 9, y, w - 18, h, '#94ffaa');
-    // Blazing white inner laser core
-    rect(ctx, x + 13 - wobble, y, 10, h, '#ffffff');
-    // Crackling plasma edge ribs & energy nodes
-    const ribY1 = (f * 8) % h;
-    const ribY2 = (f * 8 + 12) % h;
-    rect(ctx, x + 1, y + ribY1, 4, 3, '#7aff95');
-    rect(ctx, x + w - 5, y + ribY2, 4, 3, '#7aff95');
-    rect(ctx, x + 7, y + ((ribY1 + 4) % (h - 2)), w - 14, 2, '#d8ffe0');
+    // Seamless glowing emerald-white continuous vertical energy column (ZERO horizontal ladder rungs!)
+    const shift = f === 1 ? 1 : f === 2 ? -1 : 0;
+    // Soft deep emerald outer plasma containment
+    rect(ctx, x + 2, y, w - 4, h, '#0e5222');
+    // Vivid electric emerald plasma sheath
+    rect(ctx, x + 4, y, w - 8, h, '#28d458');
+    // High-energy neon mint inner stream
+    rect(ctx, x + 8 + shift, y, w - 16, h, '#7aff9c');
+    // Continuous blazing pure-white hot beam core
+    rect(ctx, x + 12, y, w - 24, h, '#e8ffed');
+    rect(ctx, x + 14 - shift, y, 8, h, '#ffffff');
+    // Subtle vertical streaming plasma filaments along edges (purely longitudinal, never horizontal bars!)
+    const segY = (f * 7) % h;
+    rect(ctx, x + 3, y + segY, 2, Math.min(7, h - segY), '#80ff9e');
+    rect(ctx, x + w - 5, y + ((segY + 11) % h), 2, Math.min(7, h - ((segY + 11) % h)), '#80ff9e');
+    rect(ctx, x + 10, y + ((segY + 5) % h), 1, Math.min(8, h - ((segY + 5) % h)), '#ffffff');
+    rect(ctx, x + w - 11, y + ((segY + 15) % h), 1, Math.min(8, h - ((segY + 15) % h)), '#ffffff');
   });
   b.addSprite('sprNothingDeath', 96, 88, 48, 44, 1, (ctx, x, y, _w, _h, f) => drawKrunkedThrone(ctx, x, y, f, 'death'));
   b.addAlias('sprNothingDead', 'sprNothingDeath');
@@ -1524,15 +1707,35 @@ function registerAllEnemiesAndBosses(b: FallbackAtlasBuilder): void {
       );
     }
     if (def.sprites.gun && !b.hasSprite(def.sprites.gun)) {
-      const gunMetal = def.isIdpd ? '#4680de' : def.id === 'sniper' ? '#4f5954' : '#85919e';
-      const gunHi = def.isIdpd ? '#9ceeff' : '#d6e2ed';
-      const gunAcc = def.isIdpd ? '#243c70' : '#8c5630';
-      b.addSprite(def.sprites.gun, 18, 8, 5, 4, 1, (ctx, x, y) => {
-        outlinedBox(ctx, x + 2, y + 1, 14, 4, gunMetal, INK);
-        rect(ctx, x + 3, y + 2, 12, 1, gunHi);
-        px(ctx, x + 15, y + 2, '#ffffff');
-        outlinedBox(ctx, x + 3, y + 4, 4, 3, gunAcc, INK);
-      });
+      if (def.id === 'raven') {
+        // Proportional compact dark gunmetal scrapyard carbine (NOT a giant bright white stick!)
+        b.addSprite(def.sprites.gun, 13, 6, 4, 3, 1, (ctx, x, y) => {
+          outlinedBox(ctx, x + 1, y + 1, 4, 4, '#6e4528', INK);
+          outlinedBox(ctx, x + 4, y + 1, 8, 3, '#4c5563', INK);
+          rect(ctx, x + 5, y + 2, 6, 1, '#8492a6');
+          rect(ctx, x + 6, y + 3, 2, 2, '#2d333d');
+        });
+      } else if (def.id === 'sniper') {
+        b.addSprite(def.sprites.gun, 17, 7, 5, 4, 1, (ctx, x, y) => {
+          outlinedBox(ctx, x + 1, y + 2, 5, 4, '#475243', INK);
+          outlinedBox(ctx, x + 5, y + 2, 11, 3, '#3b4240', INK);
+          rect(ctx, x + 6, y + 3, 9, 1, '#75827c');
+          outlinedBox(ctx, x + 7, y, 5, 3, '#22262b', INK);
+          px(ctx, x + 10, y + 1, '#ff3344');
+        });
+      } else if (def.isIdpd) {
+        b.addSprite(def.sprites.gun, 15, 7, 4, 4, 1, (ctx, x, y) => {
+          outlinedBox(ctx, x + 2, y + 1, 11, 4, '#366cc7', INK);
+          rect(ctx, x + 3, y + 2, 9, 1, '#7de6ff');
+          outlinedBox(ctx, x + 3, y + 4, 4, 3, '#1e3361', INK);
+        });
+      } else {
+        b.addSprite(def.sprites.gun, 14, 7, 4, 4, 1, (ctx, x, y) => {
+          outlinedBox(ctx, x + 1, y + 2, 4, 4, '#7d4d2a', INK);
+          outlinedBox(ctx, x + 4, y + 1, 9, 4, '#636d7a', INK);
+          rect(ctx, x + 5, y + 2, 7, 1, '#a8b6c7');
+        });
+      }
     }
   }
 
@@ -1659,7 +1862,21 @@ function getWeaponPalette(w: WeaponDef): WeaponPalette {
     return { metal: '#302b3d', hi: '#6d6487', dark: '#14111c', grip: '#d9323a', gripHi: '#ff737a', glow: '#b096ff', isGold: false, isUltra: false };
   }
   if (w.ammoType === 'energy') {
-    return { metal: '#7e91ab', hi: '#c7dbf2', dark: '#3d4b61', grip: '#2d3545', gripHi: '#596882', glow: id.includes('plasma') ? '#59ff78' : id.includes('lightning') ? '#6ef2ff' : '#ff385c', isGold: false, isUltra: false };
+    const isPlasmaBlade =
+      id.includes('energy_sword') ||
+      id.includes('energy_hammer') ||
+      id.includes('energy_screwdriver') ||
+      id.includes('plasma');
+    return {
+      metal: '#6a7d96',
+      hi: '#b5cbe3',
+      dark: '#313d52',
+      grip: '#262d3d',
+      gripHi: '#4e5c78',
+      glow: isPlasmaBlade ? '#3dff94' : id.includes('lightning') ? '#6ef2ff' : '#ff385c',
+      isGold: false,
+      isUltra: false,
+    };
   }
   if (w.ammoType === 'bolt') {
     return { metal: '#996f42', hi: '#cfa26d', dark: '#52371d', grip: '#3d2817', gripHi: '#6e492c', glow: '#6eff78', isGold: false, isUltra: false };
@@ -1728,12 +1945,29 @@ function drawWeaponArt(ctx: DrawCtx, x: number, y: number, _w: number, h: number
     }
 
     case 'sword': {
-      outlinedBox(ctx, x + 2, my - 1, 5, 3, pal.grip, INK);
-      px(ctx, x + 2, my, pal.glow); // pommel gem
-      outlinedBox(ctx, x + 6, my - 4, 3, 8, pal.glow, INK);
-      outlinedBox(ctx, x + 8, my - 2, 15, 4, def.id.includes('energy') ? pal.glow : pal.metal, INK, true);
-      rect(ctx, x + 9, my - 1, 12, 1, '#ffffff');
-      rect(ctx, x + 9, my + 1, 11, 1, pal.dark);
+      const isEnergyBlade = def.id.includes('energy');
+      if (isEnergyBlade) {
+        // Iconic neon-green / electric-cyan plasma Energy Sword!
+        outlinedBox(ctx, x + 1, my - 1, 6, 3, '#333d4f', INK);
+        rect(ctx, x + 2, my, 4, 1, '#6f82a3');
+        px(ctx, x + 1, my, '#42ff98');
+        // Sculpted plasma emitter crossguard
+        outlinedBox(ctx, x + 6, my - 4, 4, 8, '#4a5a75', INK, true);
+        rect(ctx, x + 7, my - 3, 2, 6, '#3dff94');
+        // Crackling neon-green/cyan plasma blade tapering to sharp tip
+        outlinedBox(ctx, x + 9, my - 2, 14, 5, '#19b868', '#0d4a2b', true);
+        rect(ctx, x + 10, my - 2, 12, 4, '#3dff94');
+        rect(ctx, x + 10, my - 1, 12, 2, '#9effdf');
+        rect(ctx, x + 10, my, 10, 1, '#ffffff');
+        px(ctx, x + 22, my, '#ffffff');
+      } else {
+        outlinedBox(ctx, x + 2, my - 1, 5, 3, pal.grip, INK);
+        px(ctx, x + 2, my, pal.glow); // pommel gem
+        outlinedBox(ctx, x + 6, my - 4, 3, 8, pal.glow, INK);
+        outlinedBox(ctx, x + 8, my - 2, 15, 4, pal.metal, INK, true);
+        rect(ctx, x + 9, my - 1, 12, 1, '#ffffff');
+        rect(ctx, x + 9, my + 1, 11, 1, pal.dark);
+      }
       break;
     }
 
@@ -1802,11 +2036,23 @@ function drawWeaponArt(ctx: DrawCtx, x: number, y: number, _w: number, h: number
     }
 
     case 'multi_mg': {
-      outlinedBox(ctx, x + 2, my - 4, 11, 8, pal.metal, INK);
-      rect(ctx, x + 3, my - 3, 9, 2, pal.hi);
-      outlinedBox(ctx, x + 12, my - 5, 10, 3, pal.hi, INK);
-      outlinedBox(ctx, x + 12, my - 1, 11, 3, pal.metal, INK);
-      outlinedBox(ctx, x + 12, my + 3, 10, 3, pal.dark, INK);
+      // Cohesive Triple/Quadruple Machinegun body with reinforced receiver, braced triple-barrel shroud & front clamp!
+      outlinedBox(ctx, x + 1, my - 1, 5, 5, pal.grip, INK, true);
+      rect(ctx, x + 2, my, 3, 1, pal.gripHi);
+      // Heavy braced receiver + underslung ammo drum
+      outlinedBox(ctx, x + 4, my - 4, 10, 7, pal.metal, INK, true);
+      rect(ctx, x + 5, my - 3, 8, 2, pal.hi);
+      rect(ctx, x + 5, my + 1, 8, 1, pal.dark);
+      outlinedBox(ctx, x + 8, my + 2, 5, 4, pal.dark, INK);
+      rect(ctx, x + 9, my + 3, 3, 1, pal.glow);
+      // Unified triple-barrel assembly bound by heavy front shroud collar (NOT 3 floating bars!)
+      outlinedBox(ctx, x + 13, my - 4, 10, 8, pal.dark, INK);
+      rect(ctx, x + 14, my - 3, 8, 1, pal.hi);
+      rect(ctx, x + 14, my - 1, 9, 2, pal.metal);
+      rect(ctx, x + 14, my + 2, 8, 1, pal.hi);
+      // Braced steel front barrel clamp
+      rect(ctx, x + 18, my - 4, 2, 8, pal.hi);
+      rect(ctx, x + 19, my - 4, 1, 8, pal.dark);
       break;
     }
 
@@ -1858,19 +2104,33 @@ function drawWeaponArt(ctx: DrawCtx, x: number, y: number, _w: number, h: number
     }
 
     case 'laser_rifle': {
-      outlinedBox(ctx, x + 2, my - 3, 21, 5, pal.metal, INK);
-      rect(ctx, x + 3, my - 2, 19, 2, pal.hi);
-      rect(ctx, x + 7, my - 1, 14, 2, pal.glow);
-      rect(ctx, x + 9, my - 1, 10, 1, '#ffffff');
-      outlinedBox(ctx, x + 4, my + 2, 4, 4, pal.grip, INK);
+      // Sculpted chunky sci-fi Laser Rifle with receiver, recessed glowing capacitor cell & twin focusing rails (NO candy-cane stripes!)
+      outlinedBox(ctx, x + 1, my - 2, 6, 5, pal.grip, INK, true);
+      rect(ctx, x + 2, my - 1, 4, 1, pal.gripHi);
+      outlinedBox(ctx, x + 5, my - 4, 12, 7, pal.metal, INK, true);
+      rect(ctx, x + 6, my - 3, 10, 2, pal.hi);
+      rect(ctx, x + 6, my + 1, 10, 1, pal.dark);
+      // Recessed glowing energy capacitor core inside receiver
+      outlinedBox(ctx, x + 8, my - 2, 6, 4, '#1b1424', INK);
+      rect(ctx, x + 9, my - 1, 4, 2, pal.glow);
+      px(ctx, x + 10, my - 1, '#ffffff');
+      // Extended slate-steel focusing barrel & glowing emitter nozzle
+      outlinedBox(ctx, x + 16, my - 3, 6, 5, pal.dark, INK);
+      rect(ctx, x + 17, my - 2, 4, 1, pal.hi);
+      rect(ctx, x + 21, my - 2, 2, 3, pal.glow);
+      px(ctx, x + 21, my - 1, '#ffffff');
+      outlinedBox(ctx, x + 7, my + 2, 4, 4, pal.grip, INK);
       break;
     }
 
     case 'laser_pistol': {
-      outlinedBox(ctx, x + 5, my - 3, 14, 5, pal.metal, INK);
-      rect(ctx, x + 6, my - 2, 12, 2, pal.hi);
-      rect(ctx, x + 12, my - 1, 6, 2, pal.glow);
-      rect(ctx, x + 14, my - 1, 3, 1, '#ffffff');
+      outlinedBox(ctx, x + 5, my - 4, 13, 6, pal.metal, INK, true);
+      rect(ctx, x + 6, my - 3, 11, 2, pal.hi);
+      rect(ctx, x + 6, my, 11, 1, pal.dark);
+      // Recessed energy cell window & glowing emitter tip
+      rect(ctx, x + 9, my - 2, 4, 2, pal.glow);
+      px(ctx, x + 10, my - 2, '#ffffff');
+      rect(ctx, x + 17, my - 2, 2, 2, pal.glow);
       outlinedBox(ctx, x + 6, my + 2, 4, 4, pal.grip, INK);
       break;
     }
@@ -1978,16 +2238,46 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     }
   };
   const drawSlash = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, core: string): void => {
+    // High-contrast Vlambeer-style swooping crescent arc with blazing pure-white leading edge & energetic sparks!
     const cy = y + Math.floor(h / 2);
-    const thick = Math.max(2, 5 - f);
-    for (let dy = -Math.floor(h * 0.44); dy <= Math.floor(h * 0.44); dy++) {
-      const ny = dy / (h * 0.46);
-      const bend = Math.round((1 - ny * ny) * (w * 0.42));
-      const bx = x + Math.floor(w * 0.24) + bend;
-      // Dark contrast lip behind crescent so melee swings read sharply even over bright snow/sand
-      rect(ctx, bx - 2, cy + dy, thick + 3, 1, '#0d0914');
-      rect(ctx, bx - 1, cy + dy, thick + 1, 1, outer);
-      rect(ctx, bx, cy + dy, Math.max(1, thick - 1), 1, core);
+    const halfSpan = Math.floor(h * 0.46);
+    const maxThick = f === 0 ? Math.max(5, Math.floor(w * 0.28)) : f === 1 ? Math.max(3, Math.floor(w * 0.19)) : 2;
+
+    for (let dy = -halfSpan; dy <= halfSpan; dy++) {
+      const ny = dy / (halfSpan + 0.5);
+      const curve = 1 - ny * ny;
+      const taper = Math.pow(Math.max(0, curve), 0.65);
+      const thick = Math.max(1, Math.round(maxThick * taper));
+      const leadX = x + Math.floor(w * 0.30) + Math.round(curve * w * 0.52);
+      const trailX = leadX - thick;
+
+      // Crisp 1px dark contrast rim ONLY on trailing concave edge (keeps leading edge blazing pure white!)
+      if (f < 2 && thick >= 2) {
+        rect(ctx, trailX - 1, cy + dy, 1, 1, '#120a18');
+      }
+      // Vivid saturated outer arc energy sweep
+      rect(ctx, trailX, cy + dy, thick, 1, outer);
+      // Blazing bright white-hot cutting leading edge
+      const edgeW = f === 0 ? Math.max(2, Math.ceil(thick * 0.48)) : Math.max(1, Math.ceil(thick * 0.5));
+      rect(ctx, leadX - edgeW + 1, cy + dy, edgeW, 1, core);
+      if (taper > 0.45 && f < 2) {
+        px(ctx, leadX + 1, cy + dy, '#ffffff');
+      }
+    }
+
+    // Dynamic energetic pixel sparks & plasma flecks flying off the leading arc!
+    const sparkOffsets: ReadonlyArray<[number, number, boolean]> =
+      f === 0
+        ? [[0.84, -0.32, true], [0.88, 0.24, true], [0.68, -0.44, false], [0.70, 0.42, false], [0.92, -0.05, true]]
+        : f === 1
+          ? [[0.88, -0.26, true], [0.82, 0.34, false], [0.62, -0.42, true], [0.65, 0.44, true]]
+          : [[0.86, -0.18, false], [0.78, 0.28, true], [0.58, -0.38, false]];
+    for (const [fx, fy, isWhite] of sparkOffsets) {
+      const sx = x + Math.round(w * fx);
+      const sy = cy + Math.round(h * fy);
+      if (sx >= x + 1 && sx < x + w - 1 && sy >= y + 1 && sy < y + h - 1) {
+        rect(ctx, sx, sy, isWhite ? 2 : 1, 1, isWhite ? '#ffffff' : outer);
+      }
     }
   };
   const drawExplosion = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, mid: string, core: string): void => {
@@ -2091,7 +2381,6 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     ['sprGuardianBullet', 13, '#106630', '#4dff80', '#f0fff4'],
     ['sprBigGuardianBullet', 17, '#0f5928', '#52ff88', '#ffffff'],
     ['sprExploGuardianBullet', 14, '#596e0e', '#e0ff38', '#ffffff'],
-    ['sprHorrorBullet', 11, '#147528', '#6eff78', '#f0fff0'],
     ['sprLHBouncer', 11, '#15429e', '#5ce1ff', '#ffffff'],
     ['sprThrone2Bullet', 16, '#0f6624', '#4dff75', '#ffffff'],
   ];
@@ -2101,15 +2390,72 @@ function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     );
   }
 
+  // Dedicated high-contrast Horror Rad Beam globule, Nuke warhead, Toxic Gas cloud & Rogue Portal Strike VFX
+  b.addSprite('sprHorrorBullet', 12, 12, 6, 6, 3, (ctx, x, y, _w, _h, f) => {
+    const cx = x + 6;
+    const cy = y + 6;
+    fillPixelEllipse(ctx, cx, cy, 5, 5, '#092b12');
+    fillPixelEllipse(ctx, cx, cy, 4, 4, '#24cf4c');
+    fillPixelEllipse(ctx, cx, cy, 3, 3, f === 1 ? '#b8ffc4' : '#73ff8c');
+    rect(ctx, cx - 1, cy - 1, 2, 2, '#ffffff');
+    // Orbiting rad sparkles
+    px(ctx, cx - 4 + f * 3, cy - 3, '#d9ffe0');
+    px(ctx, cx + 3 - f * 2, cy + 3, '#73ff8c');
+  });
+
+  b.addSprite('sprNuke', 18, 10, 9, 5, 2, (ctx, x, y, _w, _h, f) => {
+    // Chunky tactical mini-nuke warhead with yellow hazard tail fins, glowing rad nose & thruster plume
+    rect(ctx, x, y + 3, 4, 4, f === 0 ? '#ff6b1c' : '#ffe047');
+    rect(ctx, x + 2, y + 4, 2, 2, '#ffffff');
+    outlinedBox(ctx, x + 3, y + 1, 4, 8, '#e8b835', INK);
+    rect(ctx, x + 4, y + 4, 2, 2, INK);
+    outlinedBox(ctx, x + 6, y + 2, 10, 6, '#546b4c', INK, true);
+    rect(ctx, x + 7, y + 3, 8, 2, '#87a87c');
+    rect(ctx, x + 11, y + 2, 2, 6, '#4dff70');
+    px(ctx, x + 11, y + 3, '#ffffff');
+    outlinedBox(ctx, x + 14, y + 3, 3, 4, '#c7382c', INK);
+  });
+
+  b.addSprite('sprToxicGas', 22, 22, 11, 11, 4, (ctx, x, y, _w, _h, f) => {
+    // Billowing layered dark-outlined neon-acid toxic cloud
+    const cx = x + 11;
+    const cy = y + 11;
+    const dx = f === 1 ? 1 : f === 3 ? -1 : 0;
+    const dy = f === 2 ? 1 : 0;
+    outlinedEllipse(ctx, cx - 3 + dx, cy - 1, 6, 5, '#2b8a32', '#0f2b14');
+    outlinedEllipse(ctx, cx + 3 - dx, cy + 1, 6, 5, '#22752a', '#0f2b14');
+    outlinedEllipse(ctx, cx, cy - 2 + dy, 6, 5, '#47c942', '#143d1a');
+    fillPixelEllipse(ctx, cx - 2, cy - 3 + dy, 3, 2, '#a8ff5e');
+    fillPixelEllipse(ctx, cx + 3, cy + 2 - dy, 3, 2, '#6eff59');
+    px(ctx, cx - 2 + dx, cy - 3, '#e8ffbd');
+    px(ctx, cx + 4, cy - 1 + dy, '#d4ff99');
+  });
+
+  b.addSprite('sprRogueStrike', 28, 28, 14, 14, 4, (ctx, x, y, _w, _h, f) => {
+    // Electric cobalt-cyan IDPD Portal Strike dimensional blast
+    const cx = x + 14;
+    const cy = y + 14;
+    const r = 6 + f * 2;
+    fillPixelEllipse(ctx, cx, cy, Math.min(13, r + 2), Math.min(13, r + 2), '#0c1f52');
+    fillPixelEllipse(ctx, cx, cy, Math.min(11, r), Math.min(11, r), '#2e88ff');
+    fillPixelEllipse(ctx, cx, cy, Math.max(3, r - 3), Math.max(3, r - 3), f < 2 ? '#a8f4ff' : '#5cc4ff');
+    if (f < 3) {
+      fillPixelEllipse(ctx, cx, cy, Math.max(2, 5 - f), Math.max(2, 5 - f), '#ffffff');
+    }
+    // Crackling dimensional strike bolts
+    drawPixelLine(ctx, cx - r, cy, cx + r, cy, '#d9f9ff', 1);
+    drawPixelLine(ctx, cx, cy - r, cx, cy + r, '#d9f9ff', 1);
+  });
+
   const slashList: Array<[string, number, string, string]> = [
-    ['sprSlash', 22, '#9ec4e6', '#ffffff'],
-    ['sprHeavySlash', 26, '#e6b859', '#ffffff'],
-    ['sprMegaSlash', 30, '#ff8047', '#ffffff'],
-    ['sprEnergySlash', 24, '#47f06e', '#e8ffed'],
-    ['sprHeavyEnergySlash', 28, '#47f06e', '#ffffff'],
-    ['sprLightningSlash', 24, '#59d9ff', '#ffffff'],
-    ['sprBloodSlash', 24, '#e62438', '#ffc4ca'],
-    ['sprUltraSlash', 28, '#4dff70', '#ffffff'],
+    ['sprSlash', 24, '#70c4ff', '#ffffff'],
+    ['sprHeavySlash', 28, '#ffbe38', '#ffffff'],
+    ['sprMegaSlash', 32, '#ff6d29', '#ffffff'],
+    ['sprEnergySlash', 26, '#38ff99', '#ffffff'],
+    ['sprHeavyEnergySlash', 30, '#38ff99', '#ffffff'],
+    ['sprLightningSlash', 26, '#4de8ff', '#ffffff'],
+    ['sprBloodSlash', 26, '#ff2647', '#ffe8ec'],
+    ['sprUltraSlash', 30, '#4dff70', '#ffffff'],
   ];
   for (const [name, s, outer, core] of slashList) {
     b.addSprite(name, s, s, Math.floor(s / 2), Math.floor(s / 2), 3, (ctx, x, y, sw, sh, f) =>
