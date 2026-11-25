@@ -134,7 +134,7 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     expect(sanitized.audio.masterVolume).toBe(1);
     expect(sanitized.audio.sfxVolume).toBe(0);
     expect(sanitized.audio.musicVolume).toBe(def.audio.musicVolume);
-    expect(sanitized.render.crosshairStyle).toBe(6);
+    expect(sanitized.render.crosshairStyle).toBe(8);
     expect(sanitized.render.screenShakeScale).toBe(0);
     expect(sanitized.controls).toEqual({
       gamepadAimAssist: true,

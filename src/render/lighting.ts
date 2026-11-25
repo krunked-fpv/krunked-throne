@@ -6,8 +6,11 @@ import { SHARED_GLOW_CACHE, type GlowCanvas, type GlowStampCache } from './glow-
 type LightCanvas = HTMLCanvasElement | OffscreenCanvas;
 type LightCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
+function lerpPos(prevX: number, prevY: number, x: number, y: number, t: number, maxJump = 56): { x: number; y: number } {
+  if (Math.hypot(x - prevX, y - prevY) > maxJump) {
+    return { x, y };
+  }
+  return { x: prevX + (x - prevX) * t, y: prevY + (y - prevY) * t };
 }
 
 function createOffscreenCanvas(w: number, h: number): LightCanvas | null {
@@ -79,9 +82,14 @@ export class LightingPass {
     const lights: DynamicLight[] = [];
     const alpha = Math.max(0, Math.min(1, interpAlpha));
 
-    // 1. Player light pool (Eyes sees significantly farther in dark biomes!)
+    // 1. Player light pool (Eyes sees significantly farther in dark biomes; Horror radiates subtle rad glow!)
     const isEyes = state.player.mutant === 'eyes';
-    const playerRadius = state.player.alive ? (isEyes ? 124 : 74) : 40;
+    const isHorror = state.player.mutant === 'horror';
+    const playerRadius = state.player.alive ? (isEyes ? 128 : isHorror ? 84 : 74) : 40;
+    const boilingActive =
+      state.player.alive &&
+      state.player.hp <= 4 &&
+      state.player.mutations.includes('boiling_veins');
     lights.push({
       x: playerX,
       y: playerY,
@@ -91,14 +99,19 @@ export class LightingPass {
         ? 'rgba(200, 100, 255, 0.22)'
         : state.player.telekinesisActive
           ? 'rgba(100, 180, 255, 0.22)'
-          : undefined,
+          : boilingActive
+            ? 'rgba(255, 130, 42, 0.22)'
+            : isHorror
+              ? 'rgba(85, 255, 115, 0.16)'
+              : undefined,
     });
 
     // 2. Glowing projectiles (lasers, plasma, fire, lightning, rad beam, boss orbs)
     for (let i = 0; i < state.projectiles.length; i++) {
       const p = state.projectiles[i]!;
-      const px = lerp(p.prevX, p.x, alpha);
-      const py = lerp(p.prevY, p.y, alpha);
+      const pos = lerpPos(p.prevX, p.prevY, p.x, p.y, alpha, 96);
+      const px = pos.x;
+      const py = pos.y;
       switch (p.kind) {
         case 'laser':
         case 'enemy_laser':
@@ -174,8 +187,9 @@ export class LightingPass {
     // 6. Bosses & luminous enemies (laser crystals, guardians)
     for (let i = 0; i < state.enemies.length; i++) {
       const e = state.enemies[i]!;
-      const ex = lerp(e.prevX, e.x, alpha);
-      const ey = lerp(e.prevY, e.y, alpha);
+      const ePos = lerpPos(e.prevX, e.prevY, e.x, e.y, alpha, 56);
+      const ex = ePos.x;
+      const ey = ePos.y;
       if (e.isBoss) {
         lights.push({
           x: ex,

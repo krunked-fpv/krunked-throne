@@ -26,6 +26,7 @@ import {
   resolveEnemySpritePrefix,
   resolveWeaponLabel,
   resolveWeaponSpriteName,
+  selectLoadingTip,
   type UiDataProvider,
 } from '@/ui/data-provider';
 import { BitmapFontRenderer } from './bitmap-font';
@@ -148,6 +149,27 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/**
+ * Teleport-safe 2D interpolation: prevents 1-frame streak artifacts when an entity
+ * teleports (e.g., Crystal Throne Butt, Guardian blink, area warp, or portal snap).
+ */
+export function lerpPosSafe(
+  prevX: number,
+  prevY: number,
+  x: number,
+  y: number,
+  t: number,
+  maxJump: number = 56,
+): { x: number; y: number } {
+  if (Math.hypot(x - prevX, y - prevY) > maxJump) {
+    return { x, y };
+  }
+  return {
+    x: prevX + (x - prevX) * t,
+    y: prevY + (y - prevY) * t,
+  };
+}
+
 function wrapMod(val: number, period: number): number {
   const m = val % period;
   return m < 0 ? m + period : m;
@@ -236,6 +258,8 @@ export class GameRenderer {
   private lastSkidTick = -1;
   private lowAmmoWarnedPools = new Set<AmmoType>();
   private fxSeq = 1;
+  private meleeSwingSide: 1 | -1 = 1;
+  private meleeSwingAnim = 0;
   private logicalWidth = LOGICAL_WIDTH_4_3;
   private logicalHeight = LOGICAL_HEIGHT;
   private renderTimeSec = 0;
@@ -317,10 +341,36 @@ export class GameRenderer {
       const finalScale = intScale >= 1 && (intScale * targetW >= vw * 0.8 || intScale * targetH >= vh * 0.8)
         ? intScale
         : scale;
-      const cssW = Math.max(targetW, Math.floor(targetW * finalScale));
-      const cssH = Math.max(targetH, Math.floor(targetH * finalScale));
+      const cssW = Math.max(1, Math.floor(targetW * finalScale));
+      const cssH = Math.max(1, Math.floor(targetH * finalScale));
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
+    }
+  }
+
+  /**
+   * Resets transient level-scoped FX and snaps camera cleanly on area change / warp / restart.
+   */
+  private resetLevelFx(state?: SimState): void {
+    this.floatingTexts = [];
+    this.transientParticles = [];
+    this.smokePuffs = [];
+    this.flashLights = [];
+    this.enemyFx.clear();
+    this.muzzleFlashes = [];
+    this.shockwaves = [];
+    this.lowAmmoWarnedPools.clear();
+    this.screenHurtFlashTicks = 0;
+    this.screenBlastFlashTicks = 0;
+    this.crosshairHitTicks = 0;
+    this.crosshairRecoil = 0;
+    this.meleeSwingAnim = 0;
+    this.lastSkidTick = -1;
+    this.camera.clearFocusBias();
+    if (state) {
+      this.lastShotsFired = state.stats.shotsFired;
+      this.lastHurtFlashTicks = state.player.hurtFlashTicks;
+      this.camera.snapTo(state.player.x, state.player.y);
     }
   }
 
@@ -450,7 +500,11 @@ export class GameRenderer {
       const ev = events[i] as ExtendedSimEvent;
       switch (ev.type) {
         case 'decal':
-          this.floorBuffer.bakeDecal(ev.decal);
+          // Corpses remain live-rendered from state.corpses so Melting explosions and
+          // Necromancer revives never leave permanent ghost corpses baked onto the floor!
+          if (ev.decal.kind !== 'corpse') {
+            this.floorBuffer.bakeDecal(ev.decal);
+          }
           break;
 
         case 'shake':
@@ -673,26 +727,8 @@ export class GameRenderer {
           break;
 
         case 'area_change':
-          this.floatingTexts = [];
-          this.transientParticles = [];
-          this.smokePuffs = [];
-          this.flashLights = [];
-          this.enemyFx.clear();
-          this.muzzleFlashes = [];
-          this.shockwaves = [];
-          this.lowAmmoWarnedPools.clear();
-          this.screenHurtFlashTicks = 0;
-          this.screenBlastFlashTicks = 0;
-          this.crosshairHitTicks = 0;
-          this.crosshairRecoil = 0;
-          this.lastSkidTick = -1;
           this.lastMapRef = null;
-          this.camera.clearFocusBias();
-          if (state) {
-            this.lastShotsFired = state.stats.shotsFired;
-            this.lastHurtFlashTicks = state.player.hurtFlashTicks;
-            this.camera.snapTo(state.player.x, state.player.y);
-          }
+          this.resetLevelFx(state);
           break;
 
         default:
@@ -740,7 +776,12 @@ export class GameRenderer {
     const slot = player.weapons[player.activeSlot];
     if (!slot) return;
     const wep = this.data.getWeapon(slot.weaponId);
-    if (wep?.ammoType === 'melee' || wep?.projectileKind === 'melee_slash') return;
+    if (wep?.ammoType === 'melee' || wep?.projectileKind === 'melee_slash') {
+      // Authentic Nuclear Throne melee swing alternation: flip held blade side & kick swing arc!
+      this.meleeSwingSide = this.meleeSwingSide === 1 ? -1 : 1;
+      this.meleeSwingAnim = 1;
+      return;
+    }
 
     const ang = player.aimAngle;
     const dist = 11;
@@ -823,10 +864,9 @@ export class GameRenderer {
         }
       }
       if (bossEnt) {
-        const bx = lerp(bossEnt.prevX, bossEnt.x, alpha);
-        const by = lerp(bossEnt.prevY, bossEnt.y, alpha);
+        const bPos = lerpPosSafe(bossEnt.prevX, bossEnt.prevY, bossEnt.x, bossEnt.y, alpha, 56);
         const focusFrac = Math.min(1, (state.boss.introTicks - 10) / 28);
-        this.camera.setFocusBias(bx, by, 0.3 * focusFrac);
+        this.camera.setFocusBias(bPos.x, bPos.y, 0.3 * focusFrac);
       } else {
         this.camera.clearFocusBias();
       }
@@ -834,10 +874,14 @@ export class GameRenderer {
       this.camera.clearFocusBias();
     }
 
-    // Smooth camera tracking using interpolated player position at 60/120 FPS
-    const camPlayerX = lerp(state.player.prevX, state.player.x, alpha);
-    const camPlayerY = lerp(state.player.prevY, state.player.y, alpha);
-    this.camera.update(camPlayerX, camPlayerY, aimWorldX, aimWorldY, dtSeconds, settings);
+    // Smooth camera tracking using teleport-safe interpolated player position at 60/120 FPS
+    const camPlayerPos = lerpPosSafe(state.player.prevX, state.player.prevY, state.player.x, state.player.y, alpha, 56);
+    this.camera.update(camPlayerPos.x, camPlayerPos.y, aimWorldX, aimWorldY, dtSeconds, settings);
+
+    // Decay melee swing snap interpolation
+    if (this.meleeSwingAnim > 0) {
+      this.meleeSwingAnim = Math.max(0, this.meleeSwingAnim - ticks * 0.24);
+    }
 
     // Detect fresh player hurt onset for brief screen-edge damage border flash
     if (state.player.hurtFlashTicks > this.lastHurtFlashTicks) {
@@ -1019,11 +1063,19 @@ export class GameRenderer {
 
     // Ensure persistent FloorBuffer matches current level & sync any carved walls
     const areaKey = `${state.areaCode}:${state.loop}:${map.width}x${map.height}`;
-    if (this.lastMapRef !== map || this.lastAreaKey !== areaKey || state.floorClearTrigger) {
+    const mapChanged = this.lastMapRef !== map || this.lastAreaKey !== areaKey;
+    if (mapChanged || state.floorClearTrigger) {
+      if (mapChanged && this.lastMapRef !== null) {
+        // Clear stale particles/floating texts & snap camera if level swapped outside consumeEvents
+        this.resetLevelFx(state);
+      }
       this.floorBuffer.rebuild(map, areaDef);
-      // Bake any pre-existing decals already stored on state.decals
+      // Bake any pre-existing non-corpse decals already stored on state.decals
       for (let i = 0; i < state.decals.length; i++) {
-        this.floorBuffer.bakeDecal(state.decals[i]!);
+        const decal = state.decals[i]!;
+        if (decal.kind !== 'corpse') {
+          this.floorBuffer.bakeDecal(decal);
+        }
       }
       this.lastMapRef = map;
       this.lastAreaKey = areaKey;
@@ -1039,9 +1091,10 @@ export class GameRenderer {
     const viewLeft = view.left;
     const viewTop = view.top;
 
-    // Interpolated player coords
-    const playerX = lerp(state.player.prevX, state.player.x, alpha);
-    const playerY = lerp(state.player.prevY, state.player.y, alpha);
+    // Teleport-safe interpolated player coords
+    const playerPos = lerpPosSafe(state.player.prevX, state.player.prevY, state.player.x, state.player.y, alpha, 56);
+    const playerX = playerPos.x;
+    const playerY = playerPos.y;
 
     // ------------------------------------------------------------------------
     // LAYER 1: Persistent FloorBuffer
@@ -1055,8 +1108,8 @@ export class GameRenderer {
       const srcW = srcRight - srcX;
       const srcH = srcBot - srcY;
       if (srcW > 0 && srcH > 0) {
-        const dstX = Math.round(srcX - viewLeft);
-        const dstY = Math.round(srcY - viewTop);
+        const dstX = settings.pixelSnap ? Math.round(srcX - viewLeft) : srcX - viewLeft;
+        const dstY = settings.pixelSnap ? Math.round(srcY - viewTop) : srcY - viewTop;
         ctx.drawImage(floorCanvas, srcX, srcY, srcW, srcH, dstX, dstY, srcW, srcH);
       }
     }
@@ -1071,8 +1124,15 @@ export class GameRenderer {
     this.renderWalls(ctx, map, viewLeft, viewTop, w, h, areaDef);
 
     // ------------------------------------------------------------------------
-    // LAYER 3: Ground Shadows, Throne Beam Warning Column, Pickups, Portal
+    // LAYER 3: Throne Hall Carpet, Settled Live Corpses, Throne Beam Telegraph, Ground Shadows, Pickups, Portal
     // ------------------------------------------------------------------------
+    this.renderThroneHallCarpet(ctx, state, settings.pixelSnap);
+    for (let i = 0; i < state.corpses.length; i++) {
+      const corpse = state.corpses[i]!;
+      if (!corpse.baked) continue;
+      if (this.isOutsideView(corpse.x, corpse.y, 32, viewLeft, viewTop, w, h)) continue;
+      this.renderCorpse(ctx, corpse, settings.pixelSnap);
+    }
     this.renderThroneBeamTelegraph(ctx, state, alpha);
     this.renderGroundShadows(ctx, state, playerX, playerY, alpha);
     this.renderPickups(ctx, state.pickups, state.tick, settings.pixelSnap);
@@ -1123,8 +1183,9 @@ export class GameRenderer {
     // Enemies & Bosses
     for (let i = 0; i < state.enemies.length; i++) {
       const enemy = state.enemies[i]!;
-      const ex = lerp(enemy.prevX, enemy.x, alpha);
-      const ey = lerp(enemy.prevY, enemy.y, alpha);
+      const ePos = lerpPosSafe(enemy.prevX, enemy.prevY, enemy.x, enemy.y, alpha, 56);
+      const ex = ePos.x;
+      const ey = ePos.y;
       if (this.isOutsideView(ex, ey, enemy.isBoss ? 80 : 36, viewLeft, viewTop, w, h)) continue;
       drawList.push({
         sortY: ey,
@@ -1142,8 +1203,12 @@ export class GameRenderer {
     // ------------------------------------------------------------------------
     for (let i = 0; i < state.projectiles.length; i++) {
       const proj = state.projectiles[i]!;
-      const px = lerp(proj.prevX, proj.x, alpha);
-      const py = lerp(proj.prevY, proj.y, alpha);
+      const pPos =
+        proj.kind === 'melee_slash'
+          ? { x: proj.x, y: proj.y }
+          : lerpPosSafe(proj.prevX, proj.prevY, proj.x, proj.y, alpha, 110);
+      const px = pPos.x;
+      const py = pPos.y;
       if (this.isOutsideView(px, py, 64, viewLeft, viewTop, w, h)) continue;
       this.renderProjectile(ctx, proj, px, py, state.tick, settings.pixelSnap, alpha);
     }
@@ -1339,36 +1404,38 @@ export class GameRenderer {
           }
         }
 
-        // Autotiled 2.5D perimeter roof bevels & crisp outer contour (strictly on exposed edges
-        // so contiguous wall blocks read as sculpted cohesive canyon mesas, never a repeating grid!)
-        const northOpen = (mask & 1) === 0;
-        const eastOpen = (mask & 2) === 0;
-        const southOpen = (mask & 4) === 0 || (mask & 16) !== 0;
-        const westOpen = (mask & 8) === 0;
-        const capH = (mask & 16) !== 0 ? ts : ts + overhang;
+        // Autotiled 2.5D perimeter roof bevels & crisp outer contour for fallback art
+        // (Steam packs already carry hand-drawn wall top edges + sprWall*Out contours!)
+        if (this.bundle.sourceMode !== 'steam' || !drewTop) {
+          const northOpen = (mask & 1) === 0;
+          const eastOpen = (mask & 2) === 0;
+          const southOpen = (mask & 4) === 0 || (mask & 16) !== 0;
+          const westOpen = (mask & 8) === 0;
+          const capH = (mask & 16) !== 0 ? ts : ts + overhang;
 
-        if (northOpen) {
-          ctx.fillStyle = 'rgba(12, 8, 16, 0.72)';
-          ctx.fillRect(px, topY - 1, ts, 1);
-          ctx.fillStyle = pal.wallEdge;
-          ctx.fillRect(px, topY, ts, 2);
-        }
-        if (westOpen) {
-          ctx.fillStyle = 'rgba(12, 8, 16, 0.62)';
-          ctx.fillRect(px - 1, topY, 1, capH);
-          ctx.fillStyle = pal.wallEdge;
-          ctx.fillRect(px, topY, 1, capH);
-        }
-        if (eastOpen) {
-          ctx.fillStyle = 'rgba(12, 8, 16, 0.56)';
-          ctx.fillRect(px + ts - 1, topY, 1, capH);
-        }
-        if (southOpen && (mask & 16) !== 0) {
-          // Crisp sunlit cliff-edge highlight above the shaded 2.5D south overhang lip
-          ctx.fillStyle = pal.wallEdge;
-          ctx.fillRect(px, topY + ts - 2, ts, 1);
-          ctx.fillStyle = 'rgba(10, 6, 14, 0.85)';
-          ctx.fillRect(px, topY + ts - 1, ts, 1);
+          if (northOpen) {
+            ctx.fillStyle = 'rgba(12, 8, 16, 0.72)';
+            ctx.fillRect(px, topY - 1, ts, 1);
+            ctx.fillStyle = pal.wallEdge;
+            ctx.fillRect(px, topY, ts, 2);
+          }
+          if (westOpen) {
+            ctx.fillStyle = 'rgba(12, 8, 16, 0.62)';
+            ctx.fillRect(px - 1, topY, 1, capH);
+            ctx.fillStyle = pal.wallEdge;
+            ctx.fillRect(px, topY, 1, capH);
+          }
+          if (eastOpen) {
+            ctx.fillStyle = 'rgba(12, 8, 16, 0.56)';
+            ctx.fillRect(px + ts - 1, topY, 1, capH);
+          }
+          if (southOpen && (mask & 16) !== 0) {
+            // Crisp sunlit cliff-edge highlight above the shaded 2.5D south overhang lip
+            ctx.fillStyle = pal.wallEdge;
+            ctx.fillRect(px, topY + ts - 2, ts, 1);
+            ctx.fillStyle = 'rgba(10, 6, 14, 0.85)';
+            ctx.fillRect(px, topY + ts - 1, ts, 1);
+          }
         }
       }
     }
@@ -1466,7 +1533,13 @@ export class GameRenderer {
       if (pk.kind === 'big_rad') spr = this.sprites.hasSprite('sprBigRad') ? 'sprBigRad' : 'sprRadBig';
       else if (pk.kind === 'ammo') spr = 'sprAmmo';
       else if (pk.kind === 'hp') spr = 'sprHP';
-      else if (pk.kind === 'portal_strike') spr = this.sprites.hasSprite('sprRogueAmmoHUD') ? 'sprRogueAmmoHUD' : 'sprAmmo';
+      else if (pk.kind === 'portal_strike') {
+        spr = this.sprites.hasSprite('sprRogueAmmo')
+          ? 'sprRogueAmmo'
+          : this.sprites.hasSprite('sprRogueAmmoHUD')
+            ? 'sprRogueAmmoHUD'
+            : 'sprAmmo';
+      }
       else if (pk.kind === 'weapon' && pk.weaponId) {
         spr = resolveWeaponSpriteName(pk.weaponId, this.data);
       }
@@ -1600,12 +1673,25 @@ export class GameRenderer {
     tick: number,
     pixelSnap: boolean,
   ): void {
-    const sprName = prop.opened && prop.openSprite ? prop.openSprite : prop.sprite;
+    let sprName = prop.opened && prop.openSprite ? prop.openSprite : prop.sprite;
+    if (!this.sprites.hasSprite(sprName) && sprName === 'sprPalacePillar' && this.sprites.hasSprite('sprPillar')) {
+      sprName = 'sprPillar';
+    }
+    const sprDef = this.sprites.getSprite(sprName);
+    // NT sprBigGenerator is 96x96 with origin (32, 32) at top-left of its 32x32 base (not center 48, 48).
+    const genAlignOffset =
+      sprDef &&
+      sprName.startsWith('sprBigGenerator') &&
+      sprDef.width >= 64 &&
+      sprDef.originX === 32 &&
+      sprDef.originY === 32
+        ? -16
+        : 0;
     const whiteFlash = prop.hurtFlashTicks >= 2;
     const joltX = prop.hurtFlashTicks > 0 ? ((prop.hurtFlashTicks & 1) === 0 ? 1 : -1) : 0;
     const scaleX = whiteFlash ? 1.12 : prop.hurtFlashTicks > 0 ? 0.95 : 1;
     const scaleY = whiteFlash ? 0.89 : prop.hurtFlashTicks > 0 ? 1.05 : 1;
-    const drew = this.sprites.draw(ctx, sprName, prop.x + joltX, prop.y, {
+    const drew = this.sprites.draw(ctx, sprName, prop.x + joltX + genAlignOffset, prop.y + genAlignOffset, {
       frame: Math.floor(tick * 0.15),
       flashWhite: whiteFlash,
       scaleX,
@@ -1719,10 +1805,29 @@ export class GameRenderer {
     const useB = player.skin === 'b';
     const moving = Math.hypot(player.vx, player.vy) > 0.3;
 
-    // Pick character sprite (respecting B-skin with safe fallback to A-skin)
+    // Pick character sprite (respecting Chicken headless sprites & B-skin with safe fallback)
     let charSprite = mutantDef.sprites.idle;
+    let usingHeadlessSprite = false;
     if (!player.alive) {
       charSprite = (useB && mutantDef.sprites.bDead) || mutantDef.sprites.dead;
+    } else if (player.mutant === 'chicken' && player.headlessTicks > 0) {
+      const headlessCand =
+        player.hurtFlashTicks > 0
+          ? 'sprMutant9HeadlessHurt'
+          : moving
+            ? 'sprMutant9HeadlessWalk'
+            : 'sprMutant9HeadlessIdle';
+      if (this.sprites.hasSprite(headlessCand)) {
+        charSprite = headlessCand;
+        usingHeadlessSprite = true;
+      } else {
+        charSprite =
+          player.hurtFlashTicks > 0
+            ? (useB && mutantDef.sprites.bHurt) || mutantDef.sprites.hurt
+            : moving
+              ? (useB && mutantDef.sprites.bWalk) || mutantDef.sprites.walk
+              : (useB && mutantDef.sprites.bIdle) || mutantDef.sprites.idle;
+      }
     } else if (player.hurtFlashTicks > 0) {
       charSprite = (useB && mutantDef.sprites.bHurt) || mutantDef.sprites.hurt;
     } else if (moving) {
@@ -1775,29 +1880,67 @@ export class GameRenderer {
 
     const drawHeldWeapon = (slot: PlayerState['weapons'][0] | null, isOffhand: boolean): void => {
       if (!slot || !player.alive) return;
+      const wepDef = this.data.getWeapon(slot.weaponId);
+      const isMelee = wepDef?.ammoType === 'melee' || wepDef?.projectileKind === 'melee_slash';
       const wepSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
       const kick = slot.kickOffset || 0;
       const handSide = isOffhand ? -player.facing : player.facing;
-      const anchorX = px + handSide * 3 - Math.cos(player.aimAngle) * kick;
-      const anchorY = py + 1 - Math.sin(player.aimAngle) * kick;
       const flipY = Math.cos(player.aimAngle) < 0;
-      // Snappy upward recoil flip on firing (classic Vlambeer gun feel!)
-      const recoilTilt = kick > 0 ? (flipY ? 1 : -1) * Math.min(0.28, kick * 0.032) : 0;
+
+      // Authentic Nuclear Throne weapon holding:
+      // - Melee weapons rest cocked at ±1.5 rad and snap across to the opposite side on each swing!
+      // - Ranged weapons kick cleanly along recoil vector with upward barrel tilt.
+      let drawAngle = player.aimAngle;
+      let anchorX = px + handSide * 3 - Math.cos(player.aimAngle) * kick;
+      let anchorY = py + 1 - Math.sin(player.aimAngle) * kick;
+      let wepFlipY = flipY;
+      if (isMelee) {
+        const side = isOffhand ? -this.meleeSwingSide : this.meleeSwingSide;
+        const swingSweep = (1 - this.meleeSwingAnim * 1.15) * 1.48 * side;
+        drawAngle = player.aimAngle + swingSweep;
+        anchorX = px + handSide * 2 + Math.cos(player.aimAngle) * (2 + this.meleeSwingAnim * 3);
+        anchorY = py + 1 + Math.sin(player.aimAngle) * (2 + this.meleeSwingAnim * 3);
+        wepFlipY = side < 0;
+      } else {
+        // Snappy upward recoil flip on firing (classic Vlambeer gun feel!)
+        const recoilTilt = kick > 0 ? (flipY ? 1 : -1) * Math.min(0.28, kick * 0.032) : 0;
+        drawAngle = player.aimAngle + recoilTilt;
+      }
 
       const drewWep = this.sprites.draw(ctx, wepSpr, anchorX, anchorY, {
         frame: 0,
-        rotation: player.aimAngle + recoilTilt,
-        flipY,
+        rotation: drawAngle,
+        flipY: wepFlipY,
         pixelSnap,
       });
       if (!drewWep) {
         ctx.save();
         ctx.translate(Math.round(anchorX), Math.round(anchorY));
-        ctx.rotate(player.aimAngle + recoilTilt);
+        ctx.rotate(drawAngle);
         ctx.fillStyle = '#141018';
         ctx.fillRect(0, -2, 11, 5);
         ctx.fillStyle = '#c8d0db';
         ctx.fillRect(1, -1, 9, 3);
+        ctx.restore();
+      }
+
+      // Subtle cursed purple aura / golden weapon glint cues on equipped weapon
+      if (slot.cursed) {
+        ctx.save();
+        ctx.fillStyle = '#c94aff';
+        ctx.globalAlpha = 0.72;
+        const cx = anchorX + Math.cos(drawAngle) * 5 + Math.sin(this.renderTimeSec * 9) * 2;
+        const cy = anchorY + Math.sin(drawAngle) * 5 + Math.cos(this.renderTimeSec * 11) * 2;
+        ctx.fillRect(Math.round(cx), Math.round(cy), 2, 2);
+        ctx.restore();
+      } else if (wepDef?.golden && Math.floor(this.renderTimeSec * 6) % 3 === 0) {
+        ctx.save();
+        ctx.fillStyle = '#fff5a8';
+        ctx.globalAlpha = 0.85;
+        const gx = Math.round(anchorX + Math.cos(drawAngle) * 7);
+        const gy = Math.round(anchorY + Math.sin(drawAngle) * 7 - 2);
+        ctx.fillRect(gx - 1, gy, 3, 1);
+        ctx.fillRect(gx, gy - 1, 1, 3);
         ctx.restore();
       }
     };
@@ -1874,11 +2017,35 @@ export class GameRenderer {
       }
     }
 
-    // Chicken Headless pulsing blood spurts indicator
+    // Boiling Veins active ember aura when hp <= 4 (explosion & fire immunity active!)
+    if (player.alive && player.hp <= 4 && player.mutations.includes('boiling_veins')) {
+      ctx.save();
+      for (let e = 0; e < 4; e++) {
+        const phase = wrapMod(this.renderTimeSec * 2.6 + e * 0.27, 1);
+        const ex = Math.round(px + Math.sin(this.renderTimeSec * 5 + e * 1.9) * 6);
+        const ey = Math.round(py + 4 - phase * 14);
+        ctx.globalAlpha = (1 - phase) * 0.85;
+        ctx.fillStyle = e % 2 === 0 ? '#ff8a2b' : '#ffe047';
+        ctx.fillRect(ex, ey, 2, 2);
+      }
+      ctx.restore();
+    }
+
+    // Chicken Headless animated arterial blood spurt fountain (and collar mask if headless sprite absent)
     if (player.headlessTicks > 0 && player.alive) {
       ctx.save();
-      ctx.fillStyle = '#ff3847';
-      ctx.fillRect(Math.round(px - 2), Math.round(py - 9), 4, 2);
+      if (!usingHeadlessSprite) {
+        ctx.fillStyle = '#240b10';
+        ctx.fillRect(Math.round(px - 3), Math.round(py - 9), 6, 4);
+      }
+      ctx.fillStyle = '#ff2a3c';
+      for (let d = 0; d < 3; d++) {
+        const phase = wrapMod(this.renderTimeSec * 6.5 + d * 0.33, 1);
+        const dx = Math.round(px + (d - 1) * (1.8 + phase * 3.2));
+        const dy = Math.round(py - 7 - Math.sin(phase * Math.PI) * 5 + phase * 3);
+        ctx.globalAlpha = 1 - phase * 0.6;
+        ctx.fillRect(dx, dy, 2, 2);
+      }
       ctx.restore();
     }
   }
@@ -1909,6 +2076,9 @@ export class GameRenderer {
           : moving
             ? `${prefix}Walk`
             : `${prefix}Idle`;
+    }
+    if (enemy.bossId === 'nuclear_throne' && sprName === 'sprNothingBeam') {
+      sprName = this.sprites.hasSprite('sprNothingFire') ? 'sprNothingFire' : 'sprNothingOn';
     }
     if (!this.sprites.hasSprite(sprName)) {
       sprName = `${prefix}Idle`;
@@ -2101,6 +2271,39 @@ export class GameRenderer {
   }
 
   /**
+   * Renders Steam pack's ornate `sprCarpet` (42x1000, ox=21, oy=-80) down the 7-3 Throne Hall
+   * when available (built-in art paints Palace carpet directly onto CARPET tiles in FloorBuffer).
+   */
+  private renderThroneHallCarpet(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    pixelSnap: boolean,
+  ): void {
+    if (state.areaCode !== '7-3' || !this.sprites.hasSprite('sprCarpet')) return;
+    const map = state.map;
+    const ts = map.tileSize || TILE_SIZE;
+    let minTx = map.width;
+    let maxTx = -1;
+    let minTy = map.height;
+    for (let ty = 0; ty < map.height; ty++) {
+      const row = ty * map.width;
+      for (let tx = 0; tx < map.width; tx++) {
+        if (map.tiles[row + tx] === TileType.Carpet) {
+          if (tx < minTx) minTx = tx;
+          if (tx > maxTx) maxTx = tx;
+          if (ty < minTy) minTy = ty;
+        }
+      }
+    }
+    if (maxTx < minTx) return;
+    const centerX = ((minTx + maxTx + 1) * 0.5) * ts;
+    // sprCarpet has oy = -80 in NT data.win, so drawing at minTy * ts - 80 aligns its top edge onto minTy
+    const sprDef = this.sprites.getSprite('sprCarpet');
+    const topY = minTy * ts + (sprDef && sprDef.originY < 0 ? sprDef.originY : 0);
+    this.sprites.draw(ctx, 'sprCarpet', centerX, topY, { frame: 0, pixelSnap });
+  }
+
+  /**
    * Renders the pulsing emerald warning column down the 7-3 Palace carpet during
    * the Krunked Throne's Mega-Beam telegraph ('tell') and blazing beam wash ('fire').
    */
@@ -2188,18 +2391,38 @@ export class GameRenderer {
     pixelSnap: boolean,
     alpha: number,
   ): void {
-    // Special crisp rendering for Melee Slash arcs
+    // Special crisp rendering for Melee Slash arcs (handles both Steam 48x48 ox<=0 & Fallback centered slashes!)
     if (proj.kind === 'melee_slash') {
       const lifeFrac = proj.maxLifeTicks > 0 ? proj.lifeTicks / proj.maxLifeTicks : 1;
-      const reach = proj.meleeReach ?? 22;
+      const reach = proj.meleeReach ?? 24;
       const arcRad = ((proj.meleeArcDeg ?? 110) * Math.PI) / 180;
+      const slashName = proj.sprite || 'sprSlash';
+      const slashDef = this.sprites.getSprite(slashName);
+      // Clamp frame strictly to 0..2 so sprLightningSlash's 4th blank frame never flashes empty
+      const slashFrame = Math.min(2, Math.max(0, Math.floor((1 - lifeFrac) * 3)));
+      const flipSlashY = (proj.id & 1) === 1;
+
       ctx.save();
-      ctx.globalAlpha = Math.max(0.25, lifeFrac);
-      const drewSlash = this.sprites.draw(ctx, proj.sprite || 'sprSlash', px, py, {
-        frame: Math.floor((1 - lifeFrac) * 3),
+      ctx.globalAlpha = Math.max(0.32, lifeFrac);
+      let drawX = px;
+      let drawY = py;
+      let slashScale = reach / 18;
+      if (slashDef && slashDef.originX <= 4 && slashDef.width >= 32) {
+        // Nuclear Throne Steam slash sprites (48x48, ox=0 or -8, oy=24) are anchored at the swing origin
+        // Keep near 1.0x NT scale with gentle Long Arms growth (never 2.4x oversized!)
+        drawX = px - Math.cos(proj.angle) * (reach * 0.45);
+        drawY = py - Math.sin(proj.angle) * (reach * 0.45);
+        slashScale = Math.max(0.9, Math.min(1.3, 0.92 + Math.max(0, reach - 24) * 0.015));
+      } else if (slashDef && slashDef.width > 0) {
+        slashScale = Math.max(0.85, Math.min(1.7, reach / Math.max(18, slashDef.width * 0.85)));
+      }
+
+      const drewSlash = this.sprites.draw(ctx, slashName, drawX, drawY, {
+        frame: slashFrame,
         rotation: proj.angle,
-        scaleX: reach / 18,
-        scaleY: reach / 18,
+        flipY: flipSlashY,
+        scaleX: slashScale,
+        scaleY: slashScale,
         pixelSnap,
       });
       if (!drewSlash) {
@@ -2216,6 +2439,35 @@ export class GameRenderer {
         ctx.stroke();
       }
       ctx.restore();
+      return;
+    }
+
+    // Special vertical beam segment orientation for Krunked Throne Mega-Beam (NT sprNothingBeam is 36x24 vertical!)
+    if (proj.sprite === 'sprNothingBeam') {
+      const beamRot = proj.angle - Math.PI * 0.5;
+      const beamFrame = Math.floor((tick + proj.id) * 0.5);
+      const glowStamp = this.getGlowStamp('rgba(78, 255, 130, 0.72)', 22);
+      if (glowStamp) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.drawImage(glowStamp, Math.floor(px - 22), Math.floor(py - 22), 44, 44);
+        ctx.restore();
+      }
+      const drewBeam = this.sprites.draw(ctx, 'sprNothingBeam', px, py, {
+        frame: beamFrame,
+        rotation: beamRot,
+        pixelSnap,
+      });
+      if (!drewBeam) {
+        ctx.save();
+        ctx.translate(Math.round(px), Math.round(py));
+        ctx.rotate(beamRot);
+        ctx.fillStyle = '#38e864';
+        ctx.fillRect(-14, -12, 28, 24);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(-6, -12, 12, 24);
+        ctx.restore();
+      }
       return;
     }
 
@@ -2574,9 +2826,10 @@ export class GameRenderer {
       ctx.restore();
     }
 
-    // 4. Portal suction warp pull vignette during portal transition
+    // 4. Portal suction warp pull + NT-style Loading Tip card during portal transition
     if (state.portal.active && state.portal.entered) {
-      const warp = Math.min(1, (state.portal.enterTicks || 1) / 24);
+      const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
+      const warp = Math.min(1, Math.max(1, ticksIn) / 24);
       const border = Math.round(6 + warp * 18);
       ctx.save();
       ctx.fillStyle = `rgba(110, 32, 185, ${(0.22 + warp * 0.38).toFixed(3)})`;
@@ -2584,6 +2837,54 @@ export class GameRenderer {
       ctx.fillRect(0, h - border, w, border);
       ctx.fillRect(0, border, border, h - border * 2);
       ctx.fillRect(w - border, border, border, h - border * 2);
+
+      // Once player is pulled into the vortex (ticks >= 7), present the classic wasteland loading card & tip!
+      if (ticksIn >= 7) {
+        const cardAlpha = Math.min(1, (ticksIn - 6) / 7);
+        const targetArea = this.data.getArea(state.portal.targetArea);
+        const targetBiome = targetArea?.biome ?? state.biome;
+        const targetCode =
+          state.portal.nextLoop > 0
+            ? `L${state.portal.nextLoop} ${state.portal.targetArea}`
+            : state.portal.targetArea;
+        const areaTitle = `${targetCode}  ${(targetArea?.name ?? 'WASTELAND').toUpperCase()}`;
+        const tip = selectLoadingTip(targetBiome, state.portal.targetArea, state.portal.nextLoop, state.seed);
+
+        ctx.globalAlpha = cardAlpha * 0.84;
+        ctx.fillStyle = '#0a0712';
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.globalAlpha = cardAlpha;
+        const cx = Math.round(w * 0.5);
+        const cy = Math.round(h * 0.5);
+
+        // Swirling purple emblem glow behind mutant silhouette
+        const glow = this.getGlowStamp('rgba(175, 78, 255, 0.72)', 36);
+        if (glow) {
+          ctx.drawImage(glow, cx - 36, cy - 42, 72, 72);
+        }
+        const mutantDef = this.data.getMutant(state.player.mutant);
+        const walkSpr =
+          state.player.skin === 'b' && mutantDef.sprites.bWalk && this.sprites.hasSprite(mutantDef.sprites.bWalk)
+            ? mutantDef.sprites.bWalk
+            : mutantDef.sprites.walk;
+        this.sprites.draw(ctx, walkSpr, cx, cy - 8, {
+          frame: Math.floor(state.tick * 0.4),
+          scaleX: 1.5,
+          scaleY: 1.5,
+          pixelSnap: true,
+        });
+
+        this.fonts.draw(ctx, `@pWARPING TO @w${areaTitle}`, cx, cy + 16, 'fntM1', {
+          align: 'center',
+          outline: true,
+        });
+        this.fonts.draw(ctx, `@d${tip}`, cx, cy + 32, 'fntSmall', {
+          align: 'center',
+          maxWidth: w - 36,
+          outline: true,
+        });
+      }
       ctx.restore();
     }
   }

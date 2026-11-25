@@ -107,11 +107,21 @@ export async function loadAssets(
 
   try {
     const res = await fetch(`${cleanBase}/manifest.json`, { cache: 'no-cache' });
-    if (!res.ok) {
+    if (res.status === 204 || !res.ok) {
       return createFallbackBundleWithOrigin();
     }
-    const manifest = (await res.json()) as AssetManifest;
-    if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.textures) || !manifest.sprites) {
+    const rawText = await res.text();
+    if (!rawText || !rawText.trim()) {
+      return createFallbackBundleWithOrigin();
+    }
+    const manifest = JSON.parse(rawText) as AssetManifest & { available?: boolean };
+    if (
+      !manifest ||
+      typeof manifest !== 'object' ||
+      manifest.available === false ||
+      !Array.isArray(manifest.textures) ||
+      !manifest.sprites
+    ) {
       return createFallbackBundleWithOrigin();
     }
 

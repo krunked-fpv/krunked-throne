@@ -40,4 +40,4 @@ export {
   type GlowCanvas,
 } from './glow-cache';
 export { LightingPass, type DynamicLight } from './lighting';
-export { GameRenderer, type RenderInputDeviceMode } from './renderer';
+export { GameRenderer, lerpPosSafe, type RenderInputDeviceMode } from './renderer';

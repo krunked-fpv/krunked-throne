@@ -164,7 +164,7 @@ function testSaveManager(): void {
   assert.equal(sanitized.audio.masterVolume, 1);
   assert.equal(sanitized.audio.sfxVolume, 0);
   assert.equal(sanitized.audio.musicVolume, def.audio.musicVolume);
-  assert.equal(sanitized.render.crosshairStyle, 6);
+  assert.equal(sanitized.render.crosshairStyle, 8);
   assert.equal(sanitized.render.screenShakeScale, 0);
   assert.equal(sanitized.totalKills, 0);
   assert.equal(sanitized.mutants.fish.unlocked, true, 'All 12 mutants remain unlocked');

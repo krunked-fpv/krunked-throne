@@ -56,6 +56,48 @@ export function resolveHealthFillFrame(hurtFlashTicks: number): number {
 }
 
 /**
+ * Pixel-verified Ultra icon frame resolver across both Steam NT and Built-In Art packs:
+ * - Steam `sprEGSkillIcon` (48 frames) & `sprEGIconHUD` (52 frames) store 3 frames per race
+ *   starting at race 0 (`0..2` random/placeholder), so mutant races 1..12 sit at `raceIndex * 3 + slot`.
+ * - Built-In Art stores compact 24 frames (`(raceIndex - 1) * 2 + slot`).
+ */
+export function computeUltraIconFrame(
+  raceIndex: number,
+  slot: 'a' | 'b',
+  totalFrames: number = 24,
+): number {
+  const offset = slot === 'b' ? 1 : 0;
+  if (totalFrames >= 39) {
+    return Math.max(0, raceIndex) * 3 + offset;
+  }
+  return Math.max(0, raceIndex - 1) * 2 + offset;
+}
+
+/**
+ * Pixel-verified ammo HUD icon draining frame polarity:
+ * frame 0 = FULL ammo icon .. frame (N-1) = EMPTY ammo icon (matching Steam data.win 8-frame sheets).
+ * Gun Warrant forces frame 0 (full bright icon).
+ */
+export function computeAmmoIconFrame(
+  count: number,
+  max: number,
+  frameCount: number,
+  gunWarrantTicks: number = 0,
+): number {
+  if (frameCount <= 1 || gunWarrantTicks > 0) return 0;
+  const frac = max > 0 ? Math.max(0, Math.min(1, count / max)) : 0;
+  return Math.max(0, Math.min(frameCount - 1, Math.round((1 - frac) * (frameCount - 1))));
+}
+
+const BOSS_INTRO_FRAME_MAP: Readonly<Record<string, number>> = {
+  big_bandit: 0,
+  big_dog: 1,
+  lil_hunter: 2,
+  nuclear_throne: 3,
+  throne_ii: 4,
+};
+
+/**
  * Pixel-exact Krunked Throne Canvas HUD renderer:
  * - Compact top bar staying tight to the upper edge (zero combat arena encroachment)
  * - HP bar (sprHealthBar / sprHealthFill + white damage trail + Strong Spirit halo)
@@ -102,6 +144,7 @@ export class HudRenderer {
     this.renderWeaponsAndAmmo(ctx, state, width, inputMode);
     this.renderTopRightStats(ctx, state, renderSettings, fps, width);
     this.renderMutationIcons(ctx, state);
+    this.renderOffscreenChestIndicators(ctx, state, camera, width, height);
     this.renderOffscreenPortalIndicator(ctx, state, camera, width, height);
     this.renderBossHud(ctx, state, width, height);
   }
@@ -125,11 +168,15 @@ export class HudRenderer {
       }
     }
 
-    // 1. Rad Canister (far top-left)
+    // 1. Rad Canister (far top-left; stays full at Level 10 Ultra with clean rad count)
     const radX = 4;
     const radY = 3;
-    const radFrac =
-      player.radsToNextLevel > 0 ? Math.max(0, Math.min(1, player.rads / player.radsToNextLevel)) : 1;
+    const isUltraLevel = player.level >= 10 || player.radsToNextLevel >= 9999;
+    const radFrac = isUltraLevel
+      ? 1
+      : player.radsToNextLevel > 0
+        ? Math.max(0, Math.min(1, player.rads / player.radsToNextLevel))
+        : 1;
     const expBarSpr = this.sprites.getSprite('sprExpBar');
     if (expBarSpr && expBarSpr.frames.length > 0 && this.sprites.hasSprite('sprExpBar')) {
       const fillFrame = Math.min(
@@ -216,6 +263,20 @@ export class HudRenderer {
       }
     }
 
+    // Boiling Veins active protection glow on HP bar when <= 4 HP (fire & explosion immunity active!)
+    const boilingActive =
+      player.alive && hp <= 4 && player.mutations.includes('boiling_veins');
+    if (boilingActive) {
+      const bvPulse = 0.55 + 0.45 * Math.sin(state.tick * 0.4);
+      ctx.save();
+      ctx.strokeStyle = bvPulse > 0.78 ? '#ffe047' : '#ff7b24';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX - 0.5, barY - 0.5, barW + 1, barH + 1);
+      ctx.fillStyle = `rgba(255, 130, 35, ${(0.22 * bvPulse).toFixed(3)})`;
+      ctx.fillRect(innerX, innerY, innerW, innerH);
+      ctx.restore();
+    }
+
     // HP numeric text centered in bar
     const lowHpBlink = hp <= 2 && Math.floor(state.tick / 5) % 2 === 0;
     const hpColor = lowHpBlink ? '@y' : '@w';
@@ -233,10 +294,18 @@ export class HudRenderer {
       const ssX = barX + barW + 6;
       const ssY = barY + 7;
       ctx.save();
+      if (player.strongSpiritReady) {
+        const haloPulse = 0.5 + 0.5 * Math.sin(state.tick * 0.3);
+        ctx.strokeStyle = `rgba(140, 240, 255, ${(0.32 + 0.25 * haloPulse).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(ssX, ssY, 5.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.strokeStyle = player.strongSpiritReady ? '#78ebff' : '#4a5566';
       ctx.lineWidth = player.strongSpiritReady ? 2 : 1;
       ctx.beginPath();
-      ctx.arc(ssX, ssY, 4, 0, Math.PI * 2);
+      ctx.arc(ssX, ssY, 3.8, 0, Math.PI * 2);
       ctx.stroke();
       if (player.strongSpiritReady) {
         ctx.fillStyle = 'rgba(120, 235, 255, 0.35)';
@@ -246,7 +315,10 @@ export class HudRenderer {
     }
 
     // High-contrast dark pill behind Rad numeric readout so "0/60" pops crisply on Desert & Snow
-    const radLabel = `@g${player.rads}@w/${player.radsToNextLevel}`;
+    // At Level 10 Ultra, NT displays only the raw rad count (never "X/9999").
+    const radLabel = isUltraLevel
+      ? `@g${player.rads}`
+      : `@g${player.rads}@w/${player.radsToNextLevel}`;
     const radM = this.fonts.measure(radLabel, 'fntSmall');
     const radPillW = radM.width + 6;
     const radPillY = barY + barH + 1;
@@ -363,10 +435,13 @@ export class HudRenderer {
       }
       ctx.restore();
 
-      // Compact weapon label inside card
+      // Compact weapon label inside card (trimEnd prevents trailing space before ellipsis dot)
       const shortName = resolveWeaponLabel(activeSlot.weaponId, this.data);
       const maxChars = isWide ? 14 : 11;
-      const clipped = shortName.length > maxChars ? `${shortName.slice(0, maxChars - 1)}.` : shortName;
+      const clipped =
+        shortName.length > maxChars
+          ? `${shortName.slice(0, maxChars - 1).trimEnd()}.`
+          : shortName;
       this.fonts.draw(ctx, clipped, boxX + Math.floor(boxW / 2) + 1, boxY + 12, 'fntSmall', {
         align: 'center',
         color: isEmpty ? '#ff7078' : activeDef?.golden ? '#ffe047' : activeSlot.cursed ? '#d47aff' : '#e0e4ee',
@@ -439,14 +514,14 @@ export class HudRenderer {
       }
     }
 
-    // 3. Compact 5-Ammo-Pool Strip tucked tight under weapon cards (y = 24..34 — zero arena clutter!)
-    const poolStep = isWide ? 26 : 22;
+    // 3. Compact 5-Ammo-Pool Strip tucked tight under weapon cards (y = 24..35; zero 3-digit Back Muscle overlap!)
+    const poolStep = isWide ? 28 : 26;
     const stripW = AMMO_POOL_SPECS.length * poolStep;
-    const rogueExtraW = player.mutant === 'rogue' ? 18 : 0;
+    const rogueExtraW = player.mutant === 'rogue' ? 20 : 0;
     const pillW = stripW + rogueExtraW + 6;
     const pillH = 11;
     const pillY = cardY + cardH + 2;
-    const pillX = Math.max(114, Math.min(width - pillW - 52, Math.round(clusterCenterX - pillW * 0.5)));
+    const pillX = Math.max(98, Math.min(width - pillW - 44, Math.round(clusterCenterX - pillW * 0.5)));
     const stripX = pillX + 3;
     const ammoY = pillY + 2;
 
@@ -472,22 +547,29 @@ export class HudRenderer {
       }
 
       // Subtle micro reserve fill bar along bottom pixel of each pool slot
-      const meterW = poolStep - 4;
+      const meterW = poolStep - 3;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
       ctx.fillRect(ax, pillY + pillH - 2, meterW, 1);
       ctx.fillStyle = low ? '#ff424c' : spec.color;
       ctx.fillRect(ax, pillY + pillH - 2, Math.round(meterW * frac), 1);
 
-      // Draw ammo icon sprite (7x7 compact)
+      // Draw ammo icon sprite with authentic NT 8-frame draining level (0 = FULL .. 7 = EMPTY)
       let drewIcon = false;
       for (const candidate of spec.iconSprites) {
-        if (this.sprites.hasSprite(candidate)) {
-          drewIcon = this.sprites.drawInBox(ctx, candidate, 0, ax, ammoY, 7, 7);
+        const iconDef = this.sprites.getSprite(candidate);
+        if (iconDef && this.sprites.hasSprite(candidate)) {
+          const iconFrame = computeAmmoIconFrame(
+            count,
+            max,
+            iconDef.frames.length,
+            player.gunWarrantTicks,
+          );
+          drewIcon = this.sprites.drawInBox(ctx, candidate, iconFrame, ax, ammoY, 6, 7);
           if (drewIcon) break;
         }
       }
       if (!drewIcon && this.sprites.hasSprite('sprAmmoIcons')) {
-        drewIcon = this.sprites.drawInBox(ctx, 'sprAmmoIcons', spec.ammoIconsFrame, ax, ammoY, 7, 7);
+        drewIcon = this.sprites.drawInBox(ctx, 'sprAmmoIcons', spec.ammoIconsFrame, ax, ammoY, 6, 7);
       }
       if (!drewIcon) {
         ctx.fillStyle = '#0c0910';
@@ -505,20 +587,28 @@ export class HudRenderer {
               ? '#ffffff'
               : '#a2a7b8';
       const label = player.gunWarrantTicks > 0 ? 'INF' : String(count);
-      this.fonts.draw(ctx, label, ax + 8, ammoY + 1, 'fntSmall', {
+      this.fonts.draw(ctx, label, ax + 7, ammoY + 1, 'fntSmall', {
         color: countColor,
         outline: false,
         shadow: true,
       });
     }
 
-    // Rogue Portal Strike canisters
+    // Rogue Portal Strike canisters (uses authentic 4-frame sprRogueAmmoHUD when present!)
     if (player.mutant === 'rogue') {
       const rx = stripX + stripW + 2;
-      ctx.fillStyle = '#52a8ff';
-      ctx.fillRect(rx, ammoY + 1, 4, 5);
-      this.fonts.draw(ctx, String(player.portalStrikes), rx + 6, ammoY + 1, 'fntSmall', {
-        color: '#8ce6ff',
+      const rogueDef = this.sprites.getSprite('sprRogueAmmoHUD');
+      let drewRogue = false;
+      if (rogueDef && this.sprites.hasSprite('sprRogueAmmoHUD')) {
+        const rf = Math.max(0, Math.min(rogueDef.frames.length - 1, player.portalStrikes));
+        drewRogue = this.sprites.drawInBox(ctx, 'sprRogueAmmoHUD', rf, rx, pillY + 1, 7, 9);
+      }
+      if (!drewRogue) {
+        ctx.fillStyle = '#52a8ff';
+        ctx.fillRect(rx, ammoY + 1, 5, 5);
+      }
+      this.fonts.draw(ctx, String(player.portalStrikes), rx + 8, ammoY + 1, 'fntSmall', {
+        color: player.portalStrikes > 0 ? '#8ce6ff' : '#667488',
         shadow: true,
       });
     }
@@ -619,11 +709,16 @@ export class HudRenderer {
 
     if (ultra) {
       const uDef = this.data.getUltra(ultra);
+      const mutantDef = this.data.getMutant(state.player.mutant);
+      const egHudSpr = this.sprites.getSprite('sprEGIconHUD');
       const idx = mutations.length;
       const x = startX + (idx % perRow) * step;
       const y = startY + Math.floor(idx / perRow) * step;
+      const ultraFrame = uDef
+        ? computeUltraIconFrame(mutantDef.raceIndex, uDef.slot, egHudSpr?.frames.length ?? 24)
+        : 0;
       const drew = uDef
-        ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uDef.iconIndex, x - 1, y - 1, 12, 12)
+        ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', ultraFrame, x - 1, y - 1, 12, 12)
         : false;
       if (!drew) {
         ctx.fillStyle = '#181322';
@@ -631,6 +726,88 @@ export class HudRenderer {
         ctx.fillStyle = '#ffe047';
         ctx.fillRect(x + 1, y + 1, 8, 8);
       }
+    }
+  }
+
+  /**
+   * Subtle color-coded screen-edge indicators for off-screen unopened Weapon / Ammo / Rad chests
+   * once the portal opens or all hostile enemies are cleared (prevents missing chests before warp!).
+   */
+  private renderOffscreenChestIndicators(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    camera: CameraController,
+    width: number,
+    height: number,
+  ): void {
+    let hostileAlive = false;
+    if (!state.portal.active) {
+      for (let i = 0; i < state.enemies.length; i++) {
+        const e = state.enemies[i]!;
+        if (!e.friendly && e.hp > 0 && e.aiState !== 'disguised') {
+          hostileAlive = true;
+          break;
+        }
+      }
+    }
+    if (hostileAlive) return;
+
+    const margin = 10;
+    const cx = width * 0.5;
+    const cy = height * 0.5;
+    const padX = 14;
+    const padTop = 38;
+    const padBot = 14;
+    const halfW = cx - padX;
+    const halfH = cy - Math.max(padTop, padBot);
+
+    for (let i = 0; i < state.props.length; i++) {
+      const prop = state.props[i]!;
+      if (prop.opened || prop.hp <= 0) continue;
+      let col: string | null = null;
+      if (prop.kind === 'big_weapon_chest') col = '#ffe047';
+      else if (prop.kind === 'weapon_chest') col = '#ff4d57';
+      else if (prop.kind === 'ammo_chest') col = '#f5c742';
+      else if (prop.kind === 'rad_canister') col = '#52e864';
+      if (!col) continue;
+
+      const scr = camera.worldToScreen(prop.x, prop.y);
+      if (
+        scr.x >= margin &&
+        scr.x <= width - margin &&
+        scr.y >= margin &&
+        scr.y <= height - margin
+      ) {
+        continue;
+      }
+
+      const dx = scr.x - cx;
+      const dy = scr.y - cy;
+      const angle = Math.atan2(dy, dx);
+      const scaleX = Math.abs(dx) > 1e-4 ? halfW / Math.abs(dx) : Infinity;
+      const scaleY = Math.abs(dy) > 1e-4 ? halfH / Math.abs(dy) : Infinity;
+      const t = Math.min(scaleX, scaleY);
+      const ix = Math.round(cx + dx * t);
+      const iy = Math.max(padTop, Math.min(height - padBot, Math.round(cy + dy * t)));
+
+      ctx.save();
+      ctx.translate(ix, iy);
+      ctx.rotate(angle);
+      ctx.fillStyle = '#0e0a14';
+      ctx.beginPath();
+      ctx.moveTo(5, 0);
+      ctx.lineTo(-3, -4);
+      ctx.lineTo(-3, 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(3.5, 0);
+      ctx.lineTo(-2, -2.5);
+      ctx.lineTo(-2, 2.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
     }
   }
 
@@ -718,6 +895,10 @@ export class HudRenderer {
     const boss = state.boss;
     if (!boss || boss.defeated) return;
 
+    // Hide Boss HP bar & intro banner while boss entity is still asleep (e.g. 3-3 Big Dog / 7-3 Throne)
+    const bossEntity = state.enemies.find((e) => e.id === boss.entityId);
+    if (bossEntity && bossEntity.aiState === 'sleep') return;
+
     const bossDisplayName =
       boss.bossId === 'nuclear_throne'
         ? (this.data.getEnemy('nuclear_throne')?.name ?? 'THE KRUNKED THRONE')
@@ -772,7 +953,7 @@ export class HudRenderer {
       });
     }
 
-    // 2. Dramatic Non-Blocking Upper Boss Intro Title Card (never obscures center arena combat!)
+    // 2. Dramatic Boss Intro Splash (uses Steam NT splash layers when loaded, or Vlambeer splat banner in Built-In Art!)
     if (boss.introTicks > 0) {
       const fadeOut = boss.introTicks > 15 ? 1 : Math.min(1, boss.introTicks / 15);
       const slideIn = boss.introTicks > 50 ? Math.max(0, (boss.introTicks - 50) / 10) : 0;
@@ -782,18 +963,66 @@ export class HudRenderer {
       ctx.save();
       ctx.globalAlpha = fadeOut;
 
+      const steamBossFrame = BOSS_INTRO_FRAME_MAP[boss.bossId];
+      const hasSteamBossSplash =
+        steamBossFrame !== undefined &&
+        this.sprites.hasSprite('sprBossIntro') &&
+        this.sprites.hasSprite('sprBossName');
+
+      if (hasSteamBossSplash) {
+        const cx = Math.round(width * 0.5);
+        // Back layer silhouette + foreground boss art softly composited so arena stays readable
+        if (this.sprites.hasSprite('sprBossIntroBackLayer')) {
+          this.sprites.draw(ctx, 'sprBossIntroBackLayer', cx + Math.round(slideOffsetX * 0.5), 0, {
+            frame: steamBossFrame,
+            alpha: 0.55 * fadeOut,
+            pixelSnap: true,
+          });
+        }
+        this.sprites.draw(ctx, 'sprBossIntro', cx - slideOffsetX, 0, {
+          frame: steamBossFrame,
+          alpha: 0.78 * fadeOut,
+          pixelSnap: true,
+        });
+        if (this.sprites.hasSprite('sprBossNameSplat')) {
+          const splatFrame = Math.min(3, Math.floor((60 - Math.min(60, boss.introTicks)) * 0.25));
+          this.sprites.draw(ctx, 'sprBossNameSplat', cx - 64 - slideOffsetX, 82, {
+            frame: splatFrame,
+            alpha: 0.92 * fadeOut,
+            pixelSnap: true,
+          });
+        }
+        this.sprites.draw(ctx, 'sprBossName', cx - 54 - slideOffsetX, 74, {
+          frame: steamBossFrame,
+          alpha: fadeOut,
+          pixelSnap: true,
+        });
+        ctx.restore();
+        return;
+      }
+
       // Subtle 3px cinematic accent bars at extreme top/bottom edges
       ctx.fillStyle = 'rgba(12, 6, 16, 0.72)';
       ctx.fillRect(0, 0, width, 3);
       ctx.fillRect(0, height - 3, width, 3);
 
-      // Compact upper-band title plaque tucked right below the HUD (y=38..74)
+      // Compact upper-band title plaque tucked right below the HUD (y=38..74) with dynamic slash wedges
       const bandY = 38;
       const bandH = bossSubtitle ? 34 : 24;
       const bandW = Math.min(width - 28, 250);
       const bandX = Math.round((width - bandW) * 0.5) - slideOffsetX;
 
-      ctx.fillStyle = 'rgba(12, 7, 18, 0.84)';
+      // Vlambeer diagonal splat backdrop wedges
+      ctx.fillStyle = 'rgba(224, 38, 56, 0.28)';
+      ctx.beginPath();
+      ctx.moveTo(bandX - 10, bandY + 4);
+      ctx.lineTo(bandX + bandW + 14, bandY - 3);
+      ctx.lineTo(bandX + bandW + 8, bandY + bandH + 3);
+      ctx.lineTo(bandX - 14, bandY + bandH - 2);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(12, 7, 18, 0.86)';
       ctx.fillRect(bandX, bandY, bandW, bandH);
       if (flash > 0) {
         ctx.fillStyle = `rgba(255, 235, 190, ${flash})`;
