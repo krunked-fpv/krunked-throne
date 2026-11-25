@@ -573,7 +573,7 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
       for (const side of [-1, 1]) {
         const raw = tileToWorldCenter(cx + side * 4, py, ts);
         if (!isWorldSolid(map, raw.x, raw.y)) {
-          addProp(state, 'pillar', raw.x, raw.y, 'sprNuclearPillar', 36, 9, true);
+          addProp(state, 'pillar', raw.x, raw.y, 'sprPalacePillar', 36, 9, true);
         }
       }
     }
@@ -681,7 +681,7 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
       const count = rng.int(4, 6);
       for (let i = 0; i < count; i++) {
         const pos = findSafeFloorSpot(state, rng, 76, 9, 28);
-        addProp(state, 'pillar', pos.x, pos.y, 'sprNuclearPillar', 36, 9, true);
+        addProp(state, 'pillar', pos.x, pos.y, 'sprPalacePillar', 36, 9, true);
       }
       break;
     }

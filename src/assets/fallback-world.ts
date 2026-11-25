@@ -1032,6 +1032,7 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
     outlinedBox(ctx, x + 2, y + 20, 14, 4, '#3b4875', INK);
     rect(ctx, x + 3, y + 21, 12, 1, '#f0c452');
   });
+  b.addAlias('sprNuclearPillar', 'sprPalacePillar');
 
   const drawProtoStatue = (ctx: DrawCtx, x: number, y: number, f: number, charged: boolean): void => {
     outlinedBox(ctx, x + 4, y + 2, 14, 7, '#757f91', INK, true);
