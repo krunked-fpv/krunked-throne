@@ -2778,7 +2778,10 @@ function stepScheduledIdpdWaves(state: SimState, rng: SeededRng): void {
  */
 function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
   const rt = getAreaRuntime(state);
-  const startEventIdx = state.events.length >= rt.lastScannedEventIdx ? rt.lastScannedEventIdx : 0;
+  const stillPresent =
+    rt.lastScannedEventIdx > 0 &&
+    state.events[rt.lastScannedEventIdx - 1] === rt.lastScannedEventRef;
+  const startEventIdx = stillPresent ? rt.lastScannedEventIdx : 0;
 
   // 1. 1-1 Early Big Bandit spawn (Oasis 1-? setup)
   if (
@@ -2852,7 +2855,15 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
       if (!rt.venusCarFixed) {
         for (let i = 0; i < state.projectiles.length; i++) {
           const pr = state.projectiles[i]!;
-          if (pr.team !== 'player' || pr.kind !== 'melee_slash' || pr.weaponId !== 'screwdriver') continue;
+          if (
+            pr.team !== 'player' ||
+            pr.kind !== 'melee_slash' ||
+            (pr.weaponId !== 'screwdriver' &&
+              pr.weaponId !== 'golden_screwdriver' &&
+              pr.weaponId !== 'energy_screwdriver')
+          ) {
+            continue;
+          }
           const reach = (pr.meleeReach ?? 26) + car.radius + 8;
           if (Math.hypot(state.player.x - car.x, state.player.y - car.y) <= reach) {
             rt.venusCarFixed = true;
@@ -2969,8 +2980,12 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
     }
   }
 
-  // 6. Crown Vault return-area restoration (3-2 -> vault -> 3-3, 5-2 -> vault -> 5-3, 7-2 -> vault -> 7-3)
+  // 6. Crown Vault indestructible pedestal + return-area restoration (3-2 -> 3-3, 5-2 -> 5-3, 7-2 -> 7-3)
   if (state.areaCode === 'vault') {
+    const pedestal = state.props.find((p) => p.kind === 'proto_statue');
+    if (pedestal) {
+      pedestal.hp = pedestal.maxHp;
+    }
     const runRt = getRunRuntime(state);
     if (state.portal.active && runRt.vaultReturnArea && state.portal.targetArea === '4-1') {
       state.portal.targetArea = runRt.vaultReturnArea;
@@ -2981,6 +2996,8 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
   }
 
   rt.lastScannedEventIdx = state.events.length;
+  rt.lastScannedEventRef =
+    state.events.length > 0 ? state.events[state.events.length - 1]! : null;
 }
 
 /**

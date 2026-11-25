@@ -791,9 +791,19 @@ function spawnBiomeProps(
             6,
           )
         : findSafeFloorSpot(state, rng, 104, 12, 24, false);
-    const statue = addProp(state, 'proto_statue', pos.x, pos.y, 'sprProtoStatueIdle', 60, 12, true, {
-      radsStored: 0,
-    });
+    const statue = addProp(
+      state,
+      'proto_statue',
+      pos.x,
+      pos.y,
+      'sprProtoStatueIdle',
+      areaCode === 'vault' ? 999999 : 60,
+      12,
+      true,
+      {
+        radsStored: 0,
+      },
+    );
     if (areaCode !== 'vault') {
       rt.protoStatuePropId = statue.id;
       rt.protoStatueX = statue.x;

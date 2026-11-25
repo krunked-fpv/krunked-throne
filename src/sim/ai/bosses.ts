@@ -467,9 +467,11 @@ function stepBigBandit(state: SimState, boss: EnemyEntity, rng: SeededRng): void
       { carveWalls: true },
     );
     // Smash breakable desert props (cacti, barrels, bone piles, pillars) in Big Bandit's path!
-    for (let p = state.props.length - 1; p >= 0; p--) {
-      const prop = state.props[p]!;
-      if (prop.hp <= 0 || prop.opened) continue;
+    // Snapshot state.props so recursive chain explosions splicing multiple props never corrupt iteration.
+    const propsSnap = [...state.props];
+    for (let p = 0; p < propsSnap.length; p++) {
+      const prop = propsSnap[p]!;
+      if (!state.props.includes(prop) || prop.hp <= 0 || prop.opened) continue;
       if (
         prop.kind === 'barrel' ||
         prop.kind === 'toxic_barrel' ||

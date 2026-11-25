@@ -203,13 +203,18 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
     expect(manhole).toBeDefined();
     expect(manhole.sprite).toBe('sprPizzaEntrance');
 
-    // Non-explosive chip does not break or open the grate
+    // Non-explosive chip does not break or open the grate; simulate GameApp draining events each tick
+    // so tick N emits multiple events, drainEvents clears them, and tick N+1's explosion at index 0 is still caught!
     manhole.hp -= 20;
+    for (let k = 0; k < 4; k++) {
+      state.events.push({ type: 'shake', trauma: 0.01 });
+    }
     stepSimulation(state, makeInput());
     expect(state.portal.active).toBe(false);
     expect(manhole.hp).toBe(manhole.maxHp);
+    drainEvents(state);
 
-    // Explosion next to manhole pops it open to Pizza Sewers (2-?)
+    // Explosion next to manhole on freshly drained events queue pops it open to Pizza Sewers (2-?)
     const rng = SeededRng.fromState(state.rngState);
     spawnExplosion(state, manhole.x + 12, manhole.y, 32, 20, 'player', rng);
     state.rngState = rng.getState();
@@ -346,15 +351,22 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
     const guardians = state.enemies.filter((e) => e.defId === 'crown_guardian');
     expect(guardians.length).toBe(2);
 
-    // Clear guardians -> Vault pedestal lets player cycle Crown via [E], and Vault exit returns to 3-3!
-    state.enemies = [];
+    // Vault pedestal must survive stray combat damage so Crown cycling can never be softlocked
     const pedestal = state.props.find((p) => p.kind === 'proto_statue')!;
     expect(pedestal).toBeDefined();
+    expect(pedestal.hp).toBeGreaterThanOrEqual(999999);
+    const pedRng = SeededRng.fromState(state.rngState);
+    damageProp(state, pedestal, 500, pedRng);
+    state.rngState = pedRng.getState();
+
+    // Clear guardians -> Vault pedestal stays indestructible, cycles Crown via [E], and Vault exit returns to 3-3!
+    state.enemies = [];
     state.player.x = pedestal.x;
     state.player.y = pedestal.y;
     const crownBefore = state.crown;
 
     stepSimulation(state, makeInput({ pickupPressed: true }));
+    expect(pedestal.hp).toBe(pedestal.maxHp);
     expect(state.crown).not.toBe(crownBefore);
     expect(state.portal.active).toBe(true);
     expect(state.portal.targetArea).toBe('3-3');
@@ -717,7 +729,7 @@ describe('boss multi-phase & mechanic parity', () => {
         pierce: 0,
         bounce: 0,
         explosionRadius: 0,
-        sprite: 'sprNothingBall',
+        sprite: 'sprBigGuardianBullet',
         hitIds: [],
       },
       {
@@ -767,7 +779,7 @@ describe('boss multi-phase & mechanic parity', () => {
         pierce: 0,
         bounce: 0,
         explosionRadius: 0,
-        sprite: 'sprNothingBall',
+        sprite: 'sprBigGuardianBullet',
         hitIds: [],
       },
     ];

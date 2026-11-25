@@ -1,4 +1,4 @@
-import type { AreaCode, BossId, EnemyEntity, SimState, WorldMap } from '@/contracts';
+import type { AreaCode, BossId, EnemyEntity, SimEvent, SimState, WorldMap } from '@/contracts';
 
 export interface TrackedSpecialEnemy {
   id: number;
@@ -67,6 +67,7 @@ export interface AreaRuntimeState {
   protoStatueX: number;
   protoStatueY: number;
   lastScannedEventIdx: number;
+  lastScannedEventRef: SimEvent | null;
   lastLevelKills: number;
   lilHunterSpiral: LilHunterDeathSpiral | null;
 }
@@ -120,6 +121,7 @@ function makeFreshRuntime(state: SimState): AreaRuntimeState {
     protoStatueX: 0,
     protoStatueY: 0,
     lastScannedEventIdx: 0,
+    lastScannedEventRef: null,
     lastLevelKills: state.levelKills,
     lilHunterSpiral: null,
   };
