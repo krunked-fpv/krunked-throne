@@ -887,6 +887,7 @@ describe('input-controls: End-to-End Controller & Touch UI Navigation (Zero Keyb
     const nextMut = stepPad('campfire', { 15: true }); // D-pad Right
     expect(nextMut.some((a) => a.type === 'select_mutant' && a.mutant === 'crystal')).toBe(true);
     save.selectedMutant = 'crystal';
+    save.mutants.crystal.goldenWeapon = 'golden_revolver';
     releasePad();
 
     const skinAct = stepPad('campfire', { 4: true }); // LB
