@@ -321,34 +321,34 @@ function drawBiomeFloor32(ctx: DrawCtx, x: number, y: number, w: number, h: numb
 
     case 'caves':
     case 'cursed': {
-      // Deep atmospheric stone cavern slabs with subtle crystalline sheen
-      // ZERO horizontal Venetian-blind dark bars, ZERO repeating magenta dots!
-      fillPixelEllipse(ctx, x + 9, y + 9, 7, 5, t.floorMid);
-      fillPixelEllipse(ctx, x + 23, y + 22, 8, 6, t.floorMid);
-      rect(ctx, x + 4, y + 19, 9, 5, t.floorHi);
-      rect(ctx, x + 18, y + 5, 8, 4, t.floorHi);
-      // Soft organic rock grain
+      // Deep atmospheric stone cavern slabs with gentle organic undulations —
+      // ZERO dark circular pit grid, ZERO Venetian-blind bars, ZERO repeating magenta dots!
+      rect(ctx, x + 2, y + 4, 13, 3, t.floorMid);
+      rect(ctx, x + 16, y + 18, 13, 3, t.floorMid);
+      rect(ctx, x + 5, y + 23, 11, 2, t.floorHi);
+      rect(ctx, x + 17, y + 6, 10, 2, t.floorHi);
+      // Soft scattered cavern slate grain
       for (let i = 0; i < 6; i++) {
         const gx = hash2d(i, frame, 31) % 28;
         const gy = hash2d(frame, i, 67) % 28;
-        rect(ctx, x + 2 + gx, y + 2 + gy, 2, 1, i % 2 === 0 ? t.floorDark : t.floorHi);
+        rect(ctx, x + 2 + gx, y + 2 + gy, 2, 1, i % 2 === 0 ? t.floorMid : t.floorHi);
       }
       if (frame === 1) {
-        // Layered cavern basalt shelf shadow
-        rect(ctx, x + 5, y + 14, 12, 2, t.floorDark);
+        // Gentle layered cavern rock shelf
+        rect(ctx, x + 5, y + 14, 12, 2, t.floorMid);
         rect(ctx, x + 6, y + 13, 10, 1, t.floorHi);
       } else if (frame === 2) {
         // Hairline stone crevice + whisper-subtle embedded mineral glint
-        rect(ctx, x + 14, y + 18, 4, 1, t.floorCrack);
-        rect(ctx, x + 18, y + 19, 3, 1, t.floorCrack);
+        rect(ctx, x + 14, y + 18, 4, 1, t.floorDark);
+        rect(ctx, x + 18, y + 19, 3, 1, t.floorDark);
         rect(ctx, x + 8, y + 7, 3, 1, t.accent);
         px(ctx, x + 9, y + 7, t.floorHi);
       } else if (frame === 3) {
-        // Rare small crystal mineral vein nestled in dark cavern rock
+        // Rare small crystal mineral vein nestled in cavern rock
         rect(ctx, x + 20, y + 10, 3, 2, t.floorDark);
         rect(ctx, x + 21, y + 10, 2, 1, t.accent);
         px(ctx, x + 21, y + 10, '#f0d4ff');
-        rect(ctx, x + 6, y + 25, 5, 1, t.floorCrack);
+        rect(ctx, x + 6, y + 25, 5, 1, t.floorDark);
       }
       break;
     }
@@ -544,27 +544,28 @@ function drawBiomeFloor32(ctx: DrawCtx, x: number, y: number, w: number, h: numb
     }
 
     default: {
-      // Campfire (0-1) organic wasteland dirt & ash arena — ZERO repeating 3x2 dots at (3,3)!
-      fillPixelEllipse(ctx, x + 10, y + 10, 7, 5, t.floorMid);
-      fillPixelEllipse(ctx, x + 24, y + 23, 6, 4, t.floorMid);
-      rect(ctx, x + 16, y + 4, 9, 4, t.floorHi);
-      rect(ctx, x + 3, y + 22, 10, 4, t.floorHi);
-      for (let i = 0; i < 10; i++) {
+      // Campfire (0-1) calm organic wasteland dirt & ash arena — ZERO circular dark pit grid!
+      rect(ctx, x + 2, y + 5, 13, 3, t.floorMid);
+      rect(ctx, x + 16, y + 19, 13, 3, t.floorMid);
+      rect(ctx, x + 15, y + 4, 10, 2, t.floorHi);
+      rect(ctx, x + 3, y + 23, 11, 2, t.floorHi);
+      for (let i = 0; i < 9; i++) {
         const sx = hash2d(i, frame, 71) % 29;
         const sy = hash2d(frame, i, 97) % 29;
-        rect(ctx, x + 1 + sx, y + 1 + sy, 2, 1, i % 3 === 0 ? t.floorDark : t.floorMid);
+        rect(ctx, x + 1 + sx, y + 1 + sy, 2, 1, i % 3 === 0 ? t.floorMid : t.floorHi);
       }
       if (frame === 1) {
-        fillPixelEllipse(ctx, x + 20, y + 14, 5, 3, t.floorDark);
-        rect(ctx, x + 18, y + 13, 3, 1, t.floorMid);
+        // Soft weathered ash sweep
+        rect(ctx, x + 16, y + 12, 9, 3, t.floorMid);
+        rect(ctx, x + 18, y + 11, 5, 1, t.floorHi);
       } else if (frame === 2) {
-        rect(ctx, x + 7, y + 15, 5, 1, t.floorCrack);
-        rect(ctx, x + 12, y + 16, 3, 1, t.floorCrack);
+        rect(ctx, x + 7, y + 15, 5, 1, t.floorDark);
+        rect(ctx, x + 12, y + 16, 3, 1, t.floorDark);
         px(ctx, x + 22, y + 9, t.accent);
       } else if (frame === 3) {
         rect(ctx, x + 12, y + 22, 3, 2, t.floorDark);
         rect(ctx, x + 12, y + 21, 2, 1, t.floorHi);
-        rect(ctx, x + 24, y + 11, 2, 2, t.floorDark);
+        rect(ctx, x + 24, y + 11, 2, 2, t.floorMid);
       }
       break;
     }
@@ -611,38 +612,45 @@ function drawBiomeWallTop(ctx: DrawCtx, x: number, y: number, w: number, h: numb
       px(ctx, x + 11, y + 10, '#ffffff');
     }
   } else if (t.pattern === 'palace' || t.pattern === 'mansion' || t.pattern === 'crib') {
-    // Seamless grand royal stone parapet — NO inner waffle box, NO per-tile yellow dots!
-    rect(ctx, x + 2, y + 3, 10, 4, t.wallTopDark);
-    rect(ctx, x + 3, y + 3, 8, 1, t.wallTopHi);
-    rect(ctx, x + 6, y + 10, 8, 3, t.wallTopDark);
-    if (frame === 1) {
-      rect(ctx, x + 1, y + 7, 12, 1, t.wallTopHi);
+    // Seamless unified grand royal stone parapet — ZERO repeating 16px horizontal dash/box rhythm!
+    if (frame === 0) {
+      // Calm cohesive royal stonework (72% of walls — merges smoothly across large islands!)
+      rect(ctx, x + 1, y + 5, 6, 1, t.wallTopHi);
+      rect(ctx, x + 9, y + 12, 5, 1, t.wallTopDark);
+    } else if (frame === 1) {
+      // Subtle staggered masonry joint & soft marble bevel
+      rect(ctx, x + 2, y + 8, 10, 1, t.wallTopDark);
+      rect(ctx, x + 3, y + 7, 8, 1, t.wallTopHi);
     } else if (frame === 2) {
+      // Delicate carved stone fracture
       rect(ctx, x + 4, y + 5, 4, 1, t.wallTopDark);
       rect(ctx, x + 8, y + 6, 3, 1, t.wallTopDark);
-    } else if (frame === 3) {
-      // Subtle inlaid royal molding accent (restrained!)
-      rect(ctx, x + 4, y + 11, 7, 1, t.accent);
+    } else {
+      // Sparse subtle antique gold royal molding trim
+      rect(ctx, x + 4, y + 10, 7, 1, t.accent);
+      rect(ctx, x + 5, y + 11, 5, 1, t.wallTopDark);
     }
   } else if (t.pattern === 'scrapyard' || t.pattern === 'labs' || t.pattern === 'hq') {
-    // Seamless fused riveted sheet-metal / composite roof mass (NO repeating 16x16 dark boxes!)
-    rect(ctx, x + 2, y + 3, 11, 5, t.wallTopDark);
-    rect(ctx, x + 3, y + 4, 9, 3, t.wallTop);
-    if (frame === 1) {
-      rect(ctx, x + 2, y + 9, 11, 1, t.wallTopHi);
-      rect(ctx, x + 2, y + 10, 11, 1, t.wallTopDark);
+    // Seamless fused sheet-metal / composite roof mass — ZERO repeating 16px box/dash rhythm!
+    if (frame === 0) {
+      // Calm unified riveted roof plating (72% of walls — smooth industrial mass!)
+      rect(ctx, x + 2, y + 4, 6, 1, t.wallTopHi);
+      rect(ctx, x + 8, y + 11, 6, 1, t.wallTopDark);
+    } else if (frame === 1) {
+      // Subtle welded sheet seam & two micro-rivets
+      rect(ctx, x + 1, y + 8, 12, 1, t.wallTopDark);
+      rect(ctx, x + 2, y + 7, 10, 1, t.wallTopHi);
+      px(ctx, x + 3, y + 11, t.wallTopDark);
+      px(ctx, x + 12, y + 4, t.wallTopHi);
     } else if (frame === 2) {
-      rect(ctx, x + 4, y + 5, 7, 2, t.wallTopDark);
+      // Small recessed roof vent / structural seam
+      rect(ctx, x + 4, y + 6, 7, 2, t.wallTopDark);
       px(ctx, x + 5, y + 5, t.wallTopHi);
       px(ctx, x + 10, y + 5, t.wallTopHi);
-    } else if (frame === 3) {
-      if (t.pattern === 'scrapyard') {
-        rect(ctx, x + 3, y + 6, 6, 3, t.wallTopDark);
-        rect(ctx, x + 4, y + 7, 4, 1, t.accent);
-      } else {
-        rect(ctx, x + 4, y + 7, 6, 2, t.wallTopDark);
-        rect(ctx, x + 5, y + 7, 4, 1, t.accent);
-      }
+    } else {
+      // Rare sparse weathered patch / conduit mark
+      rect(ctx, x + 4, y + 7, 6, 2, t.wallTopDark);
+      rect(ctx, x + 5, y + 7, 4, 1, t.accent);
     }
   } else if (t.pattern === 'caves' || t.pattern === 'cursed') {
     // Seamless rough basalt cavern stone cap — NO repeating glowing boxes!
