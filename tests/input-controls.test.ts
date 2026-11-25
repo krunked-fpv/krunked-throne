@@ -1283,20 +1283,80 @@ describe('input-controls: Chromium Chorded LMB+RMB & Rapid Menu Nav Queue Regres
     const s4 = input.consumeMenuInput();
     expect(s4.navDown).toBe(false);
 
-    // Rapid Down x2 + Enter holds confirm until the 2nd Down lands
-    input.simulateKeyDown('ArrowDown');
-    input.simulateKeyUp('ArrowDown');
-    input.simulateKeyDown('ArrowDown');
-    input.simulateKeyUp('ArrowDown');
+    // Rapid 3x ArrowDown + Enter on Pause defers confirm to the frame AFTER the final nav step
+    // so MenuSystem's `else if (input.confirm)` executes Enter cleanly instead of dropping it!
+    const pauseMenus = new MenuSystem(bundle);
+    for (let i = 0; i < 3; i++) {
+      input.simulateKeyDown('ArrowDown');
+      input.simulateKeyUp('ArrowDown');
+    }
     input.simulateKeyDown('Enter');
     input.simulateKeyUp('Enter');
 
     const q1 = input.consumeMenuInput();
     expect(q1.navDown).toBe(true);
     expect(q1.confirm).toBe(false);
+    expect(pauseMenus.update(q1, pauseCtx).some((a) => a.type === 'open_screen')).toBe(false);
+    expect(pauseMenus.getFocusedIndex()).toBe(1);
+
     const q2 = input.consumeMenuInput();
     expect(q2.navDown).toBe(true);
-    expect(q2.confirm).toBe(true);
+    expect(q2.confirm).toBe(false);
+    expect(pauseMenus.update(q2, pauseCtx).some((a) => a.type === 'open_screen')).toBe(false);
+    expect(pauseMenus.getFocusedIndex()).toBe(2);
+
+    const q3 = input.consumeMenuInput();
+    expect(q3.navDown).toBe(true);
+    expect(q3.confirm).toBe(false);
+    expect(pauseMenus.update(q3, pauseCtx).some((a) => a.type === 'open_screen')).toBe(false);
+    expect(pauseMenus.getFocusedIndex()).toBe(3);
+
+    const q4 = input.consumeMenuInput();
+    expect(q4.navDown).toBe(false);
+    expect(q4.confirm).toBe(true);
+    const confirmActions = pauseMenus.update(q4, pauseCtx);
+    expect(confirmActions.some((a) => a.type === 'open_screen' && a.screen === 'campfire')).toBe(true);
+
+    // Rapid 2x ArrowRight + Enter on Mutation Select picks card 2 cleanly without dropping Enter
+    const mutMenus = new MenuSystem(bundle);
+    const mutSim = {
+      pendingMutations: ['rhino_skin', 'trigger_fingers', 'rabbit_paw'],
+      pendingUltras: ['fish_a', 'fish_b'],
+    } as unknown as SimState;
+    const mutCtx: MenuRenderContext = {
+      screen: 'mutation_select',
+      save,
+      simState: mutSim,
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+      timeSec: 1,
+      returnScreenFromOptions: 'title',
+      inputMode: 'kbm',
+    };
+    input.simulateKeyDown('ArrowRight');
+    input.simulateKeyUp('ArrowRight');
+    input.simulateKeyDown('ArrowRight');
+    input.simulateKeyUp('ArrowRight');
+    input.simulateKeyDown('Enter');
+    input.simulateKeyUp('Enter');
+
+    const m1 = input.consumeMenuInput();
+    expect(m1.navRight).toBe(true);
+    expect(m1.confirm).toBe(false);
+    mutMenus.update(m1, mutCtx);
+    const m2 = input.consumeMenuInput();
+    expect(m2.navRight).toBe(true);
+    expect(m2.confirm).toBe(false);
+    mutMenus.update(m2, mutCtx);
+    const m3 = input.consumeMenuInput();
+    expect(m3.navRight).toBe(false);
+    expect(m3.confirm).toBe(true);
+    const mutPickActions = mutMenus.update(m3, mutCtx);
+    expect(
+      mutPickActions.some(
+        (a) => a.type === 'pick_mutation' && a.index === 2 && a.mutationId === 'rabbit_paw',
+      ),
+    ).toBe(true);
 
     // clearMenuLatches wipes any pending buffered taps cleanly on screen switch
     input.simulateKeyDown('ArrowUp');

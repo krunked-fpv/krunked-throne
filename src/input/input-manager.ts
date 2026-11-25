@@ -1138,13 +1138,15 @@ export class InputManager {
     if (navLeft) this.menuNavLeftCount -= 1;
     if (navRight) this.menuNavRightCount -= 1;
 
-    // If more buffered nav steps remain behind this step, hold confirm until the final nav step lands
+    // Defer confirm until every buffered nav step (including this frame's step) has settled so
+    // `else if (input.confirm)` menu handlers never drop Enter on rapid `Nx Arrow + Enter` bursts.
+    const navFiredThisFrame = navUp || navDown || navLeft || navRight;
     const hasRemainingNav =
       this.menuNavUpCount > 0 ||
       this.menuNavDownCount > 0 ||
       this.menuNavLeftCount > 0 ||
       this.menuNavRightCount > 0;
-    const confirmNow = this.menuConfirm && !hasRemainingNav;
+    const confirmNow = this.menuConfirm && !navFiredThisFrame && !hasRemainingNav;
 
     const snap: MenuInputSnapshot = {
       pointer: {

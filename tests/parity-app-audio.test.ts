@@ -31,7 +31,7 @@ import {
 } from '@/input';
 import { CameraController } from '@/render';
 import { MenuSystem, createDefaultSaveData, type MenuRenderContext } from '@/ui';
-import { GameApp } from '@/app';
+import { GameApp, createGameDataProvider } from '@/app';
 import { parseNttObjectsHtml, parseNttScriptingHtml } from '../tools/oracle-dump';
 
 function makeSteamLikeManifest(): AssetManifest {
@@ -1197,6 +1197,11 @@ describe('parity-app-audio: GameApp Loop Integration, Sleeping Boss Music, Curso
       expect(internal.hasNearbyInteractable(st)).toBe(true);
       st.props[0]!.x = st.player.x + 120;
       expect(internal.hasNearbyInteractable(st)).toBe(false);
+
+      // 5. Data-adapter safe fallbacks: corrupted/unknown crown or mutant IDs fall back cleanly without throwing
+      const dataProvider = createGameDataProvider();
+      expect(dataProvider.getCrown('corrupted_crown' as never).id).toBe('none');
+      expect(dataProvider.getMutant('corrupted_mutant' as never).id).toBe('fish');
 
       app.destroy();
     } finally {

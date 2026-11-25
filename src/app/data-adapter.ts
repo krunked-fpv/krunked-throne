@@ -48,7 +48,7 @@ export function createGameDataProvider(): UiDataProvider {
       return mutantList;
     },
     getMutant(id: MutantId): MutantDef {
-      return MUTANTS[id];
+      return MUTANTS[id] ?? MUTANTS.fish;
     },
     getMutations(): readonly MutationDef[] {
       return mutationList;
@@ -63,7 +63,7 @@ export function createGameDataProvider(): UiDataProvider {
       return crownList;
     },
     getCrown(id: CrownId): CrownDef {
-      return CROWNS[id];
+      return CROWNS[id] ?? CROWNS.none;
     },
     getWeapon(id: string): WeaponDef | undefined {
       return WEAPONS[id];
