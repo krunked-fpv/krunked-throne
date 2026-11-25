@@ -23,6 +23,7 @@ export type SynthMusicThemeId =
   | 'boss3'
   | 'boss4'
   | 'boss5'
+  | 'boss_dead'
   | 'game_over';
 
 export type SynthAmbienceKind =
@@ -126,47 +127,45 @@ export function resolveSynthMusicTheme(trackKey: string): SynthMusicThemeId {
     .trim();
 
   if (norm.includes('gameover') || norm === 'dead') return 'game_over';
+  if (norm.includes('bossdead') || norm.includes('silence')) return 'boss_dead';
   if (norm.startsWith('boss5')) return 'boss5';
   if (norm.startsWith('boss4')) return 'boss4';
   if (norm.startsWith('boss3')) return 'boss3';
   if (norm.startsWith('boss2')) return 'boss2';
   if (norm.startsWith('boss1') || norm.startsWith('boss')) return 'boss1';
 
-  if (
-    norm.includes('theme') ||
-    norm === '100' ||
-    norm === '102' ||
-    norm.includes('campfire') ||
-    norm.includes('credits') ||
-    norm.includes('vault')
-  ) {
+  if (norm.includes('theme') || norm.includes('campfire') || norm.includes('credits')) {
     return 'campfire';
   }
-  if (norm === '1' || norm === '1b' || norm.includes('desert') || norm.includes('oasis')) {
+  if (norm === '100' || norm === '100b' || norm.includes('vault')) {
+    return 'caves';
+  }
+  if (norm === '1' || norm === '1b' || norm === '101' || norm.includes('desert') || norm.includes('oasis')) {
     return 'desert';
   }
-  if (norm === '2' || norm === '2b' || norm.includes('sewer') || norm.includes('pizza')) {
+  if (norm === '2' || norm === '2b' || norm === '102' || norm.includes('sewer') || norm.includes('pizza')) {
     return 'sewers';
   }
   if (
     norm === '3' ||
     norm === '3b' ||
+    norm === '103' ||
     norm.includes('scrap') ||
     norm.includes('mansion') ||
     norm === 'yv'
   ) {
     return 'scrapyard';
   }
-  if (norm === '4' || norm === '4b' || norm.includes('cave')) {
+  if (norm === '4' || norm === '4b' || norm === '104' || norm.includes('cave')) {
     return 'caves';
   }
-  if (norm === '5' || norm === '5b' || norm.includes('frozen') || norm.includes('jungle')) {
+  if (norm === '5' || norm === '5b' || norm === '105' || norm.includes('frozen') || norm.includes('jungle')) {
     return 'frozen';
   }
   if (norm === '6' || norm === '6b' || norm.includes('lab')) {
     return 'labs';
   }
-  if (norm === '7' || norm === '7b' || norm.includes('palace') || norm === 'hq') {
+  if (norm === '7' || norm === '7b' || norm === '106' || norm === '106b' || norm.includes('palace') || norm === 'hq') {
     return 'palace';
   }
 
@@ -183,14 +182,14 @@ export function resolveSynthAmbienceKind(ambKey: string): SynthAmbienceKind {
     .replace(/\.ogg$/, '')
     .trim();
 
-  if (norm === '0' || norm.includes('campfire')) return 'campfire';
-  if (norm === '1' || norm.includes('desert') || norm.includes('oasis')) return 'desert';
-  if (norm === '2' || norm.includes('sewer')) return 'subterranean';
-  if (norm === '3' || norm.includes('scrap') || norm.includes('mansion')) return 'scrapyard';
-  if (norm === '4' || norm.includes('cave')) return 'caves';
-  if (norm === '5' || norm.includes('frozen') || norm.includes('jungle')) return 'frozen';
-  if (norm === '6' || norm.includes('lab')) return 'labs';
-  if (norm === '7' || norm.includes('palace') || norm.includes('vault') || norm === 'hq') {
+  if (norm === '0' || norm === '0b' || norm === '0c' || norm.includes('campfire')) return 'campfire';
+  if (norm === '1' || norm === '101' || norm.includes('desert') || norm.includes('oasis')) return 'desert';
+  if (norm === '2' || norm === '102' || norm.includes('sewer')) return 'subterranean';
+  if (norm === '3' || norm === '103' || norm.includes('scrap') || norm.includes('mansion')) return 'scrapyard';
+  if (norm === '4' || norm === '104' || norm.includes('cave')) return 'caves';
+  if (norm === '5' || norm === '105' || norm.includes('frozen') || norm.includes('jungle')) return 'frozen';
+  if (norm === '6' || norm === '106' || norm.includes('lab') || norm === 'hq') return 'labs';
+  if (norm === '7' || norm === '100' || norm.includes('palace') || norm.includes('vault')) {
     return 'palace';
   }
   return 'desert';
@@ -1094,7 +1093,32 @@ const THEMES: Record<SynthMusicThemeId, ThemeDefinition> = {
   boss4: createBossTheme(154, 36, 4), // Nuclear Throne (Cm)
   boss5: createBossTheme(164, 37, 5), // Throne II (C#m)
 
-  // 10. Game Over: Somber sparse wasteland dirge
+  // 10. Boss Defeated / Throne Silence: Quiet reflective wasteland wind-down drone
+  boss_dead: {
+    bpm: 78,
+    steps: 64,
+    stepFn: (ctx, dest, time, step, stepDur) => {
+      if (step === 0) {
+        playPadChord(ctx, dest, time, [48, 55, 60], 0.065, stepDur * 28, {
+          type: 'triangle',
+          cutoff: 520,
+          attack: 0.35,
+        });
+      } else if (step === 32) {
+        playPadChord(ctx, dest, time, [46, 53, 58], 0.06, stepDur * 28, {
+          type: 'triangle',
+          cutoff: 480,
+          attack: 0.35,
+        });
+      }
+      const chimes: Record<number, number> = { 8: 67, 24: 64, 40: 65, 56: 60 };
+      if (chimes[step] !== undefined) {
+        playBell(ctx, dest, time, chimes[step]!, 0.075, 1.1);
+      }
+    },
+  },
+
+  // 11. Game Over: Somber sparse wasteland dirge
   game_over: {
     bpm: 72,
     steps: 32,
@@ -1138,6 +1162,7 @@ export class SynthMusicSequencer {
   private readonly ambienceDest: AudioNode | null;
 
   private disposed = false;
+  private suspended = false;
 
   // Music state
   private currentMusicKey: string | null = null;
@@ -1189,6 +1214,17 @@ export class SynthMusicSequencer {
     return this.ambienceSession !== null && !this.disposed;
   }
 
+  public setSuspended(suspended: boolean): void {
+    this.suspended = suspended;
+    if (!suspended && this.ctx && this.ctx.state !== 'closed') {
+      this.nextStepTime = this.ctx.currentTime + 0.05;
+    }
+  }
+
+  public isSuspended(): boolean {
+    return this.suspended;
+  }
+
   /**
    * Starts playing an original procedural wasteland theme for the given trackKey.
    * Safe no-op in headless Node or when AudioContext is absent/closed.
@@ -1230,8 +1266,8 @@ export class SynthMusicSequencer {
           this.stopMusic(0);
           return;
         }
-        // Wait cleanly without drifting if context is still suspended
-        if (this.ctx.state !== 'running') {
+        // Wait cleanly without drifting if context is still suspended or tab is backgrounded
+        if (this.suspended || this.ctx.state !== 'running') {
           this.nextStepTime = this.ctx.currentTime + 0.05;
           return;
         }
@@ -1369,7 +1405,7 @@ export class SynthMusicSequencer {
         sources.push(noise, lp, rumbleGain);
 
         intervalId = setInterval(() => {
-          if (this.disposed || ctx.state !== 'running') return;
+          if (this.disposed || this.suspended || ctx.state !== 'running') return;
           if (Math.random() > 0.58) return;
           try {
             const t = ctx.currentTime + Math.random() * 0.08;

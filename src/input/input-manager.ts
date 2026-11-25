@@ -142,6 +142,9 @@ export class InputManager {
   private lastPointerTouchMs = -10000;
   private lastAnyTouchMs = -10000;
   private lastMouseDownPointerMs = -10000;
+  private lastWheelSwapMs = -10000;
+  private lastMouseClientX: number | null = null;
+  private lastMouseClientY: number | null = null;
 
   // Edge-triggered simulation latches (cleared on consumeSimInput / clearSimLatches)
   private firePressed = false;
@@ -267,12 +270,23 @@ export class InputManager {
       this.gameplayActive = active;
       this.touch.clearAllTouches();
       this.activeMenuTouchPointerId = null;
+      if (active) {
+        this.clearSimLatches();
+      } else {
+        this.clearMenuLatches();
+      }
     }
   }
 
   setLogicalSize(width: number, height: number): void {
-    this.logicalWidth = Math.max(1, width);
-    this.logicalHeight = Math.max(1, height);
+    const nextW = Math.max(1, width);
+    const nextH = Math.max(1, height);
+    if (this.logicalWidth > 0 && this.logicalHeight > 0 && (nextW !== this.logicalWidth || nextH !== this.logicalHeight)) {
+      this.pointerLogicalX = clamp((this.pointerLogicalX / this.logicalWidth) * nextW, 0, nextW);
+      this.pointerLogicalY = clamp((this.pointerLogicalY / this.logicalHeight) * nextH, 0, nextH);
+    }
+    this.logicalWidth = nextW;
+    this.logicalHeight = nextH;
     this.touch.setLogicalSize(this.logicalWidth, this.logicalHeight);
   }
 
@@ -365,6 +379,7 @@ export class InputManager {
     this.keysHeld.clear();
     this.mouseButtonsHeld.clear();
     this.touch.clearAllTouches();
+    this.gamepad.resetState();
     this.activeMenuTouchPointerId = null;
   }
 
@@ -410,12 +425,27 @@ export class InputManager {
   // Headless-friendly input injection methods (used by both DOM events & tests)
   // --------------------------------------------------------------------------
 
+  private isCodeBoundToNonPauseAction(code: string): boolean {
+    const kb = this.keybinds;
+    return (
+      code === kb.up ||
+      code === kb.down ||
+      code === kb.left ||
+      code === kb.right ||
+      code === kb.swap ||
+      code === kb.pickup ||
+      code === kb.activeAlt
+    );
+  }
+
   simulateKeyDown(code: string, repeat: boolean = false): void {
     this.setDeviceMode('kbm');
 
     if (this.capturingKey) {
       if (!repeat) {
-        if (code !== 'Escape') {
+        if (code === 'Escape') {
+          this.menuBack = true;
+        } else {
           this.capturedKeyCode = code;
         }
         this.capturingKey = false;
@@ -432,44 +462,51 @@ export class InputManager {
     // Gameplay edge-triggered actions
     if (code === kb.swap) this.swapPressed = true;
     if (code === kb.pickup) this.pickupPressed = true;
-    if (code === kb.pause || code === 'Escape' || code === 'KeyP') {
+    const isPauseKey =
+      code === kb.pause ||
+      code === 'Escape' ||
+      (code === 'KeyP' && !this.isCodeBoundToNonPauseAction('KeyP'));
+    if (isPauseKey) {
       this.pausePressed = true;
-      this.menuBack = true;
+      if (!this.gameplayActive) {
+        this.menuBack = true;
+      }
     }
     if (code === kb.activeAlt) {
       this.activePressed = true;
     }
-    if (code === 'KeyR') {
+    if (code === 'KeyR' && !this.isCodeBoundToNonPauseAction('KeyR') && kb.pause !== 'KeyR') {
       this.retryPressed = true;
-      this.menuRetry = true;
+      if (!this.gameplayActive) {
+        this.menuRetry = true;
+      }
     }
 
     // Quick pick 1-5 (both top-row Digit1..5 and Numpad1..5)
-    if (code === 'Digit1' || code === 'Numpad1') {
-      this.selectIndex = 0;
-      this.menuSelectIndex = 0;
-    } else if (code === 'Digit2' || code === 'Numpad2') {
-      this.selectIndex = 1;
-      this.menuSelectIndex = 1;
-    } else if (code === 'Digit3' || code === 'Numpad3') {
-      this.selectIndex = 2;
-      this.menuSelectIndex = 2;
-    } else if (code === 'Digit4' || code === 'Numpad4') {
-      this.selectIndex = 3;
-      this.menuSelectIndex = 3;
-    } else if (code === 'Digit5' || code === 'Numpad5') {
-      this.selectIndex = 4;
-      this.menuSelectIndex = 4;
+    let pickedDigit: number | undefined = undefined;
+    if (code === 'Digit1' || code === 'Numpad1') pickedDigit = 0;
+    else if (code === 'Digit2' || code === 'Numpad2') pickedDigit = 1;
+    else if (code === 'Digit3' || code === 'Numpad3') pickedDigit = 2;
+    else if (code === 'Digit4' || code === 'Numpad4') pickedDigit = 3;
+    else if (code === 'Digit5' || code === 'Numpad5') pickedDigit = 4;
+
+    if (pickedDigit !== undefined) {
+      this.selectIndex = pickedDigit;
+      if (!this.gameplayActive) {
+        this.menuSelectIndex = pickedDigit;
+      }
     }
 
-    // Menu navigation
-    if (code === 'ArrowUp' || code === kb.up) this.menuNavUp = true;
-    if (code === 'ArrowDown' || code === kb.down) this.menuNavDown = true;
-    if (code === 'ArrowLeft' || code === kb.left) this.menuNavLeft = true;
-    if (code === 'ArrowRight' || code === kb.right) this.menuNavRight = true;
-    if (code === 'Enter' || code === 'Space') this.menuConfirm = true;
-    if (code === 'BracketLeft') this.menuPrevTab = true;
-    if (code === 'BracketRight') this.menuNextTab = true;
+    // Menu navigation (suppressed while gameplayActive so gameplay WASD/Space never auto-confirms Mutation/GameOver on frame 0!)
+    if (!this.gameplayActive) {
+      if (code === 'ArrowUp' || code === kb.up) this.menuNavUp = true;
+      if (code === 'ArrowDown' || code === kb.down) this.menuNavDown = true;
+      if (code === 'ArrowLeft' || code === kb.left) this.menuNavLeft = true;
+      if (code === 'ArrowRight' || code === kb.right) this.menuNavRight = true;
+      if (code === 'Enter' || code === 'Space') this.menuConfirm = true;
+      if (code === 'BracketLeft') this.menuPrevTab = true;
+      if (code === 'BracketRight') this.menuNextTab = true;
+    }
   }
 
   simulateKeyUp(code: string): void {
@@ -506,11 +543,15 @@ export class InputManager {
       if (!wasDown) {
         if (button === 0) {
           this.firePressed = true;
-          this.menuClicked = true;
+          if (!this.gameplayActive) {
+            this.menuClicked = true;
+          }
           this.pointerMoved = true;
         } else if (button === 2) {
           this.activePressed = true;
-          this.menuRightClicked = true;
+          if (!this.gameplayActive) {
+            this.menuRightClicked = true;
+          }
         }
       }
     } else {
@@ -628,8 +669,17 @@ export class InputManager {
 
     this.lastPointerMouseMs = this.nowMsFn();
     this.lastMouseDownPointerMs = this.lastPointerMouseMs;
+    this.lastMouseClientX = e.clientX;
+    this.lastMouseClientY = e.clientY;
     this.simulateMouseMoveLogical(pos.x, pos.y);
     this.simulateMouseButton(e.button, true);
+  }
+
+  private isSubThresholdMouseJitter(clientX: number, clientY: number): boolean {
+    if (this.deviceMode === 'kbm' || this.lastMouseClientX === null || this.lastMouseClientY === null) {
+      return false;
+    }
+    return Math.hypot(clientX - this.lastMouseClientX, clientY - this.lastMouseClientY) < 2;
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -645,6 +695,11 @@ export class InputManager {
       return;
     }
 
+    if (this.isSubThresholdMouseJitter(e.clientX, e.clientY)) {
+      return;
+    }
+    this.lastMouseClientX = e.clientX;
+    this.lastMouseClientY = e.clientY;
     this.lastPointerMouseMs = this.nowMsFn();
     this.simulateMouseMoveLogical(pos.x, pos.y);
   }
@@ -724,6 +779,9 @@ export class InputManager {
     const now = this.nowMsFn();
     if (now - this.lastPointerMouseMs < 6) return;
     if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
+    if (this.isSubThresholdMouseJitter(e.clientX, e.clientY)) return;
+    this.lastMouseClientX = e.clientX;
+    this.lastMouseClientY = e.clientY;
     const pos = this.mapClientEvent(e.clientX, e.clientY);
     this.simulateMouseMoveLogical(pos.x, pos.y);
   }
@@ -733,6 +791,8 @@ export class InputManager {
     const now = this.nowMsFn();
     if (now - this.lastMouseDownPointerMs < 12) return;
     if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
+    this.lastMouseClientX = e.clientX;
+    this.lastMouseClientY = e.clientY;
     if (this.canvas) {
       const pos = this.mapClientEvent(e.clientX, e.clientY);
       this.simulateMouseMoveLogical(pos.x, pos.y);
@@ -750,6 +810,10 @@ export class InputManager {
 
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
+    if (e.deltaY === 0) return;
+    const now = this.nowMsFn();
+    if (now - this.lastWheelSwapMs < 80) return;
+    this.lastWheelSwapMs = now;
     this.simulateWheel(e.deltaY);
   }
 
@@ -770,21 +834,96 @@ export class InputManager {
     if (gp.pausePressed) this.pausePressed = true;
     if (gp.retryPressed) {
       this.retryPressed = true;
-      this.menuRetry = true;
+      if (!this.gameplayActive) {
+        this.menuRetry = true;
+      }
     }
 
-    if (gp.menuNavUp) this.menuNavUp = true;
-    if (gp.menuNavDown) this.menuNavDown = true;
-    if (gp.menuNavLeft) this.menuNavLeft = true;
-    if (gp.menuNavRight) this.menuNavRight = true;
-    if (gp.menuConfirm) this.menuConfirm = true;
-    if (gp.menuBack) this.menuBack = true;
-    if (gp.menuPrevTab) this.menuPrevTab = true;
-    if (gp.menuNextTab) this.menuNextTab = true;
-    if (gp.menuSecondary) this.menuSecondary = true;
-    if (gp.menuTertiary) this.menuTertiary = true;
+    if (!this.gameplayActive) {
+      if (gp.menuNavUp) this.menuNavUp = true;
+      if (gp.menuNavDown) this.menuNavDown = true;
+      if (gp.menuNavLeft) this.menuNavLeft = true;
+      if (gp.menuNavRight) this.menuNavRight = true;
+      if (gp.menuConfirm) this.menuConfirm = true;
+      if (gp.menuBack) this.menuBack = true;
+      if (gp.menuPrevTab) this.menuPrevTab = true;
+      if (gp.menuNextTab) this.menuNextTab = true;
+      if (gp.menuSecondary) this.menuSecondary = true;
+      if (gp.menuTertiary) this.menuTertiary = true;
+    }
 
     return gp;
+  }
+
+  /**
+   * High-frequency gamepad poll for 60/120 Hz render frames between 30 Hz sim steps,
+   * capturing brief button taps into edge latches so zero inputs are dropped.
+   */
+  pollGamepad(): GamepadPollResult {
+    return this.pollGamepadAndMerge();
+  }
+
+  /**
+   * Smoothly refreshes Gamepad / Touch crosshair & aim world coordinates at 60/120 Hz
+   * using the interpolated player position so reticle and camera look-ahead never stutter at 30 Hz.
+   */
+  updatePresentationAim(
+    camera: CameraController,
+    interpPlayerX: number,
+    interpPlayerY: number,
+    simContext?: SimInputContext,
+  ): { x: number; y: number } {
+    if (this.deviceMode === 'gamepad') {
+      const gp = this.pollGamepadAndMerge();
+      let dirX = gp.aimDirX;
+      let dirY = gp.aimDirY;
+      if (this.controlSettings.gamepadAimAssist && simContext?.enemies) {
+        const assisted = applyControllerAimAssist(
+          interpPlayerX,
+          interpPlayerY,
+          dirX,
+          dirY,
+          simContext.enemies,
+          simContext.map ?? null,
+          { enabled: true },
+        );
+        dirX = assisted.dirX;
+        dirY = assisted.dirY;
+      }
+      const lookDist = 76 + gp.aimMagnitude * 28;
+      const aimWorldX = interpPlayerX + dirX * lookDist;
+      const aimWorldY = interpPlayerY + dirY * lookDist;
+      const scr = camera.worldToScreen(aimWorldX, aimWorldY);
+      this.pointerLogicalX = clamp(scr.x, 0, camera.viewportWidth);
+      this.pointerLogicalY = clamp(scr.y, 0, camera.viewportHeight);
+      return { x: aimWorldX, y: aimWorldY };
+    }
+
+    if (this.isTouchOverlayVisible()) {
+      const aimStick = this.touch.getAimStickState();
+      const aimDir = this.touch.getLastAimDirection();
+      const lookDist = 72 + (aimStick.active ? aimStick.magnitude : 0) * 26;
+      const aimWorldX = interpPlayerX + aimDir.x * lookDist;
+      const aimWorldY = interpPlayerY + aimDir.y * lookDist;
+      const scr = camera.worldToScreen(aimWorldX, aimWorldY);
+      this.pointerLogicalX = clamp(scr.x, 0, camera.viewportWidth);
+      this.pointerLogicalY = clamp(scr.y, 0, camera.viewportHeight);
+      return { x: aimWorldX, y: aimWorldY };
+    }
+
+    return camera.screenToWorld(this.pointerLogicalX, this.pointerLogicalY);
+  }
+
+  /**
+   * Polls pause state while preserving gameplay edge latches (fire/active/swap/pickup)
+   * across hitstop freeze ticks so rapid inputs during kill-stop never get swallowed.
+   */
+  consumePauseOnly(): boolean {
+    this.pollGamepadAndMerge();
+    const touchPause = this.touch.isTriggerPressed('pause');
+    const wasPaused = this.pausePressed || touchPause;
+    this.pausePressed = false;
+    return wasPaused;
   }
 
   /**
@@ -907,6 +1046,30 @@ export class InputManager {
     this.selectIndex = undefined;
   }
 
+  clearMenuLatches(): void {
+    this.pointerMoved = false;
+    this.menuClicked = false;
+    this.menuRightClicked = false;
+    this.menuNavUp = false;
+    this.menuNavDown = false;
+    this.menuNavLeft = false;
+    this.menuNavRight = false;
+    this.menuConfirm = false;
+    this.menuBack = false;
+    this.menuRetry = false;
+    this.menuPrevTab = false;
+    this.menuNextTab = false;
+    this.menuSecondary = false;
+    this.menuTertiary = false;
+    this.menuSelectIndex = undefined;
+    this.capturedKeyCode = undefined;
+  }
+
+  clearAllLatches(): void {
+    this.clearSimLatches();
+    this.clearMenuLatches();
+  }
+
   /**
    * Produces a clean per-frame UI/menu interaction snapshot and clears UI edge latches.
    */
@@ -937,22 +1100,7 @@ export class InputManager {
       capturedKeyCode: this.capturedKeyCode,
     };
 
-    this.pointerMoved = false;
-    this.menuClicked = false;
-    this.menuRightClicked = false;
-    this.menuNavUp = false;
-    this.menuNavDown = false;
-    this.menuNavLeft = false;
-    this.menuNavRight = false;
-    this.menuConfirm = false;
-    this.menuBack = false;
-    this.menuRetry = false;
-    this.menuPrevTab = false;
-    this.menuNextTab = false;
-    this.menuSecondary = false;
-    this.menuTertiary = false;
-    this.menuSelectIndex = undefined;
-    this.capturedKeyCode = undefined;
+    this.clearMenuLatches();
 
     return snap;
   }

@@ -786,10 +786,15 @@ function parseCliArgs(argv: string[]): ExtractOptions {
   return opts;
 }
 
+function normalizeForMainCheck(p: string): string {
+  const resolved = path.resolve(p);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 const isMain =
   typeof process !== 'undefined' &&
   typeof process.argv[1] === 'string' &&
-  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+  normalizeForMainCheck(process.argv[1]) === normalizeForMainCheck(fileURLToPath(import.meta.url));
 
 if (isMain) {
   try {

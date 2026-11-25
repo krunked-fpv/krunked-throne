@@ -42,12 +42,36 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
 
 export const MAX_SOUND_VOICES = 4;
 export const MAX_GLOBAL_VOICES = 24;
-export const DEFAULT_COOLDOWN_MS = 35;
+export const DEFAULT_COOLDOWN_MS = 22; // < 1 sim tick (33.3ms) so 1-tick rapid fire never drops every 2nd shot
+export const RAD_COOLDOWN_MS = 15; // smooth ascending rad-vacuum pitch streaks
 export const DEFAULT_FALLOFF_PX = 360;
 export const DEFAULT_PITCH_JITTER = 0.08; // ±8%
 export const RAD_STREAK_WINDOW_MS = 460;
 export const RAD_STREAK_MAX = 14;
 export const RAD_STREAK_STEP = 0.045;
+
+/**
+ * Canonical Steam SOND aliases used when a semantic or clean-room sound key
+ * is absent from a loaded Steam manifest, ensuring real Steam WAV/OGG playback
+ * instead of silently dropping or falling back to synth.
+ */
+const STEAM_SOUND_ALIASES: Record<string, readonly string[]> = {
+  sndPortal: ['sndPortalOpen', 'sndPortalAppear'],
+  sndPortalEnter: ['sndPortalClose', 'sndPortalOpen'],
+  sndBossIntro: ['sndBossIntroIn', 'sndBigBanditIntro'],
+  sndHealthPickup: ['sndHPPickup', 'sndHPPickupBig'],
+  sndPickupHP: ['sndHPPickup', 'sndHPPickupBig'],
+  sndPickupRad: ['sndRadPickup'],
+  sndPickupAmmo: ['sndAmmoPickup'],
+  sndPickupWeapon: ['sndWeaponPickup'],
+  sndMeleeDeflect: ['sndMeleeFlip'],
+  sndCorpseImpact: ['sndImpWristHit', 'sndHitFlesh'],
+  sndEnemyHit: ['sndHitFlesh', 'sndBanditHit'],
+  sndEnemyHurt: ['sndHitFlesh', 'sndBanditHit'],
+  sndEnemyAlert: ['sndSniperTarget'],
+  sndHitConfirm: ['sndHitFlesh'],
+  sndLowHpHeartbeat: ['sndGunGodLowHP'],
+};
 
 export interface SpatialResult {
   volume: number; // 0..1
@@ -130,6 +154,7 @@ interface WebAudioNodes {
   musicGain: GainNode;
   ambienceGain: GainNode;
   musicDuckingGain: GainNode;
+  ambienceDuckingGain: GainNode;
 }
 
 export class AudioEngine {
@@ -150,6 +175,7 @@ export class AudioEngine {
   // State
   private unlocked = false;
   private paused = false;
+  private backgroundSuspended = false;
   private currentMusic: string | null = null;
   private currentAmbience: string | null = null;
 
@@ -256,6 +282,9 @@ export class AudioEngine {
       const ambienceGain = ctx.createGain();
       ambienceGain.connect(mixTarget);
 
+      const ambienceDuckingGain = ctx.createGain();
+      ambienceDuckingGain.connect(ambienceGain);
+
       this.webAudio = {
         ctx,
         limiter,
@@ -264,9 +293,10 @@ export class AudioEngine {
         musicGain,
         ambienceGain,
         musicDuckingGain,
+        ambienceDuckingGain,
       };
 
-      this.synthSequencer = new SynthMusicSequencer(ctx, musicDuckingGain, ambienceGain);
+      this.synthSequencer = new SynthMusicSequencer(ctx, musicDuckingGain, ambienceDuckingGain);
 
       this.applySettings(this.settings);
       this.unlocked = ctx.state === 'running';
@@ -341,12 +371,22 @@ export class AudioEngine {
 
     this.unlocked = this.webAudio.ctx.state === 'running';
 
-    if (this.unlocked && this.isFallbackMode() && this.synthSequencer) {
-      if (this.currentMusic && !this.synthSequencer.isPlayingMusic()) {
-        this.synthSequencer.playMusic(this.currentMusic, 0.35);
-      }
-      if (this.currentAmbience && !this.synthSequencer.isPlayingAmbience()) {
-        this.synthSequencer.playAmbience(this.currentAmbience, 0.5);
+    if (this.unlocked) {
+      if (this.isFallbackMode() && this.synthSequencer) {
+        if (this.currentMusic && !this.synthSequencer.isPlayingMusic()) {
+          this.synthSequencer.playMusic(this.currentMusic, 0.35);
+        }
+        if (this.currentAmbience && !this.synthSequencer.isPlayingAmbience()) {
+          this.synthSequencer.playAmbience(this.currentAmbience, 0.5);
+        }
+      } else {
+        // Steam mode: kick off any music/ambience queued before first gesture
+        if (this.currentMusic && !this.musicSource) {
+          this.ensureTrackStarted(this.currentMusic, 'music', 0.35);
+        }
+        if (this.currentAmbience && !this.ambienceSource) {
+          this.ensureTrackStarted(this.currentAmbience, 'ambience', 0.5);
+        }
       }
     }
 
@@ -386,7 +426,7 @@ export class AudioEngine {
   }
 
   /**
-   * Sets paused state with dynamic ducking (0.35x music volume).
+   * Sets paused state with click-free dynamic ducking (0.35x music & ambience volume).
    */
   public setPaused(paused: boolean): void {
     this.paused = paused;
@@ -394,13 +434,75 @@ export class AudioEngine {
 
     if (this.webAudio) {
       const now = this.webAudio.ctx.currentTime;
-      this.webAudio.musicDuckingGain.gain.cancelScheduledValues(now);
-      this.webAudio.musicDuckingGain.gain.linearRampToValueAtTime(ducking, now + 0.1);
+      const musicParam = this.webAudio.musicDuckingGain.gain;
+      musicParam.cancelScheduledValues(now);
+      musicParam.setValueAtTime(Math.max(0.0001, musicParam.value), now);
+      musicParam.linearRampToValueAtTime(ducking, now + 0.08);
+
+      const ambParam = this.webAudio.ambienceDuckingGain.gain;
+      ambParam.cancelScheduledValues(now);
+      ambParam.setValueAtTime(Math.max(0.0001, ambParam.value), now);
+      ambParam.linearRampToValueAtTime(ducking, now + 0.08);
     }
   }
 
   public isPaused(): boolean {
     return this.paused;
+  }
+
+  /**
+   * Cleanly suspends or resumes audio when browser tab visibility changes
+   * so music never leaks in hidden tabs or bursts notes upon refocus.
+   */
+  public setBackgroundSuspended(suspended: boolean): void {
+    if (this.backgroundSuspended === suspended) return;
+    this.backgroundSuspended = suspended;
+    this.synthSequencer?.setSuspended(suspended);
+
+    if (!this.webAudio) return;
+    const ctx = this.webAudio.ctx;
+    try {
+      if (suspended) {
+        if (ctx.state === 'running' && typeof ctx.suspend === 'function') {
+          void ctx.suspend().catch(() => {});
+        }
+      } else if (this.unlocked) {
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+          void ctx.resume().catch(() => {});
+        }
+      }
+    } catch {
+      // ignore restricted AudioContext errors
+    }
+  }
+
+  public isBackgroundSuspended(): boolean {
+    return this.backgroundSuspended;
+  }
+
+  /**
+   * Resolves a clean-room or semantic sound key to a matching Steam manifest key if available.
+   */
+  public resolveManifestSoundKey(key: string): string {
+    if (!this.manifest || this.manifest.sourceMode !== 'steam') return key;
+    if (
+      this.manifest.sounds?.[key]?.path ||
+      this.manifest.music?.[key] ||
+      this.manifest.ambience?.[key] ||
+      this.manifest.looseSounds?.[key]
+    ) {
+      return key;
+    }
+    const aliases = STEAM_SOUND_ALIASES[key];
+    if (aliases) {
+      for (let i = 0; i < aliases.length; i++) {
+        const alt = aliases[i]!;
+        if (this.manifest.sounds?.[alt]?.path) {
+          return alt;
+        }
+      }
+    }
+    return key;
   }
 
   /**
@@ -417,12 +519,18 @@ export class AudioEngine {
    * Loads an AudioBuffer from the manifest, custom URL resolver, or base URL.
    */
   public async loadSound(key: string): Promise<AudioBuffer | null> {
+    const resolvedKey = this.resolveManifestSoundKey(key);
     if (this.bufferCache.has(key)) {
       return this.bufferCache.get(key)!;
     }
+    if (resolvedKey !== key && this.bufferCache.has(resolvedKey)) {
+      const aliased = this.bufferCache.get(resolvedKey)!;
+      this.bufferCache.set(key, aliased);
+      return aliased;
+    }
 
-    if (this.pendingLoads.has(key)) {
-      return this.pendingLoads.get(key)!;
+    if (this.pendingLoads.has(resolvedKey)) {
+      return this.pendingLoads.get(resolvedKey)!;
     }
 
     if (!this.webAudio || typeof fetch === 'undefined') {
@@ -434,16 +542,16 @@ export class AudioEngine {
     }
 
     const relativePath =
-      this.manifest?.sounds?.[key]?.path ??
-      this.manifest?.music?.[key] ??
-      this.manifest?.ambience?.[key] ??
-      this.manifest?.looseSounds?.[key];
+      this.manifest?.sounds?.[resolvedKey]?.path ??
+      this.manifest?.music?.[resolvedKey] ??
+      this.manifest?.ambience?.[resolvedKey] ??
+      this.manifest?.looseSounds?.[resolvedKey];
 
     if (this.manifest && !relativePath) {
       return null;
     }
 
-    const cleanPath = (relativePath ?? `audio/${key}.ogg`).replace(/^\/+/, '');
+    const cleanPath = (relativePath ?? `audio/${resolvedKey}.ogg`).replace(/^\/+/, '');
     const url = this.resolveAudioUrl
       ? this.resolveAudioUrl(cleanPath)
       : `${this.baseUrl}/${cleanPath}`;
@@ -462,18 +570,21 @@ export class AudioEngine {
         if (!this.webAudio || generation !== this.assetGeneration) return null;
         const audioBuffer = await this.webAudio.ctx.decodeAudioData(arrayBuffer);
         if (generation !== this.assetGeneration) return null;
-        this.bufferCache.set(key, audioBuffer);
+        this.bufferCache.set(resolvedKey, audioBuffer);
+        if (resolvedKey !== key) {
+          this.bufferCache.set(key, audioBuffer);
+        }
         return audioBuffer;
       } catch {
         return null;
       } finally {
         if (generation === this.assetGeneration) {
-          this.pendingLoads.delete(key);
+          this.pendingLoads.delete(resolvedKey);
         }
       }
     })();
 
-    this.pendingLoads.set(key, loadPromise);
+    this.pendingLoads.set(resolvedKey, loadPromise);
     return loadPromise;
   }
 
@@ -512,9 +623,12 @@ export class AudioEngine {
     const nowMs = this.timeProvider();
     this.pruneFinishedVoices();
 
-    // 1. Per-sound micro-cooldown check (default 35 ms)
+    // 1. Per-sound micro-cooldown check (22ms default < 1 sim tick; 15ms for rad streaks)
+    const lowerKey = soundKey.toLowerCase();
+    const isRadPickup = lowerKey === 'sndradpickup' || lowerKey === 'sndpickuprad';
+    const effectiveCooldown = isRadPickup ? Math.min(this.cooldownMs, RAD_COOLDOWN_MS) : this.cooldownMs;
     const lastTime = this.lastTriggerTimeMs.get(soundKey);
-    if (lastTime !== undefined && nowMs - lastTime < this.cooldownMs) {
+    if (lastTime !== undefined && nowMs - lastTime < effectiveCooldown) {
       this.suppressedByCooldownCount++;
       return false;
     }
@@ -545,13 +659,17 @@ export class AudioEngine {
     // Mark successful trigger for cooldown
     this.lastTriggerTimeMs.set(soundKey, nowMs);
 
-    // 4. Calculate effective volume, rad streak climb & pitch jitter
+    // 4. Calculate effective volume (respecting Steam SOND gain when present), rad streak climb & pitch jitter
+    const resolvedKey = this.resolveManifestSoundKey(soundKey);
+    const soundDefVol = this.manifest?.sounds?.[resolvedKey]?.volume;
+    const manifestGain =
+      typeof soundDefVol === 'number' && Number.isFinite(soundDefVol) && soundDefVol > 0
+        ? Math.min(2.0, soundDefVol)
+        : 1.0;
     const eventVolume = options.volume ?? 1.0;
-    const effectiveVolume = spatial.volume * eventVolume;
+    const effectiveVolume = spatial.volume * eventVolume * manifestGain;
 
     let streakBoost = 1.0;
-    const lowerKey = soundKey.toLowerCase();
-    const isRadPickup = lowerKey === 'sndradpickup' || lowerKey === 'sndpickuprad';
     if (isRadPickup) {
       if (nowMs - this.lastRadPickupMs <= RAD_STREAK_WINDOW_MS) {
         this.radStreakCount = Math.min(RAD_STREAK_MAX, this.radStreakCount + 1);
@@ -569,39 +687,55 @@ export class AudioEngine {
 
     // 5. Sound playback (Web Audio Buffer vs Synth Fallback vs Headless)
     const voiceId = this.nextVoiceId++;
-    const defaultDurationMs = isRadPickup ? 160 : 250;
+    let voiceDurationMs = isRadPickup ? 160 : 250;
     let stopFn = () => {};
 
     if (this.webAudio) {
       const { ctx, sfxGain } = this.webAudio;
-      const cachedBuffer = this.bufferCache.get(soundKey);
+      const cachedBuffer = this.bufferCache.get(soundKey) ?? this.bufferCache.get(resolvedKey);
 
       if (cachedBuffer) {
+        if (Number.isFinite(cachedBuffer.duration) && cachedBuffer.duration > 0) {
+          voiceDurationMs = Math.max(
+            60,
+            Math.min(2000, (cachedBuffer.duration * 1000) / Math.max(0.25, pitchMultiplier)),
+          );
+        }
         try {
           const source = ctx.createBufferSource();
           source.buffer = cachedBuffer;
           source.playbackRate.value = pitchMultiplier;
 
-          const panner = ctx.createStereoPanner();
-          panner.pan.setValueAtTime(spatial.pan, ctx.currentTime);
-
           const voiceGain = ctx.createGain();
           voiceGain.gain.setValueAtTime(effectiveVolume, ctx.currentTime);
 
           source.connect(voiceGain);
-          voiceGain.connect(panner);
-          panner.connect(sfxGain);
+          if (Math.abs(spatial.pan) > 0.001 && typeof ctx.createStereoPanner === 'function') {
+            const panner = ctx.createStereoPanner();
+            panner.pan.setValueAtTime(spatial.pan, ctx.currentTime);
+            voiceGain.connect(panner);
+            panner.connect(sfxGain);
+          } else {
+            voiceGain.connect(sfxGain);
+          }
 
           source.start();
           stopFn = () => {
             try {
               source.stop();
               source.disconnect();
+              voiceGain.disconnect();
             } catch {
               // ignore
             }
           };
           source.onended = () => {
+            try {
+              source.disconnect();
+              voiceGain.disconnect();
+            } catch {
+              // ignore
+            }
             this.activeVoices = this.activeVoices.filter((v) => v.id !== voiceId);
           };
         } catch {
@@ -616,8 +750,8 @@ export class AudioEngine {
       } else {
         if (
           this.manifest?.sourceMode === 'steam' &&
-          !this.bufferCache.has(soundKey) &&
-          Boolean(this.manifest.sounds && this.manifest.sounds[soundKey])
+          !this.bufferCache.has(resolvedKey) &&
+          Boolean(this.manifest.sounds && this.manifest.sounds[resolvedKey]?.path)
         ) {
           void this.loadSound(soundKey);
         }
@@ -637,7 +771,7 @@ export class AudioEngine {
       id: voiceId,
       soundKey,
       startTimeMs: nowMs,
-      durationMs: defaultDurationMs,
+      durationMs: voiceDurationMs,
       stop: stopFn,
     });
 
@@ -654,6 +788,15 @@ export class AudioEngine {
     const now = this.webAudio.ctx.currentTime;
     const fade = Math.max(0, fadeDuration);
 
+    oldSource.onended = () => {
+      try {
+        oldSource.disconnect();
+        oldGain?.disconnect();
+      } catch {
+        // ignore
+      }
+    };
+
     try {
       if (oldGain && fade > 0.01) {
         oldGain.gain.cancelScheduledValues(now);
@@ -662,7 +805,12 @@ export class AudioEngine {
       }
       oldSource.stop(now + fade);
     } catch {
-      // ignore
+      try {
+        oldSource.disconnect();
+        oldGain?.disconnect();
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -676,6 +824,15 @@ export class AudioEngine {
     const now = this.webAudio.ctx.currentTime;
     const fade = Math.max(0, fadeDuration);
 
+    oldSource.onended = () => {
+      try {
+        oldSource.disconnect();
+        oldGain?.disconnect();
+      } catch {
+        // ignore
+      }
+    };
+
     try {
       if (oldGain && fade > 0.01) {
         oldGain.gain.cancelScheduledValues(now);
@@ -684,7 +841,12 @@ export class AudioEngine {
       }
       oldSource.stop(now + fade);
     } catch {
-      // ignore
+      try {
+        oldSource.disconnect();
+        oldGain?.disconnect();
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -694,9 +856,9 @@ export class AudioEngine {
     crossfadeSec: number
   ): void {
     if (!this.webAudio) return;
-    const { ctx, musicDuckingGain, ambienceGain } = this.webAudio;
+    const { ctx, musicDuckingGain, ambienceDuckingGain } = this.webAudio;
     const now = ctx.currentTime;
-    const dest = kind === 'music' ? musicDuckingGain : ambienceGain;
+    const dest = kind === 'music' ? musicDuckingGain : ambienceDuckingGain;
 
     try {
       const source = ctx.createBufferSource();
@@ -723,20 +885,66 @@ export class AudioEngine {
     }
   }
 
+  private ensureTrackStarted(
+    trackKey: string,
+    kind: 'music' | 'ambience',
+    crossfadeSec: number
+  ): void {
+    if (!this.webAudio) return;
+    const hasActiveSource = kind === 'music' ? Boolean(this.musicSource) : Boolean(this.ambienceSource);
+    if (hasActiveSource) return;
+
+    const buffer = this.bufferCache.get(trackKey);
+    if (buffer) {
+      if (kind === 'music') {
+        this.synthSequencer?.stopMusic(Math.min(0.25, crossfadeSec));
+      } else {
+        this.synthSequencer?.stopAmbience(Math.min(0.3, crossfadeSec));
+      }
+      this.startBufferTrack(buffer, kind, crossfadeSec);
+      return;
+    }
+
+    if (this.manifest?.sourceMode === 'steam') {
+      const generation = this.assetGeneration;
+      void this.loadSound(trackKey).then((buf) => {
+        if (!this.webAudio || generation !== this.assetGeneration) return;
+        const stillCurrent =
+          kind === 'music' ? this.currentMusic === trackKey : this.currentAmbience === trackKey;
+        const stillUnstarted = kind === 'music' ? !this.musicSource : !this.ambienceSource;
+        if (!stillCurrent) return;
+        if (buf) {
+          if (stillUnstarted) {
+            if (kind === 'music') {
+              this.synthSequencer?.stopMusic(0.15);
+            } else {
+              this.synthSequencer?.stopAmbience(0.15);
+            }
+            this.startBufferTrack(buf, kind, crossfadeSec);
+          }
+        } else if (this.isWebAudioRunning() && this.synthSequencer && stillUnstarted) {
+          if (kind === 'music') {
+            this.synthSequencer.playMusic(trackKey, crossfadeSec);
+          } else {
+            this.synthSequencer.playAmbience(trackKey, crossfadeSec);
+          }
+        }
+      });
+    }
+  }
+
   /**
    * Plays background music with smooth crossfade.
    * Uses procedural SynthMusicSequencer in fallback mode, or streams decoded Steam OGG buffers.
    */
   public playMusic(trackKey: string, crossfadeSec: number = 0.8): void {
     if (this.currentMusic === trackKey) {
-      // If fallback synth was queued before unlock and context is now running, ensure it starts
-      if (
-        this.isFallbackMode() &&
-        this.isWebAudioRunning() &&
-        this.synthSequencer &&
-        !this.synthSequencer.isPlayingMusic()
-      ) {
-        this.synthSequencer.playMusic(trackKey, crossfadeSec);
+      if (this.isFallbackMode()) {
+        if (this.isWebAudioRunning() && this.synthSequencer && !this.synthSequencer.isPlayingMusic()) {
+          this.synthSequencer.playMusic(trackKey, crossfadeSec);
+        }
+      } else if (this.isWebAudioRunning() && !this.musicSource) {
+        this.ensureTrackStarted(trackKey, 'music', crossfadeSec);
       }
       return;
     }
@@ -758,23 +966,16 @@ export class AudioEngine {
       return;
     }
 
-    // Steam mode: ensure procedural synth music is stopped cleanly
+    // Steam mode: ensure procedural synth music is stopped cleanly and start/load buffer
     this.synthSequencer?.stopMusic(Math.min(0.25, crossfadeSec));
-
-    if (!buffer) {
-      if (this.manifest?.sourceMode === 'steam') {
-        const generation = this.assetGeneration;
-        void this.loadSound(trackKey).then((buf) => {
-          if (!buf || !this.webAudio || generation !== this.assetGeneration) return;
-          if (this.currentMusic === trackKey && !this.musicSource) {
-            this.startBufferTrack(buf, 'music', crossfadeSec);
-          }
-        });
+    if (!this.isWebAudioRunning()) {
+      // Queue async decode now; unlock() will start playback once AudioContext runs
+      if (!buffer && this.manifest?.sourceMode === 'steam') {
+        void this.loadSound(trackKey);
       }
       return;
     }
-
-    this.startBufferTrack(buffer, 'music', crossfadeSec);
+    this.ensureTrackStarted(trackKey, 'music', crossfadeSec);
   }
 
   /**
@@ -783,13 +984,12 @@ export class AudioEngine {
    */
   public playAmbience(trackKey: string, crossfadeSec: number = 1.0): void {
     if (this.currentAmbience === trackKey) {
-      if (
-        this.isFallbackMode() &&
-        this.isWebAudioRunning() &&
-        this.synthSequencer &&
-        !this.synthSequencer.isPlayingAmbience()
-      ) {
-        this.synthSequencer.playAmbience(trackKey, crossfadeSec);
+      if (this.isFallbackMode()) {
+        if (this.isWebAudioRunning() && this.synthSequencer && !this.synthSequencer.isPlayingAmbience()) {
+          this.synthSequencer.playAmbience(trackKey, crossfadeSec);
+        }
+      } else if (this.isWebAudioRunning() && !this.ambienceSource) {
+        this.ensureTrackStarted(trackKey, 'ambience', crossfadeSec);
       }
       return;
     }
@@ -810,21 +1010,13 @@ export class AudioEngine {
     }
 
     this.synthSequencer?.stopAmbience(Math.min(0.3, crossfadeSec));
-
-    if (!buffer) {
-      if (this.manifest?.sourceMode === 'steam') {
-        const generation = this.assetGeneration;
-        void this.loadSound(trackKey).then((buf) => {
-          if (!buf || !this.webAudio || generation !== this.assetGeneration) return;
-          if (this.currentAmbience === trackKey && !this.ambienceSource) {
-            this.startBufferTrack(buf, 'ambience', crossfadeSec);
-          }
-        });
+    if (!this.isWebAudioRunning()) {
+      if (!buffer && this.manifest?.sourceMode === 'steam') {
+        void this.loadSound(trackKey);
       }
       return;
     }
-
-    this.startBufferTrack(buffer, 'ambience', crossfadeSec);
+    this.ensureTrackStarted(trackKey, 'ambience', crossfadeSec);
   }
 
   /**
@@ -887,12 +1079,51 @@ export class AudioEngine {
 
   /**
    * Consumes an array of SimEvents emitted by the simulation fixed-step tick.
+   * Deduplicates semantic fallback cues when the same tick batch already carries
+   * an explicit companion `sfx` event so portal/boss/level-up/deflect/empty cues never double-fire.
    */
   public consumeEvents(
     events: readonly SimEvent[],
     listenerX: number = 0,
     listenerY: number = 0
   ): void {
+    let hasPortalSfx = false;
+    let hasBossIntroSfx = false;
+    let hasLevelUpSfx = false;
+    let hasDeflectSfx = false;
+    let hasCorpseSfx = false;
+    let hasEmptySfx = false;
+    let hasExplicitMusic = false;
+
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i] as ExtendedAudioSimEvent;
+      if (ev.type === 'sfx') {
+        const low = ev.sound.toLowerCase();
+        if (low.includes('portalopen') || low.includes('horrorportal') || low.includes('oasisportal')) {
+          hasPortalSfx = true;
+        } else if (
+          low.includes('bossintro') ||
+          low.includes('banditintro') ||
+          low.includes('dogintro') ||
+          low.includes('lilhunterappear') ||
+          low.includes('nothingstart') ||
+          low.includes('nothing2appear')
+        ) {
+          hasBossIntroSfx = true;
+        } else if (low === 'sndlevelup' || low === 'sndlevelultra') {
+          hasLevelUpSfx = true;
+        } else if (low === 'sndmeleeflip' || low === 'sndcrystalricochet' || low === 'sndshielderdeflect') {
+          hasDeflectSfx = true;
+        } else if (low === 'sndimpwristhit') {
+          hasCorpseSfx = true;
+        } else if (low === 'sndempty' || low === 'sndultraempty' || low === 'sndhorrorempty') {
+          hasEmptySfx = true;
+        }
+      } else if (ev.type === 'music') {
+        hasExplicitMusic = true;
+      }
+    }
+
     for (let i = 0; i < events.length; i++) {
       const event = events[i] as ExtendedAudioSimEvent;
       switch (event.type) {
@@ -917,42 +1148,53 @@ export class AudioEngine {
         }
 
         case 'portal_open': {
-          this.playSfx('sndPortal', event.x, event.y, {
-            listenerX,
-            listenerY,
-            volume: 1.0,
-          });
+          if (!hasPortalSfx) {
+            this.playSfx('sndPortalOpen', event.x, event.y, {
+              listenerX,
+              listenerY,
+              volume: 1.0,
+            });
+          }
           break;
         }
 
         case 'area_change': {
           this.radStreakCount = 0;
-          this.routeContext({
-            areaCode: event.areaCode,
-            biome: event.biome,
-            loop: event.loop,
-          });
+          if (!hasExplicitMusic) {
+            this.routeContext({
+              areaCode: event.areaCode,
+              biome: event.biome,
+              loop: event.loop,
+            });
+          }
           break;
         }
 
         case 'boss_intro': {
-          this.routeContext({
-            bossId: event.bossId,
-          });
-          this.playSfx('sndBossIntro', listenerX, listenerY, {
-            listenerX,
-            listenerY,
-            volume: 1.0,
-          });
+          if (!hasExplicitMusic) {
+            const bossRoute = resolveMusicRoute({ bossId: event.bossId }, this.manifest);
+            if (bossRoute.musicTrack) {
+              this.playMusic(bossRoute.musicTrack);
+            }
+          }
+          if (!hasBossIntroSfx) {
+            this.playSfx('sndBossIntroIn', listenerX, listenerY, {
+              listenerX,
+              listenerY,
+              volume: 1.0,
+            });
+          }
           break;
         }
 
         case 'level_up': {
-          this.playSfx('sndLevelUp', listenerX, listenerY, {
-            listenerX,
-            listenerY,
-            volume: 1.0,
-          });
+          if (!hasLevelUpSfx) {
+            this.playSfx(event.isUltra ? 'sndLevelUltra' : 'sndLevelUp', listenerX, listenerY, {
+              listenerX,
+              listenerY,
+              volume: 1.0,
+            });
+          }
           break;
         }
 
@@ -978,32 +1220,38 @@ export class AudioEngine {
         }
 
         case 'corpse_impact': {
-          this.playSfx('sndCorpseImpact', event.x, event.y, {
-            listenerX,
-            listenerY,
-            pitchJitter: 0.1,
-            volume: Math.min(1, 0.55 + event.speed * 0.05),
-          });
+          if (!hasCorpseSfx) {
+            this.playSfx('sndCorpseImpact', event.x, event.y, {
+              listenerX,
+              listenerY,
+              pitchJitter: 0.1,
+              volume: Math.min(1, 0.55 + event.speed * 0.05),
+            });
+          }
           break;
         }
 
         case 'melee_deflect': {
-          this.playSfx('sndMeleeDeflect', event.x, event.y, {
-            listenerX,
-            listenerY,
-            pitchJitter: 0.08,
-            volume: 0.9,
-          });
+          if (!hasDeflectSfx) {
+            this.playSfx('sndMeleeDeflect', event.x, event.y, {
+              listenerX,
+              listenerY,
+              pitchJitter: 0.08,
+              volume: 0.9,
+            });
+          }
           break;
         }
 
         case 'ammo_empty': {
-          this.playSfx('sndEmpty', event.x, event.y, {
-            listenerX,
-            listenerY,
-            pitchJitter: 0.04,
-            volume: 0.88,
-          });
+          if (!hasEmptySfx) {
+            this.playSfx('sndEmpty', event.x, event.y, {
+              listenerX,
+              listenerY,
+              pitchJitter: 0.04,
+              volume: 0.88,
+            });
+          }
           break;
         }
 
