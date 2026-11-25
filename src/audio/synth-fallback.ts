@@ -10,8 +10,10 @@ export type SynthSoundKind =
   | 'shell'
   | 'bolt'
   | 'explosive'
+  | 'flame'
   | 'energy'
   | 'melee'
+  | 'ability'
   | 'explosion'
   | 'hit'
   | 'hit_confirm'
@@ -21,6 +23,7 @@ export type SynthSoundKind =
   | 'level_up'
   | 'empty'
   | 'alert'
+  | 'low_hp'
   | 'boss_intro'
   | 'ui_click';
 
@@ -47,90 +50,103 @@ export function classifySound(soundName: string): SynthSoundKind {
     return 'hit_confirm';
   }
 
-  // 1. UI Clicks & Navigation
+  // 0b. Dry-Fire / Empty Magazine Click (checked before portal/ultra/explo so sndPortalStrikeEmpty, sndUltraEmpty, sndCorpseExploDead classify cleanly)
+  if (name.includes('empty') || name.includes('dryfire') || name.includes('corpseexplodead')) {
+    return 'empty';
+  }
+
+  // 0c. Critical Low-HP Heartbeat / Warning
+  if (name.includes('lowhp') || name.includes('lowh') || name.includes('heartbeat')) {
+    return 'low_hp';
+  }
+
+  // 1. UI Clicks, Hover, Mutant Confirm/Select, Menu & Weapon Swap
   if (
     name.includes('click') ||
+    name.includes('hover') ||
     name.includes('select') ||
     name.includes('confirm') ||
+    name.includes('cnfm') ||
+    name.includes('slct') ||
     name.includes('button') ||
     name.includes('cursor') ||
     name.includes('pause') ||
+    name.includes('menu') ||
+    name.includes('swap') ||
     name.startsWith('ui')
   ) {
     return 'ui_click';
   }
 
-  // 2. Level Up / Mutations / Ultras
+  // 1b. Lucky Shot & Quick Proc Pickups (snappy chime rather than full 5-note level-up fanfare)
+  if (name.includes('luckyshot') || name.includes('bloodlustproc')) {
+    return 'pickup';
+  }
+
+  // 2. Level Up / Mutations / Ultras / Boss Win Fanfare
+  // NOTE: Do NOT match generic 'ultra' here so Ultra weapons (sndUltraCrossbow, sndUltraLaser, etc.) play true weapon SFX!
   if (
     name.includes('levelup') ||
     name.includes('level_up') ||
     name.includes('levelultra') ||
+    name.includes('mutappear') ||
+    name.includes('mutstrongspirit') ||
+    name.includes('strongspiritgain') ||
+    name.includes('crownappear') ||
+    name.includes('bosswin') ||
+    name.includes('chickenregenhead') ||
+    name.includes('charunlock') ||
     name.includes('skill') ||
     name.includes('mutation') ||
-    (name.includes('ultra') && !name.includes('empty'))
+    (name.startsWith('sndmut') && !name.startsWith('sndmutant'))
   ) {
     return 'level_up';
   }
 
-  // 2b. Dry-Fire / Empty Magazine Click
-  if (name.includes('empty') || name.includes('dryfire') || name.includes('corpseexplodead')) {
-    return 'empty';
-  }
-
-  // 2c. Boss Roars, Intros & Dramatic Stings
+  // 2b. Boss Roars, Intros, Stomps & Dramatic Stings
   if (
     name.includes('bossintro') ||
     name.includes('banditintro') ||
     name.includes('dogintro') ||
     name.includes('dogtaunt') ||
+    name.includes('bigdogspin') ||
+    name.includes('bigbanditshootlaugh') ||
+    name.includes('bigbanditstartshoot') ||
+    name.includes('bigbanditstopshoot') ||
     name.includes('lilhunterappear') ||
     name.includes('nothingstart') ||
     name.includes('nothing2appear') ||
+    name.includes('nothingrise') ||
+    name.includes('nothingfootstep') ||
     name.includes('bossroar')
   ) {
     return 'boss_intro';
   }
 
-  // 2d. Enemy Alert / Warning Cues
-  if (name.includes('alert') || name.includes('warning') || name.includes('spot')) {
+  // 2c. Enemy Alert / Telegraph Warning Cues
+  if (
+    name.includes('alert') ||
+    name.includes('warning') ||
+    name.includes('spot') ||
+    name.includes('snipertarget') ||
+    name.includes('preshoot') ||
+    name.includes('beamwarn') ||
+    name.includes('lowa')
+  ) {
     return 'alert';
   }
 
-  // 3. Explosions & Blasts
+  // 3. Exploding enemy deaths (Explo Freak / Explo Guardian / Frog explode) -> explosion
   if (
-    name.includes('explo') ||
-    name.includes('blast') ||
-    name.includes('boom') ||
-    name.includes('barrel') ||
-    name.includes('detonate')
+    name.includes('explofreakdead') ||
+    name.includes('explofreakkillself') ||
+    name.includes('exploguardiandead') ||
+    name.includes('frogexplode')
   ) {
     return 'explosion';
   }
 
-  // 4. Portal & Vortex
-  if (
-    name.includes('portal') ||
-    name.includes('rift') ||
-    name.includes('vortex') ||
-    name.includes('warp')
-  ) {
-    return 'portal';
-  }
-
-  // 5. Pickups / Rads / Chests
-  if (
-    name.includes('rad') ||
-    name.includes('pickup') ||
-    name.includes('chest') ||
-    name.includes('ammo') ||
-    name.includes('hp') ||
-    name.includes('canister') ||
-    name.includes('gem')
-  ) {
-    return 'pickup';
-  }
-
-  // 6. Deaths
+  // 4. Deaths (checked BEFORE pickup so sndRadMaggotDie plays a death crunch, not a rad chime!)
   if (
     name.includes('dead') ||
     name.includes('die') ||
@@ -140,7 +156,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     return 'death';
   }
 
-  // 7. Hits & Hurts
+  // 5. Hits & Hurts (checked BEFORE explosion so sndExploFreakHurt / sndExploGuardianHurt play hit impacts!)
   if (
     name.includes('hurt') ||
     name.includes('hit') ||
@@ -151,8 +167,46 @@ export function classifySound(soundName: string): SynthSoundKind {
     return 'hit';
   }
 
-  // 8. Specific Gunfire Classes
-  // Melee & Deflect
+  // 6. Explosions & Blasts
+  if (
+    name.includes('explo') ||
+    name.includes('blast') ||
+    name.includes('boom') ||
+    name.includes('barrel') ||
+    name.includes('detonate') ||
+    name.includes('generatorbreak') ||
+    name.includes('nothinggenerators')
+  ) {
+    return 'explosion';
+  }
+
+  // 7. Portal, Vortex & Proto Statue Charge
+  if (
+    name.includes('portal') ||
+    name.includes('rift') ||
+    name.includes('vortex') ||
+    name.includes('warp') ||
+    name.includes('statuecharge')
+  ) {
+    return 'portal';
+  }
+
+  // 8. Pickups / Rads / Chests
+  if (
+    name.includes('rad') ||
+    name.includes('pickup') ||
+    name.includes('chest') ||
+    name.includes('ammo') ||
+    name.includes('hp') ||
+    name.includes('canister') ||
+    name.includes('gem') ||
+    name.includes('statuexp')
+  ) {
+    return 'pickup';
+  }
+
+  // 9. Specific Gunfire & Combat Classes
+  // Melee, Deflect, Crystal Ricochet & Crystal Juggernaut Slam
   if (
     name.includes('wrench') ||
     name.includes('sword') ||
@@ -164,12 +218,40 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('melee') ||
     name.includes('swing') ||
     name.includes('deflect') ||
-    name.includes('reflect')
+    name.includes('reflect') ||
+    name.includes('ricochet') ||
+    name.includes('crystaljuggernaut') ||
+    name.includes('guitar') ||
+    name.includes('assassinattack')
   ) {
     return 'melee';
   }
 
-  // Energy / Laser / Plasma / Lightning
+  // Shell / Shotgun / Flak (checked before flame so sndFireShotgun / sndDoubleFireShotgun keep shotgun boom!)
+  if (
+    name.includes('shotgun') ||
+    name.includes('flak') ||
+    name.includes('shell') ||
+    name.includes('slug') ||
+    name.includes('eraser')
+  ) {
+    return 'shell';
+  }
+
+  // Flame / Incinerator / Dragon / Fireballer / Salamander
+  if (
+    name.includes('flame') ||
+    name.includes('flamer') ||
+    name.includes('dragon') ||
+    name.includes('incinerator') ||
+    name.includes('flare') ||
+    name.includes('fireballer') ||
+    name.includes('salamander')
+  ) {
+    return 'flame';
+  }
+
+  // Energy / Laser / Plasma / Lightning / Shields / Telekinesis / Guardian / Throne Orbs
   if (
     name.includes('laser') ||
     name.includes('plasma') ||
@@ -177,18 +259,37 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('energy') ||
     name.includes('ion') ||
     name.includes('beam') ||
-    name.includes('spark')
+    name.includes('spark') ||
+    name.includes('crystalshield') ||
+    name.includes('crystaltb') ||
+    name.includes('shieldershield') ||
+    name.includes('eyesloop') ||
+    name.includes('horrorloop') ||
+    name.includes('wavegun') ||
+    name.includes('nothing2ball') ||
+    name.includes('nothingfire') ||
+    name.includes('nothingsmallball') ||
+    name.includes('guardianappear') ||
+    name.includes('guardiandisappear') ||
+    name.includes('guardianfire') ||
+    name.includes('necromancerrevive') ||
+    name.includes('scorpionfire')
   ) {
     return 'energy';
   }
 
-  // Explosive weaponry (Rocket / Grenade / Missile)
+  // Explosive weaponry (Rocket / Grenade / Missile / Launcher / Devastator / Blood Cannon)
   if (
     name.includes('rocket') ||
     name.includes('grenade') ||
+    name.includes('nader') ||
     name.includes('nuke') ||
     name.includes('missile') ||
-    name.includes('bazooka')
+    name.includes('bazooka') ||
+    name.includes('launcher') ||
+    name.includes('devastator') ||
+    name.includes('bloodcannon') ||
+    name.includes('thrownade')
   ) {
     return 'explosive';
   }
@@ -204,15 +305,37 @@ export function classifySound(soundName: string): SynthSoundKind {
     return 'bolt';
   }
 
-  // Shell / Shotgun / Flak
+  // Mutant Abilities, Movement Whooshes, Traps & Special Actions
   if (
-    name.includes('shotgun') ||
-    name.includes('flak') ||
-    name.includes('shell') ||
-    name.includes('slug') ||
-    name.includes('eraser')
+    name.includes('roll') ||
+    name.includes('fishtb') ||
+    name.includes('warrant') ||
+    name.includes('throw') ||
+    name.includes('chickenreturn') ||
+    name.includes('chickenlosehead') ||
+    name.includes('strongspiritlost') ||
+    name.includes('plantfire') ||
+    name.includes('plantsnare') ||
+    name.includes('spawnally') ||
+    name.includes('spawnsuperally') ||
+    name.includes('saplingspawn') ||
+    name.includes('roboteat') ||
+    name.includes('steroids') ||
+    name.includes('jump') ||
+    name.includes('lift') ||
+    name.includes('land') ||
+    name.includes('lilhunterfly') ||
+    name.includes('lilhunterlaunch') ||
+    name.includes('lilhuntersummon') ||
+    name.includes('vanopen') ||
+    name.includes('slurp') ||
+    name.includes('vomit') ||
+    name.includes('partyhorn') ||
+    name.includes('getup') ||
+    name.includes('slidestart') ||
+    name.includes('inspectorstart')
   ) {
-    return 'shell';
+    return 'ability';
   }
 
   // Bullet / Pistol / Machinegun / Revolver (default gunfire fallback)
@@ -220,6 +343,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('bullet') ||
     name.includes('pistol') ||
     name.includes('revolver') ||
+    name.includes('revoler') ||
     name.includes('rifle') ||
     name.includes('machinegun') ||
     name.includes('minigun') ||
@@ -1174,21 +1298,250 @@ export function playSynthSound(
         break;
       }
 
+      case 'flame': {
+        // Searing wasteland flamethrower / incendiary whoosh + crackling ember hiss
+        const roar = ctx.createBufferSource();
+        roar.buffer = getNoiseBuffer(ctx);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(920 * pitchRate, now);
+        bp.frequency.exponentialRampToValueAtTime(Math.max(180, 320 * pitchRate), now + 0.22);
+        bp.Q.setValueAtTime(0.85, now);
+
+        gainNode.gain.setValueAtTime(0.01, now);
+        gainNode.gain.linearRampToValueAtTime(0.46 * volume, now + 0.025);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+        roar.connect(bp);
+        bp.connect(gainNode);
+
+        // Bright ember crackle layer
+        const crackle = ctx.createBufferSource();
+        crackle.buffer = getNoiseBuffer(ctx);
+        const hp = ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.setValueAtTime(2800 * pitchRate, now);
+        const cGain = ctx.createGain();
+        cGain.gain.setValueAtTime(0.24 * volume, now);
+        cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+        crackle.connect(hp);
+        hp.connect(cGain);
+        cGain.connect(voiceOut);
+
+        activeNodes.push(roar, bp, crackle, hp, cGain);
+        roar.start(now, Math.random() * 0.4);
+        crackle.start(now, Math.random() * 0.5);
+        roar.stop(now + 0.25);
+        crackle.stop(now + 0.16);
+        break;
+      }
+
+      case 'ability': {
+        const isEat = rawLower.includes('roboteat') || rawLower.includes('slurp');
+        const isSpawn = rawLower.includes('spawn') || rawLower.includes('snare') || rawLower.includes('plant');
+        const isThrowOrRoll =
+          rawLower.includes('roll') ||
+          rawLower.includes('throw') ||
+          rawLower.includes('jump') ||
+          rawLower.includes('lift') ||
+          rawLower.includes('fly') ||
+          rawLower.includes('launch');
+
+        if (isEat) {
+          // Crunchy metallic chomp-chomp for Robot Eat Gun
+          const crunch = ctx.createBufferSource();
+          crunch.buffer = getNoiseBuffer(ctx);
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(1400 * pitchRate, now);
+          bp.frequency.exponentialRampToValueAtTime(420 * pitchRate, now + 0.12);
+          bp.Q.setValueAtTime(2.0, now);
+          gainNode.gain.setValueAtTime(0.42 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+          crunch.connect(bp);
+          bp.connect(gainNode);
+
+          const chomp = ctx.createOscillator();
+          chomp.type = 'sawtooth';
+          chomp.frequency.setValueAtTime(260 * pitchRate, now);
+          chomp.frequency.exponentialRampToValueAtTime(120 * pitchRate, now + 0.11);
+          const cg = ctx.createGain();
+          cg.gain.setValueAtTime(0.28 * volume, now);
+          cg.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+          chomp.connect(cg);
+          cg.connect(voiceOut);
+
+          activeNodes.push(crunch, bp, chomp, cg);
+          crunch.start(now, Math.random() * 0.4);
+          chomp.start(now);
+          crunch.stop(now + 0.15);
+          chomp.stop(now + 0.13);
+        } else if (isSpawn) {
+          // Organic bloom / ally rally pop
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(280 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(640 * pitchRate, now + 0.08);
+          osc.frequency.exponentialRampToValueAtTime(480 * pitchRate, now + 0.15);
+          gainNode.gain.setValueAtTime(0.36 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.17);
+        } else if (isThrowOrRoll) {
+          // Crisp kinetic air swoosh + subtle cloth/feather thump
+          const whoosh = ctx.createBufferSource();
+          whoosh.buffer = getNoiseBuffer(ctx);
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(700 * pitchRate, now);
+          bp.frequency.exponentialRampToValueAtTime(2200 * pitchRate, now + 0.065);
+          bp.frequency.exponentialRampToValueAtTime(480 * pitchRate, now + 0.16);
+          bp.Q.setValueAtTime(1.6, now);
+          gainNode.gain.setValueAtTime(0.38 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
+          whoosh.connect(bp);
+          bp.connect(gainNode);
+
+          const thump = ctx.createOscillator();
+          thump.type = 'sine';
+          thump.frequency.setValueAtTime(160 * pitchRate, now);
+          thump.frequency.exponentialRampToValueAtTime(64, now + 0.09);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.28 * volume, now);
+          tg.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+          thump.connect(tg);
+          tg.connect(voiceOut);
+
+          activeNodes.push(whoosh, bp, thump, tg);
+          whoosh.start(now, Math.random() * 0.4);
+          thump.start(now);
+          whoosh.stop(now + 0.18);
+          thump.stop(now + 0.11);
+        } else {
+          // Compact mechanical/organic ability trigger
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(420 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(190 * pitchRate, now + 0.11);
+          gainNode.gain.setValueAtTime(0.34 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.13);
+        }
+        break;
+      }
+
+      case 'low_hp': {
+        // Deep subtle dual-pulse heartbeat warning ("lub-dub") that never drowns out gunfire
+        const makeBeat = (offset: number, f0: number, amp: number): void => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f0 * pitchRate, now + offset);
+          osc.frequency.exponentialRampToValueAtTime(34, now + offset + 0.11);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.001, now + offset);
+          g.gain.linearRampToValueAtTime(amp * volume, now + offset + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.13);
+          osc.connect(g);
+          g.connect(voiceOut);
+          activeNodes.push(osc, g);
+          osc.start(now + offset);
+          osc.stop(now + offset + 0.14);
+        };
+        makeBeat(0, 88, 0.36);
+        makeBeat(0.14, 72, 0.28);
+        break;
+      }
+
       case 'ui_click':
       default: {
-        // Crisp tactile arcade UI pip
-        const osc = ctx.createOscillator();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(1050 * pitchRate, now);
-        osc.frequency.exponentialRampToValueAtTime(Math.max(180, 420 * pitchRate), now + 0.032);
+        const isHover = rawLower.includes('hover');
+        const isSwap = rawLower.includes('swap');
+        const isMutantConfirm = rawLower.includes('cnfm') || rawLower.includes('slct');
 
-        gainNode.gain.setValueAtTime(0.28 * volume, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
+        if (isHover) {
+          // Feather-light crisp UI cursor pip (distinct from click & never sounds like gunfire)
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(1320 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(980 * pitchRate, now + 0.02);
+          gainNode.gain.setValueAtTime(0.14 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.026);
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.032);
+        } else if (isSwap) {
+          // Tactile metallic weapon rack / slide click on weapon swap
+          const n = ctx.createBufferSource();
+          n.buffer = getNoiseBuffer(ctx);
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(2200 * pitchRate, now);
+          bp.frequency.exponentialRampToValueAtTime(3400 * pitchRate, now + 0.04);
+          bp.Q.setValueAtTime(3.2, now);
+          gainNode.gain.setValueAtTime(0.32 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
+          n.connect(bp);
+          bp.connect(gainNode);
 
-        osc.connect(gainNode);
-        activeNodes.push(osc);
-        osc.start(now);
-        osc.stop(now + 0.05);
+          const latch = ctx.createOscillator();
+          latch.type = 'triangle';
+          latch.frequency.setValueAtTime(640 * pitchRate, now + 0.018);
+          latch.frequency.exponentialRampToValueAtTime(920 * pitchRate, now + 0.048);
+          const lg = ctx.createGain();
+          lg.gain.setValueAtTime(0.24 * volume, now + 0.018);
+          lg.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
+          latch.connect(lg);
+          lg.connect(voiceOut);
+
+          activeNodes.push(n, bp, latch, lg);
+          n.start(now, Math.random() * 0.4);
+          latch.start(now + 0.018);
+          n.stop(now + 0.06);
+          latch.stop(now + 0.062);
+        } else if (isMutantConfirm) {
+          // Character confirm / select warm two-note wasteland chirp
+          const o1 = ctx.createOscillator();
+          const o2 = ctx.createOscillator();
+          o1.type = 'triangle';
+          o2.type = 'square';
+          const isSelect = rawLower.includes('slct');
+          const baseF = isSelect ? 440 : 520;
+          o1.frequency.setValueAtTime(baseF * pitchRate, now);
+          o1.frequency.setValueAtTime(baseF * 1.25 * pitchRate, now + 0.045);
+          o2.frequency.setValueAtTime(baseF * 0.5 * pitchRate, now);
+          const lp = ctx.createBiquadFilter();
+          lp.type = 'lowpass';
+          lp.frequency.setValueAtTime(1800, now);
+          gainNode.gain.setValueAtTime((isSelect ? 0.22 : 0.3) * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + (isSelect ? 0.09 : 0.14));
+          o1.connect(lp);
+          o2.connect(lp);
+          lp.connect(gainNode);
+          activeNodes.push(o1, o2, lp);
+          o1.start(now);
+          o2.start(now);
+          o1.stop(now + 0.15);
+          o2.stop(now + 0.15);
+        } else {
+          // Crisp tactile arcade UI click
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(1050 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(Math.max(180, 420 * pitchRate), now + 0.032);
+
+          gainNode.gain.setValueAtTime(0.28 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
+
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.05);
+        }
         break;
       }
     }

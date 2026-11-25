@@ -64,6 +64,7 @@ declare global {
 
 const CORE_PRELOAD_SFX = [
   'sndClick',
+  'sndClickBack',
   'sndHover',
   'sndPistol',
   'sndShotgun',
@@ -73,13 +74,21 @@ const CORE_PRELOAD_SFX = [
   'sndExplosion',
   'sndHitFlesh',
   'sndHitWall',
+  'sndEmpty',
+  'sndMeleeFlip',
+  'sndSwapPistol',
   'sndPickupDisappear',
   'sndRadPickup',
   'sndAmmoPickup',
-  'sndHealthPickup',
+  'sndHPPickup',
+  'sndHPPickupBig',
   'sndWeaponPickup',
   'sndPortalOpen',
+  'sndPortalClose',
+  'sndBossIntroIn',
+  'sndMutAppear',
   'sndLevelUp',
+  'sndLevelUltra',
   'sndMutant1Hurt',
   'sndBanditHit',
   'sndBanditDie',
@@ -138,6 +147,9 @@ export class GameApp {
 
   // Last routed music context signature to avoid redundant routeContext churn
   private lastMusicSignature = '';
+  private lastPlayerHp = 0;
+  private lastLowHpWarnSec = -10;
+  private lastBossMusicState = '';
 
   // Custom Pack / Built-In Krunked Art Pack switcher state
   private hasCachedLocal = false;
@@ -154,6 +166,7 @@ export class GameApp {
 
   // Bound event listeners
   private boundResize = () => this.handleResize();
+  private boundVisibilityChange = () => this.handleVisibilityChange();
   private boundUnlock = () => this.tryUnlockAudio();
   private boundCanvasClick = (e: MouseEvent) => this.handleCanvasSyncClick(e);
   private boundWindowError = (e: ErrorEvent) => {
@@ -221,6 +234,10 @@ export class GameApp {
       window.addEventListener('resize', this.boundResize);
       window.addEventListener('orientationchange', this.boundResize);
       window.visualViewport?.addEventListener('resize', this.boundResize);
+      if (typeof document !== 'undefined') {
+        document.addEventListener('fullscreenchange', this.boundResize);
+        document.addEventListener('visibilitychange', this.boundVisibilityChange);
+      }
       window.addEventListener('pointerdown', this.boundUnlock);
       window.addEventListener('touchstart', this.boundUnlock, { passive: true });
       window.addEventListener('touchend', this.boundUnlock, { passive: true });
@@ -253,8 +270,11 @@ export class GameApp {
     this.fileInputEl = null;
     this.bundle?.dispose?.();
     this.devOverlay?.destroy();
-    this.audio?.stopMusic(0);
-    this.audio?.stopAmbience(0);
+    this.audio?.dispose();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('fullscreenchange', this.boundResize);
+      document.removeEventListener('visibilitychange', this.boundVisibilityChange);
+    }
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.boundResize);
       window.removeEventListener('orientationchange', this.boundResize);
@@ -262,6 +282,25 @@ export class GameApp {
       this.removeAudioUnlockListeners();
       window.removeEventListener('error', this.boundWindowError);
       window.removeEventListener('unhandledrejection', this.boundRejection);
+    }
+  }
+
+  private handleVisibilityChange(): void {
+    if (typeof document === 'undefined') return;
+    if (document.hidden) {
+      this.input?.resetHeldState();
+      if (this.screen === 'playing') {
+        this.screen = 'paused';
+        this.input?.setGameplayActive(false);
+        this.audio?.setPaused(true);
+        this.simAccumulator = 0;
+        this.presentationDt = 0;
+        this.syncMusicRouting();
+      }
+      this.audio?.setBackgroundSuspended(true);
+    } else {
+      this.audio?.setBackgroundSuspended(false);
+      this.lastFrameMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
     }
   }
 
@@ -280,8 +319,22 @@ export class GameApp {
     if (typeof window === 'undefined') return;
     const { width: targetW, height: targetH } = this.renderer.getLogicalSize();
     const vv = window.visualViewport;
-    const availW = Math.max(1, Math.floor(vv ? vv.width : window.innerWidth));
-    const availH = Math.max(1, Math.floor(vv ? vv.height : window.innerHeight));
+    let availW = Math.max(1, Math.floor(vv ? vv.width : window.innerWidth));
+    let availH = Math.max(1, Math.floor(vv ? vv.height : window.innerHeight));
+
+    // Respect parent container's inner content box (e.g. mobile safe-area padding)
+    // so CSS max-width/max-height never squishes one axis and distorts aspect/aim!
+    const parent = this.canvas.parentElement;
+    if (parent && typeof window.getComputedStyle === 'function') {
+      const cs = window.getComputedStyle(parent);
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      const innerW = Math.floor(parent.clientWidth - padX);
+      const innerH = Math.floor(parent.clientHeight - padY);
+      if (innerW > 0) availW = Math.min(availW, innerW);
+      if (innerH > 0) availH = Math.min(availH, innerH);
+    }
+
     const curW = parseFloat(this.canvas.style.width) || targetW;
     const curH = parseFloat(this.canvas.style.height) || targetH;
     if (curW > availW || curH > availH) {
@@ -393,33 +446,56 @@ export class GameApp {
     let screenTransitioned = false;
 
     this.input.setGameplayActive(this.screen === 'playing');
+    // Hide OS pointer during active combat for both KBM & Gamepad (game renders crisp sprCrosshair)
     this.canvas.classList.toggle(
       'hide-cursor',
-      this.screen === 'playing' && this.input.getInputMode() === 'gamepad',
+      this.screen === 'playing' && this.input.getInputMode() !== 'touch',
     );
 
     if (this.screen === 'playing' && this.simState) {
       this.simAccumulator += dt;
 
+      // Capture high-Hz (60/120 FPS) gamepad button taps even on frames without a 30 Hz sim step
+      if (this.simAccumulator < SIM_DT) {
+        this.input.pollGamepad();
+      }
+
       let stepsThisFrame = 0;
       const maxCatchupSteps = 4;
 
       while (this.simAccumulator >= SIM_DT && stepsThisFrame < maxCatchupSteps) {
-        const inputFrame = this.input.consumeSimInput(
-          this.renderer.getCamera(),
-          this.simState.player.x,
-          this.simState.player.y,
-          { enemies: this.simState.enemies, map: this.simState.map },
-        );
+        let inputFrame: InputFrame;
+        if (this.simState.hitstopTicks > 0) {
+          // During hitstop freeze, preserve buffered fire/active/swap/pickup presses while honoring immediate pause
+          if (this.input.consumePauseOnly()) {
+            this.screen = 'paused';
+            screenTransitioned = true;
+            this.input.setGameplayActive(false);
+            this.audio.setPaused(true);
+            this.simAccumulator = 0;
+            this.input.clearMenuLatches();
+            this.syncMusicRouting();
+            break;
+          }
+          inputFrame = { ...DEFAULT_IDLE_INPUT };
+        } else {
+          inputFrame = this.input.consumeSimInput(
+            this.renderer.getCamera(),
+            this.simState.player.x,
+            this.simState.player.y,
+            { enemies: this.simState.enemies, map: this.simState.map },
+          );
 
-        if (inputFrame.pausePressed) {
-          this.screen = 'paused';
-          screenTransitioned = true;
-          this.input.setGameplayActive(false);
-          this.audio.setPaused(true);
-          this.simAccumulator = 0;
-          this.input.consumeMenuInput(); // clear simultaneous menuBack latch
-          break;
+          if (inputFrame.pausePressed) {
+            this.screen = 'paused';
+            screenTransitioned = true;
+            this.input.setGameplayActive(false);
+            this.audio.setPaused(true);
+            this.simAccumulator = 0;
+            this.input.clearMenuLatches();
+            this.syncMusicRouting();
+            break;
+          }
         }
 
         this.runSingleSimTick(inputFrame);
@@ -430,9 +506,15 @@ export class GameApp {
         if (this.screen !== 'playing') {
           screenTransitioned = true;
           this.input.setGameplayActive(false);
+          this.input.clearMenuLatches();
           this.simAccumulator = 0;
           break;
         }
+      }
+
+      // Clamp excess accumulator after max catch-up to prevent spiral-of-death lag spikes
+      if (stepsThisFrame >= maxCatchupSteps && this.simAccumulator > SIM_DT) {
+        this.simAccumulator = SIM_DT;
       }
 
       // Measure actual simHz over 500 ms windows while actively playing
@@ -453,8 +535,16 @@ export class GameApp {
           targetFps === 30 ? 1 : Math.max(0, Math.min(1, this.simAccumulator / SIM_DT));
 
         this.input.updatePresentation(renderDt);
+        const p = this.simState.player;
+        const interpPlayerX = p.prevX + (p.x - p.prevX) * interpAlpha;
+        const interpPlayerY = p.prevY + (p.y - p.prevY) * interpAlpha;
+        const aimWorld = this.input.updatePresentationAim(
+          this.renderer.getCamera(),
+          interpPlayerX,
+          interpPlayerY,
+          { enemies: this.simState.enemies, map: this.simState.map },
+        );
         const pointer = this.input.getPointerLogical();
-        const aimWorld = this.renderer.getCamera().screenToWorld(pointer.x, pointer.y);
         this.renderer.updatePresentation(
           this.simState,
           aimWorld.x,
@@ -677,10 +767,100 @@ export class GameApp {
     return false;
   }
 
+  /**
+   * Resets entity interpolation snapshots (`prevX/prevY`), camera tracking, and fixed-step
+   * accumulator on area warps / portal loads / restarts so frame 0 never streaks across the map.
+   */
+  private resetInterpolationSnapshot(): void {
+    this.simAccumulator = 0;
+    this.presentationDt = 0;
+    if (!this.simState) return;
+    const st = this.simState;
+    st.player.prevX = st.player.x;
+    st.player.prevY = st.player.y;
+    for (let i = 0; i < st.enemies.length; i++) {
+      const e = st.enemies[i]!;
+      e.prevX = e.x;
+      e.prevY = e.y;
+    }
+    for (let i = 0; i < st.projectiles.length; i++) {
+      const pr = st.projectiles[i]!;
+      pr.prevX = pr.x;
+      pr.prevY = pr.y;
+    }
+    this.renderer.invalidateFloor();
+    this.renderer.getCamera().snapTo(st.player.x, st.player.y);
+  }
+
+  private persistCarriedGoldenWeapon(state: SimState): void {
+    const p = state.player;
+    const goldenSlot = [p.weapons[0], p.weapons[1]].find((w) => {
+      if (!w) return false;
+      return Boolean(this.dataProvider.getWeapon(w.weaponId)?.golden);
+    });
+    if (!goldenSlot) return;
+    const mp = this.saveManager.getData().mutants[p.mutant];
+    if (mp && mp.goldenWeapon !== goldenSlot.weaponId) {
+      mp.goldenWeapon = goldenSlot.weaponId;
+      this.saveManager.save();
+    }
+  }
+
+  private getBossMusicStatus(state: SimState | null): {
+    activeBossId: BossId | null;
+    bossDefeated: boolean;
+  } {
+    const boss = state?.boss;
+    if (!boss || !state) {
+      return { activeBossId: null, bossDefeated: false };
+    }
+    if (boss.defeated) {
+      return { activeBossId: null, bossDefeated: true };
+    }
+    // Sleeping bosses (e.g. 3-3 Big Dog & 7-3 The Throne before wake) keep ambient/area music until awake
+    const ent = state.enemies.find((e) => e.id === boss.entityId);
+    if (ent && ent.aiState === 'sleep') {
+      return { activeBossId: null, bossDefeated: false };
+    }
+    return { activeBossId: boss.bossId, bossDefeated: false };
+  }
+
+  private checkLowHpAudioCue(state: SimState): void {
+    const p = state.player;
+    if (!p.alive) {
+      this.lastPlayerHp = 0;
+      return;
+    }
+    const prevHp = this.lastPlayerHp;
+    this.lastPlayerHp = p.hp;
+    const criticalThreshold = p.maxHp <= 2 ? 1 : Math.min(2, Math.max(1, Math.floor(p.maxHp * 0.25)));
+    const droppedIntoCritical = prevHp > 0 && p.hp < prevHp && p.hp <= criticalThreshold;
+    if (droppedIntoCritical && this.timeSec - this.lastLowHpWarnSec >= 2.2) {
+      this.lastLowHpWarnSec = this.timeSec;
+      const mutantDef = this.dataProvider.getMutant(p.mutant);
+      const lowHpKey = `sndMutant${mutantDef.raceIndex}LowH`;
+      this.audio.playSfx(lowHpKey, p.x, p.y, {
+        listenerX: p.x,
+        listenerY: p.y,
+        pitchJitter: 0.03,
+        volume: 0.78,
+      });
+    }
+  }
+
   private runSingleSimTick(inputFrame: InputFrame): void {
     if (!this.simState) return;
     stepSimulation(this.simState, inputFrame);
     this.flushSimEvents();
+    this.checkLowHpAudioCue(this.simState);
+
+    const bossStatus = this.getBossMusicStatus(this.simState);
+    const bossSig = `${bossStatus.activeBossId ?? ''}:${bossStatus.bossDefeated ? 1 : 0}`;
+    if (bossSig !== this.lastBossMusicState) {
+      this.lastBossMusicState = bossSig;
+      this.syncMusicRouting();
+    }
+
     this.syncScreenWithSimPhase();
   }
 
@@ -691,14 +871,35 @@ export class GameApp {
 
     this.renderer.consumeEvents(events, this.simState);
     this.warmSteamAudioForEvents(events);
-    this.audio.consumeEvents(events, this.simState.player.x, this.simState.player.y);
+
+    const cam = this.renderer.getCamera();
+    const listenX = Number.isFinite(cam.x) && (cam.x !== 0 || cam.y !== 0) ? cam.x : this.simState.player.x;
+    const listenY = Number.isFinite(cam.y) && (cam.x !== 0 || cam.y !== 0) ? cam.y : this.simState.player.y;
+    this.audio.consumeEvents(events, listenX, listenY);
     this.triggerRumbleForEvents(events);
 
+    let areaChanged = false;
+    let shouldSyncMusic = false;
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
-      if (ev.type === 'area_change' || ev.type === 'boss_intro' || ev.type === 'player_died') {
-        this.syncMusicRouting();
+      if (ev.type === 'area_change') {
+        areaChanged = true;
+        shouldSyncMusic = true;
+      } else if (ev.type === 'boss_intro' || ev.type === 'player_died') {
+        shouldSyncMusic = true;
       }
+    }
+
+    if (areaChanged) {
+      this.resetInterpolationSnapshot();
+      if (this.simState.tick > 0) {
+        this.persistCarriedGoldenWeapon(this.simState);
+      }
+      this.preloadAreaSteamAudio(this.simState);
+    }
+
+    if (shouldSyncMusic) {
+      this.syncMusicRouting();
     }
   }
 
@@ -741,37 +942,52 @@ export class GameApp {
     const sounds = this.bundle.manifest.sounds;
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
-      if (ev.type === 'sfx' && sounds[ev.sound]) {
-        void this.audio.loadSound(ev.sound);
-      } else if (ev.type === 'music' && ev.track) {
-        this.preloadAndPlayTrack(ev.track, 'music');
-        if (ev.ambience) {
-          this.preloadAndPlayTrack(ev.ambience, 'ambience');
+      if (ev.type === 'sfx') {
+        const resolved = this.audio.resolveManifestSoundKey(ev.sound);
+        if (sounds[resolved]?.path) {
+          void this.audio.loadSound(ev.sound);
         }
       }
     }
   }
 
-  private preloadAndPlayTrack(trackKey: string, kind: 'music' | 'ambience'): void {
+  /**
+   * Proactively preloads active mutant, equipped weapon, and current area enemy SFX
+   * in Steam mode so first-shot/first-kill audio plays decoded WAVs instead of cold synth.
+   */
+  private preloadAreaSteamAudio(state: SimState): void {
     if (this.bundle.sourceMode !== 'steam') return;
-    const relPath =
-      kind === 'music'
-        ? this.bundle.manifest.music[trackKey] ?? this.bundle.manifest.sounds[trackKey]?.path
-        : this.bundle.manifest.ambience[trackKey] ?? this.bundle.manifest.sounds[trackKey]?.path;
-    if (!relPath) return;
+    const keys = new Set<string>();
+    const mutantDef = this.dataProvider.getMutant(state.player.mutant);
+    if (mutantDef) {
+      keys.add(mutantDef.sounds.hurt);
+      keys.add(mutantDef.sounds.dead);
+      keys.add(mutantDef.sounds.confirm);
+      if (mutantDef.sounds.active) keys.add(mutantDef.sounds.active);
+      keys.add(`sndMutant${mutantDef.raceIndex}LowH`);
+    }
+    for (const slot of state.player.weapons) {
+      if (!slot) continue;
+      const wep = this.dataProvider.getWeapon(slot.weaponId);
+      if (wep?.fireSound) keys.add(wep.fireSound);
+    }
+    for (let i = 0; i < state.enemies.length; i++) {
+      const e = state.enemies[i]!;
+      const def = this.dataProvider.getEnemy(e.defId);
+      if (!def) continue;
+      if (def.sounds.hurt) keys.add(def.sounds.hurt);
+      if (def.sounds.dead) keys.add(def.sounds.dead);
+      if (def.sounds.fire) keys.add(def.sounds.fire);
+    }
 
-    // Ensure manifest.sounds has an alias or fetch via loadSound using direct key path
-    void this.audio.loadSound(trackKey).then((buf) => {
-      if (!buf) return;
-      const stats = this.audio.getStats();
-      if (kind === 'music' && stats.currentMusic === trackKey) {
-        this.audio.stopMusic(0.05);
-        this.audio.playMusic(trackKey, 0.4);
-      } else if (kind === 'ambience' && stats.currentAmbience === trackKey) {
-        this.audio.stopAmbience(0.05);
-        this.audio.playAmbience(trackKey, 0.4);
-      }
+    const sounds = this.bundle.manifest.sounds;
+    const valid = Array.from(keys).filter((k) => {
+      const resolved = this.audio.resolveManifestSoundKey(k);
+      return Boolean(sounds[resolved]?.path);
     });
+    if (valid.length > 0) {
+      void this.audio.preloadSounds(valid);
+    }
   }
 
   private syncScreenWithSimPhase(): void {
@@ -780,18 +996,22 @@ export class GameApp {
       case 'mutation_select':
         if (this.screen !== 'mutation_select') {
           this.screen = 'mutation_select';
-          this.input.clearSimLatches();
+          this.input.setGameplayActive(false);
+          this.input.clearAllLatches();
         }
         break;
       case 'ultra_select':
         if (this.screen !== 'ultra_select') {
           this.screen = 'ultra_select';
-          this.input.clearSimLatches();
+          this.input.setGameplayActive(false);
+          this.input.clearAllLatches();
         }
         break;
       case 'game_over':
         if (this.screen !== 'game_over') {
           this.screen = 'game_over';
+          this.input.setGameplayActive(false);
+          this.input.clearAllLatches();
           this.recordRunEndOnce(false);
           this.syncMusicRouting();
         }
@@ -799,6 +1019,8 @@ export class GameApp {
       case 'victory_throne':
         if (this.screen !== 'victory') {
           this.screen = 'victory';
+          this.input.setGameplayActive(false);
+          this.input.clearAllLatches();
           this.recordRunEndOnce(true);
           this.syncMusicRouting();
         }
@@ -829,26 +1051,41 @@ export class GameApp {
   }
 
   private syncMusicRouting(): void {
-    const bossId =
-      this.simState?.boss && !this.simState.boss.defeated ? this.simState.boss.bossId : null;
-    const sig = `${this.screen}:${this.simState?.areaCode ?? ''}:${this.simState?.biome ?? ''}:${this.simState?.loop ?? 0}:${bossId ?? ''}`;
+    const isMenuOptions =
+      this.screen === 'options' &&
+      (this.returnScreenFromOptions === 'title' || this.returnScreenFromOptions === 'campfire');
+    const isPausedOrPauseOptions =
+      this.screen === 'paused' ||
+      (this.screen === 'options' && this.returnScreenFromOptions === 'paused');
+
+    const effectiveScreen: GameScreen = isMenuOptions ? this.returnScreenFromOptions : this.screen;
+    const inRunMusicContext =
+      effectiveScreen !== 'title' &&
+      effectiveScreen !== 'campfire' &&
+      effectiveScreen !== 'game_over' &&
+      effectiveScreen !== 'victory';
+
+    const bossStatus = inRunMusicContext
+      ? this.getBossMusicStatus(this.simState)
+      : { activeBossId: null, bossDefeated: false };
+
+    const areaCode = inRunMusicContext ? this.simState?.areaCode : undefined;
+    const biome = inRunMusicContext ? this.simState?.biome : undefined;
+    const loop = inRunMusicContext ? this.simState?.loop : 0;
+
+    const sig = `${effectiveScreen}:${areaCode ?? ''}:${biome ?? ''}:${loop ?? 0}:${bossStatus.activeBossId ?? ''}:${bossStatus.bossDefeated ? 1 : 0}:${isPausedOrPauseOptions ? 1 : 0}`;
     if (sig === this.lastMusicSignature) return;
     this.lastMusicSignature = sig;
 
     this.audio.routeContext({
-      screen: this.screen,
-      areaCode: this.simState?.areaCode,
-      biome: this.simState?.biome,
-      loop: this.simState?.loop,
-      bossId,
-      paused: this.screen === 'paused',
+      screen: effectiveScreen,
+      areaCode,
+      biome,
+      loop,
+      bossId: bossStatus.activeBossId,
+      bossDefeated: bossStatus.bossDefeated,
+      paused: isPausedOrPauseOptions,
     });
-
-    if (this.bundle.sourceMode === 'steam') {
-      const st = this.audio.getStats();
-      if (st.currentMusic) this.preloadAndPlayTrack(st.currentMusic, 'music');
-      if (st.currentAmbience) this.preloadAndPlayTrack(st.currentAmbience, 'ambience');
-    }
   }
 
   private startNewRun(opts: {
@@ -857,6 +1094,7 @@ export class GameApp {
     crown: CrownId;
     useGoldenWeapon: boolean;
     seed?: number;
+    playConfirmSfx?: boolean;
   }): void {
     const save = this.saveManager.getData();
     const mp = save.mutants[opts.mutant];
@@ -868,6 +1106,8 @@ export class GameApp {
 
     this.lastRunSeed = seed;
     this.runEndRecorded = false;
+    this.lastBossMusicState = '';
+    this.lastLowHpWarnSec = -10;
 
     this.simState = createRunState({
       mutant: opts.mutant,
@@ -876,16 +1116,26 @@ export class GameApp {
       skin: opts.skin,
       goldenWeapon,
     });
+    this.lastPlayerHp = this.simState.player.hp;
 
     this.saveManager.recordRunStart(opts.mutant);
-    this.renderer.invalidateFloor();
-    this.renderer.getCamera().snapTo(this.simState.player.x, this.simState.player.y);
+    this.resetInterpolationSnapshot();
+    this.preloadAreaSteamAudio(this.simState);
     this.flushSimEvents();
 
+    if (opts.playConfirmSfx) {
+      const confirmSnd = this.dataProvider.getMutant(opts.mutant)?.sounds.confirm;
+      if (confirmSnd) {
+        this.audio.playSfx(confirmSnd, 0, 0, { listenerX: 0, listenerY: 0, pitchJitter: 0.03 });
+      }
+    }
+
+    // Respect frame-0 phase transitions (e.g. Crown of Destiny opening mutation_select immediately)
     this.screen = 'playing';
+    this.syncScreenWithSimPhase();
+    this.input.setGameplayActive(this.screen === 'playing');
+    this.input.clearAllLatches();
     this.audio.setPaused(false);
-    this.input.clearSimLatches();
-    this.simAccumulator = 0;
     this.renderAccumulator = 0;
     this.hasRenderedFirstFrame = false;
     this.syncMusicRouting();
@@ -896,11 +1146,22 @@ export class GameApp {
       case 'open_screen': {
         if (action.screen === 'options') {
           this.returnScreenFromOptions = this.screen;
+        } else if (
+          (action.screen === 'campfire' || action.screen === 'title') &&
+          this.screen === 'paused' &&
+          this.simState &&
+          !this.runEndRecorded &&
+          (this.simState.stats.kills > 0 || this.simState.tick > 30)
+        ) {
+          this.recordRunEndOnce(false);
         }
         this.rebindingField = null;
         this.input.cancelKeyCapture();
         this.screen = action.screen;
-        this.audio.setPaused(this.screen === 'paused');
+        const pauseAudio =
+          this.screen === 'paused' ||
+          (this.screen === 'options' && this.returnScreenFromOptions === 'paused');
+        this.audio.setPaused(pauseAudio);
         this.syncMusicRouting();
         break;
       }
@@ -911,6 +1172,7 @@ export class GameApp {
           skin: action.skin,
           crown: action.crown,
           useGoldenWeapon: action.useGoldenWeapon,
+          playConfirmSfx: true,
         });
         break;
       }
@@ -918,14 +1180,25 @@ export class GameApp {
       case 'resume': {
         if (this.simState) {
           this.screen = 'playing';
+          this.simAccumulator = 0;
+          this.presentationDt = 0;
           this.audio.setPaused(false);
-          this.input.clearSimLatches();
+          this.input.setGameplayActive(true);
+          this.input.clearAllLatches();
           this.syncMusicRouting();
         }
         break;
       }
 
       case 'restart': {
+        if (
+          this.screen === 'paused' &&
+          this.simState &&
+          !this.runEndRecorded &&
+          (this.simState.stats.kills > 0 || this.simState.tick > 30)
+        ) {
+          this.recordRunEndOnce(false);
+        }
         const save = this.saveManager.getData();
         const mutant = this.simState?.player.mutant ?? save.selectedMutant;
         this.startNewRun({
@@ -933,27 +1206,55 @@ export class GameApp {
           skin: this.saveManager.getSelectedSkin(mutant),
           crown: save.selectedCrown,
           useGoldenWeapon: save.useGoldenWeapon,
+          playConfirmSfx: true,
         });
         break;
       }
 
       case 'select_mutant': {
         this.saveManager.setSelectedMutant(action.mutant);
+        const mutantDef = this.dataProvider.getMutant(action.mutant);
+        if (mutantDef) {
+          this.audio.playSfx(`sndMutant${mutantDef.raceIndex}Slct`, 0, 0, {
+            listenerX: 0,
+            listenerY: 0,
+            pitchJitter: 0.03,
+            volume: 0.85,
+          });
+        }
         break;
       }
 
       case 'toggle_bskin': {
-        this.saveManager.toggleSelectedSkin(action.mutant);
+        const nextSkin = this.saveManager.toggleSelectedSkin(action.mutant);
+        this.audio.playSfx(nextSkin === 'b' ? 'sndMenuBSkin' : 'sndMenuASkin', 0, 0, {
+          listenerX: 0,
+          listenerY: 0,
+          pitchJitter: 0.02,
+          volume: 0.85,
+        });
         break;
       }
 
       case 'cycle_crown': {
         this.saveManager.setSelectedCrown(action.crown);
+        this.audio.playSfx('sndMenuCrown', 0, 0, {
+          listenerX: 0,
+          listenerY: 0,
+          pitchJitter: 0.02,
+          volume: 0.85,
+        });
         break;
       }
 
       case 'toggle_golden': {
         this.saveManager.setUseGoldenWeapon(action.enabled);
+        this.audio.playSfx('sndMenuGoldwep', 0, 0, {
+          listenerX: 0,
+          listenerY: 0,
+          pitchJitter: 0.02,
+          volume: 0.85,
+        });
         break;
       }
 
@@ -966,13 +1267,15 @@ export class GameApp {
           if (this.simState.map === prevMap) {
             this.simState.rngState = rng.getState();
           } else {
-            this.renderer.invalidateFloor();
-            this.renderer.getCamera().snapTo(this.simState.player.x, this.simState.player.y);
+            this.resetInterpolationSnapshot();
           }
           this.flushSimEvents();
           if (this.simState.phase === 'playing') {
             this.screen = 'playing';
-            this.input.clearSimLatches();
+            this.simAccumulator = 0;
+            this.presentationDt = 0;
+            this.input.setGameplayActive(true);
+            this.input.clearAllLatches();
             this.syncMusicRouting();
           } else {
             this.syncScreenWithSimPhase();
@@ -1309,9 +1612,12 @@ export class GameApp {
         }
         if (!this.simState) return;
         warpToArea(this.simState, areaCode, loop ?? this.simState.loop);
-        this.renderer.invalidateFloor();
-        this.renderer.getCamera().snapTo(this.simState.player.x, this.simState.player.y);
+        this.lastBossMusicState = '';
+        this.lastPlayerHp = this.simState.player.hp;
+        this.resetInterpolationSnapshot();
         this.screen = 'playing';
+        this.input.setGameplayActive(true);
+        this.input.clearAllLatches();
         this.hasRenderedFirstFrame = false;
         this.flushSimEvents();
         this.syncMusicRouting();
@@ -1329,6 +1635,7 @@ export class GameApp {
       giveWeapon: (weaponId: string, slot?: 0 | 1): void => {
         if (!this.simState) return;
         givePlayerWeapon(this.simState, weaponId, slot);
+        this.preloadAreaSteamAudio(this.simState);
       },
 
       grantMutation: (mutationId: MutationId): void => {
@@ -1355,12 +1662,13 @@ export class GameApp {
         if (this.simState.map === prevMap) {
           this.simState.rngState = rng.getState();
         } else {
-          this.renderer.invalidateFloor();
-          this.renderer.getCamera().snapTo(this.simState.player.x, this.simState.player.y);
+          this.resetInterpolationSnapshot();
         }
         this.flushSimEvents();
         if (this.simState.phase === 'playing') {
           this.screen = 'playing';
+          this.input.setGameplayActive(true);
+          this.input.clearAllLatches();
           this.syncMusicRouting();
         } else {
           this.syncScreenWithSimPhase();
@@ -1411,6 +1719,8 @@ export class GameApp {
 
       setScreen: (screen: GameScreen): void => {
         this.screen = screen;
+        this.input.setGameplayActive(screen === 'playing');
+        this.input.clearAllLatches();
         this.hasRenderedFirstFrame = false;
         if (screen === 'game_over') {
           this.recordRunEndOnce(false);
