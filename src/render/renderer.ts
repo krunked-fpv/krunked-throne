@@ -236,68 +236,8 @@ function buildWallRenderMask(map: WorldMap): Uint8Array {
   let head = 0;
   let tail = 0;
 
-  // Seed border non-walkable tiles for outer-void BFS
-  for (let tx = 0; tx < w; tx++) {
-    const topIdx = tx;
-    if (!isWalkable(map.tiles[topIdx]!)) {
-      outer[topIdx] = 1;
-      queue[tail++] = topIdx;
-    }
-    const botIdx = (h - 1) * w + tx;
-    if (h > 1 && !isWalkable(map.tiles[botIdx]!)) {
-      outer[botIdx] = 1;
-      queue[tail++] = botIdx;
-    }
-  }
-  for (let ty = 1; ty < h - 1; ty++) {
-    const leftIdx = ty * w;
-    if (!isWalkable(map.tiles[leftIdx]!)) {
-      outer[leftIdx] = 1;
-      queue[tail++] = leftIdx;
-    }
-    const rightIdx = ty * w + (w - 1);
-    if (w > 1 && !isWalkable(map.tiles[rightIdx]!)) {
-      outer[rightIdx] = 1;
-      queue[tail++] = rightIdx;
-    }
-  }
-
-  // Flood-fill outer background through non-walkable tiles
-  while (head < tail) {
-    const idx = queue[head++]!;
-    const cx = idx % w;
-    const cy = (idx - cx) / w;
-    if (cx > 0) {
-      const n = idx - 1;
-      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
-        outer[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-    if (cx + 1 < w) {
-      const n = idx + 1;
-      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
-        outer[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-    if (cy > 0) {
-      const n = idx - w;
-      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
-        outer[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-    if (cy + 1 < h) {
-      const n = idx + w;
-      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
-        outer[n] = 1;
-        queue[tail++] = n;
-      }
-    }
-  }
-
-  // Pass 1: mark perimeter walls adjacent to floor
+  // Pass 1: mark perimeter walls adjacent to floor FIRST so outer-void BFS cannot leak through
+  // perimeter wall bridges into enclosed 1x2 pockets inside connected sewer/cave islands!
   for (let ty = 0; ty < h; ty++) {
     const row = ty * w;
     for (let tx = 0; tx < w; tx++) {
@@ -305,6 +245,67 @@ function buildWallRenderMask(map: WorldMap): Uint8Array {
       if (isWalkable(map.tiles[idx]!)) continue;
       if (hasNearbyFloor(map, tx, ty)) {
         mask[idx] = 1;
+      }
+    }
+  }
+
+  // Seed border non-walkable, non-perimeter tiles for outer-void BFS
+  for (let tx = 0; tx < w; tx++) {
+    const topIdx = tx;
+    if (!isWalkable(map.tiles[topIdx]!) && mask[topIdx] === 0) {
+      outer[topIdx] = 1;
+      queue[tail++] = topIdx;
+    }
+    const botIdx = (h - 1) * w + tx;
+    if (h > 1 && !isWalkable(map.tiles[botIdx]!) && mask[botIdx] === 0) {
+      outer[botIdx] = 1;
+      queue[tail++] = botIdx;
+    }
+  }
+  for (let ty = 1; ty < h - 1; ty++) {
+    const leftIdx = ty * w;
+    if (!isWalkable(map.tiles[leftIdx]!) && mask[leftIdx] === 0) {
+      outer[leftIdx] = 1;
+      queue[tail++] = leftIdx;
+    }
+    const rightIdx = ty * w + (w - 1);
+    if (w > 1 && !isWalkable(map.tiles[rightIdx]!) && mask[rightIdx] === 0) {
+      outer[rightIdx] = 1;
+      queue[tail++] = rightIdx;
+    }
+  }
+
+  // Flood-fill outer background strictly through non-perimeter non-walkable tiles (mask === 0)
+  while (head < tail) {
+    const idx = queue[head++]!;
+    const cx = idx % w;
+    const cy = (idx - cx) / w;
+    if (cx > 0) {
+      const n = idx - 1;
+      if (!outer[n] && !isWalkable(map.tiles[n]!) && mask[n] === 0) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (cx + 1 < w) {
+      const n = idx + 1;
+      if (!outer[n] && !isWalkable(map.tiles[n]!) && mask[n] === 0) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (cy > 0) {
+      const n = idx - w;
+      if (!outer[n] && !isWalkable(map.tiles[n]!) && mask[n] === 0) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (cy + 1 < h) {
+      const n = idx + w;
+      if (!outer[n] && !isWalkable(map.tiles[n]!) && mask[n] === 0) {
+        outer[n] = 1;
+        queue[tail++] = n;
       }
     }
   }
@@ -1913,10 +1914,10 @@ export class GameRenderer {
       }
     }
 
-    // Prop shadows
+    // Prop shadows (skip flat snares and invisible prompt-anchor props)
     for (let i = 0; i < state.props.length; i++) {
       const p = state.props[i]!;
-      if (p.kind === 'snare_trap') continue;
+      if (p.kind === 'snare_trap' || !p.sprite) continue;
       const rx = Math.max(5, Math.round(p.radius));
       const ry = Math.max(3, Math.round(p.radius * 0.46));
       ctx.beginPath();
@@ -2067,21 +2068,28 @@ export class GameRenderer {
     const dashPhase = Math.floor(this.renderTimeSec * 16) & 7;
 
     // Crisp blue-cyan portal strike impact preview rings along the drag vector
+    const ringR = Math.round(blastR * 0.72);
     for (let b = 0; b < blastCount; b++) {
       const bx = aim.x + cosA * (b * 24);
       const by = aim.y + sinA * (b * 24);
       ctx.fillStyle = 'rgba(42, 140, 255, 0.16)';
       drawPixelDisc(ctx, bx, by, Math.round(blastR * 0.65));
       ctx.fillStyle = b === 0 ? '#a8e6ff' : '#4fb4ff';
-      drawPixelRing(ctx, bx, by, Math.round(blastR * 0.72), 1, 5, dashPhase + b);
+      drawPixelRing(ctx, bx, by, ringR, 1, 5, dashPhase + b);
     }
 
-    // Centerline & Steam sprRogueStrike overlay if available
+    // Centerline & Steam sprRogueStrike scaled 1:1 to exact Portal Strike blast span (zero overhang behind Rogue!)
     const midX = aim.x + cosA * ((blastCount - 1) * 12);
     const midY = aim.y + sinA * ((blastCount - 1) * 12);
+    const strikeDef = this.sprites.getSprite(strikeSpr);
+    const actualSpan = (blastCount - 1) * 24 + ringR * 2;
+    const strikeScaleX = strikeDef && strikeDef.width > 0 ? Math.max(0.4, Math.min(1, actualSpan / strikeDef.width)) : 1;
+    const strikeScaleY = strikeDef && strikeDef.height > 0 ? Math.max(0.5, Math.min(1, (ringR * 2) / strikeDef.height)) : 1;
     const drewStrike = this.sprites.draw(ctx, strikeSpr, midX, midY, {
       frame: Math.floor(state.tick * 0.35),
       rotation: aim.angle,
+      scaleX: strikeScaleX,
+      scaleY: strikeScaleY,
       alpha: 0.9,
       pixelSnap,
     });
@@ -2304,6 +2312,16 @@ export class GameRenderer {
     map?: WorldMap,
   ): void {
     let sprName = prop.opened && prop.openSprite ? prop.openSprite : prop.sprite;
+    // Skip invisible prompt-only anchor props cleanly (e.g. open IDPD Van boardAnchor with sprite: '')
+    if (!sprName) return;
+    // Use regal Built-In Palace/Vault columns when sprPalacePillar exists (Steam pack keeps authentic sprPillar)
+    if (
+      (map?.biome === 'palace' || map?.biome === 'vault') &&
+      sprName === 'sprPillar' &&
+      this.sprites.hasSprite('sprPalacePillar')
+    ) {
+      sprName = 'sprPalacePillar';
+    }
     // Render authentic Cursed Chest sprite when prop.cursed is true
     if (prop.cursed) {
       if (prop.opened) {
@@ -2321,9 +2339,10 @@ export class GameRenderer {
       }
     }
     // Use dedicated Steam hurt/charge sprites when present on generators & proto statues
+    // (Guard Vault Crown Pedestal so shooting sprCrownPedIdle never flashes sprProtoStatueHurt!)
     if (prop.kind === 'throne_generator' && prop.hurtFlashTicks > 0 && this.sprites.hasSprite('sprBigGeneratorHurt')) {
       sprName = 'sprBigGeneratorHurt';
-    } else if (prop.kind === 'proto_statue') {
+    } else if (prop.kind === 'proto_statue' && prop.sprite !== 'sprCrownPedIdle') {
       if (prop.hurtFlashTicks > 0 && this.sprites.hasSprite('sprProtoStatueHurt')) {
         sprName = 'sprProtoStatueHurt';
       } else if ((prop.radsStored ?? 0) > 0 && this.sprites.hasSprite('sprProtoStatueCharge')) {
@@ -4094,15 +4113,16 @@ export class GameRenderer {
           state.portal.nextLoop > 0
             ? `L${state.portal.nextLoop} ${state.portal.targetArea}`
             : state.portal.targetArea;
-        // Strip duplicate trailing area code (e.g. "DESERT 1-2" -> "DESERT" so title is "1-2  DESERT")
+        // Avoid duplicate area codes AND keep Vault title crisp ("CROWN VAULT" instead of "VAULT  CROWN"!)
         const rawName = (targetArea?.name ?? 'WASTELAND').toUpperCase().trim();
         const codeUpper = state.portal.targetArea.toUpperCase();
-        const cleanName = rawName.endsWith(` ${codeUpper}`)
-          ? rawName.slice(0, -(codeUpper.length + 1)).trim()
-          : rawName === codeUpper
-            ? 'WASTELAND'
-            : rawName;
-        const areaTitle = `${targetCode}  ${cleanName}`;
+        let areaTitle: string;
+        if (rawName.endsWith(` ${codeUpper}`)) {
+          areaTitle = state.portal.nextLoop > 0 ? `L${state.portal.nextLoop} ${rawName}` : rawName;
+        } else {
+          const cleanName = rawName === codeUpper ? 'WASTELAND' : rawName;
+          areaTitle = `${targetCode}  ${cleanName}`;
+        }
         const tip = selectLoadingTip(targetBiome, state.portal.targetArea, state.portal.nextLoop, state.seed);
 
         ctx.globalAlpha = cardAlpha * 0.95;
