@@ -31,14 +31,21 @@ export function snapGlowRadius(radius: number): number {
 }
 
 /**
- * Converts a CSS hex/rgb/rgba color into a zero-alpha variant of the same RGB
- * to eliminate dark edge fringing during radial falloff in both source-over and lighter modes.
+ * Parses a CSS hex/rgb/rgba color into RGB + alpha components so radial stamps
+ * can build crisp exponential falloff stops without dark edge fringing or bloated washout.
  */
-function toZeroAlphaColor(color: string): string {
+function parseRgbaColor(color: string): { r: number; g: number; b: number; a: number } | null {
   const trimmed = color.trim();
-  const rgbaMatch = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(trimmed);
+  const rgbaMatch =
+    /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9]*\.?[0-9]+))?\s*\)$/i.exec(trimmed);
   if (rgbaMatch) {
-    return `rgba(${rgbaMatch[1]}, ${rgbaMatch[2]}, ${rgbaMatch[3]}, 0)`;
+    const r = Number(rgbaMatch[1]);
+    const g = Number(rgbaMatch[2]);
+    const b = Number(rgbaMatch[3]);
+    const a = rgbaMatch[4] !== undefined ? Number(rgbaMatch[4]) : 1;
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b) && Number.isFinite(a)) {
+      return { r, g, b, a: Math.max(0, Math.min(1, a)) };
+    }
   }
   if (trimmed.startsWith('#')) {
     const hex = trimmed.slice(1);
@@ -47,18 +54,25 @@ function toZeroAlphaColor(color: string): string {
       const g = parseInt(hex.slice(2, 4), 16);
       const b = parseInt(hex.slice(4, 6), 16);
       if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
-        return `rgba(${r}, ${g}, ${b}, 0)`;
+        return { r, g, b, a: 1 };
       }
     } else if (hex.length === 3) {
       const r = parseInt(hex[0]! + hex[0]!, 16);
       const g = parseInt(hex[1]! + hex[1]!, 16);
       const b = parseInt(hex[2]! + hex[2]!, 16);
       if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
-        return `rgba(${r}, ${g}, ${b}, 0)`;
+        return { r, g, b, a: 1 };
       }
     }
   }
-  return 'rgba(0, 0, 0, 0)';
+  return null;
+}
+
+function toScaledAlphaColor(color: string, factor: number): string {
+  const parsed = parseRgbaColor(color);
+  if (!parsed) return factor <= 0 ? 'rgba(0, 0, 0, 0)' : color;
+  const scaled = Math.max(0, Math.min(1, parsed.a * factor));
+  return `rgba(${parsed.r}, ${parsed.g}, ${parsed.b}, ${scaled.toFixed(4)})`;
 }
 
 /**
@@ -77,7 +91,8 @@ export class GlowStampCache {
 
   /**
    * Returns a cached offscreen radial glow stamp canvas for `(color, radius)`,
-   * lazily pre-rendering it once on first request.
+   * lazily pre-rendering it once on first request with crisp quadratic falloff
+   * so glows stay tight and never wash out pixel art.
    */
   getGlowStamp(color: string, radius: number): GlowCanvas | null {
     const bucket = snapGlowRadius(radius);
@@ -92,9 +107,11 @@ export class GlowStampCache {
     const ctx = canvas.getContext('2d') as GlowCtx | null;
     if (!ctx) return null;
 
-    const grad = ctx.createRadialGradient(bucket, bucket, 1, bucket, bucket, bucket);
+    const grad = ctx.createRadialGradient(bucket, bucket, 0.5, bucket, bucket, bucket);
     grad.addColorStop(0, color);
-    grad.addColorStop(1, toZeroAlphaColor(color));
+    grad.addColorStop(0.36, toScaledAlphaColor(color, 0.42));
+    grad.addColorStop(0.72, toScaledAlphaColor(color, 0.11));
+    grad.addColorStop(1, toScaledAlphaColor(color, 0));
 
     ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = grad;
