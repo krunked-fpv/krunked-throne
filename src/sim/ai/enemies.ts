@@ -2525,7 +2525,7 @@ function stepHostileEnemy(
         );
         if (e.aiTimer <= 0 || dist < 44) {
           e.aiState = 'open';
-          e.aiTimer = 50;
+          e.aiTimer = state.loop > 0 ? 150 : 50;
           e.contactDamage = 0;
           emitEvent(state, { type: 'sfx', sound: 'sndVanOpen', x: e.x, y: e.y });
           emitEvent(state, { type: 'shake', trauma: 0.3 });
@@ -2537,7 +2537,7 @@ function stepHostileEnemy(
               text: 'VAN OPEN [E]',
               color: '#5ecbff',
             });
-            // Expose persistent [E] BOARD VAN interactPrompt via non-solid prompt anchor synced to the open Van!
+            // Expose persistent [E] BOARD VAN interactPrompt via invisible prompt-only anchor synced to the open Van!
             if (!rt.vanBoardPropIds.has(e.id)) {
               const safePos = isWorldSolid(state.map, e.x, e.y)
                 ? findNearestFloor(state.map, e.x, e.y, 8)
@@ -2553,7 +2553,7 @@ function stepHostileEnemy(
                 solid: false,
                 opened: false,
                 hurtFlashTicks: 0,
-                sprite: 'sprVanOpen',
+                sprite: '',
                 flipX: e.facing === -1,
                 interactPrompt: '[E] BOARD VAN',
               };
@@ -3132,10 +3132,13 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
 
   // 6. Crown Vault indestructible pedestal + alcove-anchored exit portal emitting actual vaultReturnArea
   if (state.areaCode === 'vault') {
+    const hostilesLeft = state.enemies.some(
+      (e) => !e.friendly && e.hp > 0 && e.aiState !== 'disguised',
+    );
     const pedestal = state.props.find((p) => p.kind === 'proto_statue');
     if (pedestal) {
       pedestal.hp = pedestal.maxHp;
-      pedestal.interactPrompt = '[E] SWITCH CROWN';
+      pedestal.interactPrompt = !hostilesLeft ? '[E] SWITCH CROWN' : undefined;
     }
     const runRt = getRunRuntime(state);
     // Anchor Vault exit portal in the North Exit Alcove (>= 110px away from pedestal, outside 96px portal suction!)
@@ -3143,28 +3146,24 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
     if (
       !state.portal.active &&
       state.phase === 'playing' &&
-      (state.levelStartEnemyCount > 0 || state.levelKills > 0)
+      (state.levelStartEnemyCount > 0 || state.levelKills > 0) &&
+      !hostilesLeft
     ) {
-      const hostilesLeft = state.enemies.some(
-        (e) => !e.friendly && e.hp > 0 && e.aiState !== 'disguised',
-      );
-      if (!hostilesLeft) {
-        const ts = state.map.tileSize || TILE_SIZE;
-        const cx = Math.floor(state.map.width / 2);
-        let portalPos = tileToWorldCenter(cx, 6, ts);
-        if (Math.hypot(state.player.x - portalPos.x, state.player.y - portalPos.y) < 52) {
-          portalPos = tileToWorldCenter(cx, Math.min(state.map.height - 5, 28), ts);
-        }
-        const targetArea = runRt.vaultReturnArea ?? '4-1';
-        openBossPortal(
-          state,
-          portalPos.x,
-          portalPos.y,
-          targetArea,
-          state.loop,
-          `VAULT EXIT (${targetArea})!`,
-        );
+      const ts = state.map.tileSize || TILE_SIZE;
+      const cx = Math.floor(state.map.width / 2);
+      let portalPos = tileToWorldCenter(cx, 6, ts);
+      if (Math.hypot(state.player.x - portalPos.x, state.player.y - portalPos.y) < 52) {
+        portalPos = tileToWorldCenter(cx, Math.min(state.map.height - 5, 28), ts);
       }
+      const targetArea = runRt.vaultReturnArea ?? '4-1';
+      openBossPortal(
+        state,
+        portalPos.x,
+        portalPos.y,
+        targetArea,
+        state.loop,
+        `VAULT EXIT (${targetArea})!`,
+      );
     }
     if (state.portal.active && runRt.vaultReturnArea && state.portal.targetArea === '4-1') {
       state.portal.targetArea = runRt.vaultReturnArea;

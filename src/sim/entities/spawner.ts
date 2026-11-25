@@ -886,7 +886,6 @@ function spawnBiomeProps(
     const pos = findNearestFloor(map, pedCenter.x, pedCenter.y, 6);
     addProp(state, 'proto_statue', pos.x, pos.y, 'sprCrownPedIdle', 999999, 16, true, {
       radsStored: 0,
-      interactPrompt: '[E] SWITCH CROWN',
     });
     return;
   }
