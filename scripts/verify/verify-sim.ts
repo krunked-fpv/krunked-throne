@@ -991,7 +991,33 @@ function runConnectivityAndBossWarpStress(): string {
     }
   }
 
-  return `PASS (500/500 seeds 100% connected across all ${AREA_CODES.length} areas & loops 0-2; 5/5 bosses warp-spawned & stepped cleanly)`;
+  // Verify zero tick-0 spawn LOS ambushes & safe 2s opening pocket across 20 1-1 seeds
+  for (let s = 100; s < 120; s++) {
+    const safeState = createRunState({ mutant: 'fish', seed: s });
+    for (const e of safeState.enemies) {
+      if (e.friendly) continue;
+      const d = Math.hypot(e.x - safeState.player.x, e.y - safeState.player.y);
+      assert(d >= 112, `Unsafe spawn distance ${d.toFixed(1)}px on 1-1 seed=${s}`);
+      if (d < 220) {
+        assert(
+          !hasLineOfSight(safeState.map, safeState.player.x, safeState.player.y, e.x, e.y),
+          `Direct tick-0 spawn LoS ambush on 1-1 seed=${s} (enemy=${e.defId}, d=${d.toFixed(1)})`,
+        );
+      }
+    }
+    for (let t = 0; t < 60; t++) {
+      stepSimulation(
+        safeState,
+        makeInput({ aimWorldX: safeState.player.x + 40, aimWorldY: safeState.player.y }),
+      );
+    }
+    assert(
+      safeState.player.hp === safeState.player.maxHp,
+      `Stand-still spawn ambush hit player within 2s on 1-1 seed=${s} (hp=${safeState.player.hp}/${safeState.player.maxHp})`,
+    );
+  }
+
+  return `PASS (500/500 seeds 100% connected across all ${AREA_CODES.length} areas & loops 0-2; 20/20 safe spawn pockets; 5/5 bosses warp-spawned & stepped cleanly)`;
 }
 
 function main(): void {

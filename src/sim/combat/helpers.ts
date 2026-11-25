@@ -637,11 +637,12 @@ export function applyDamageToEnemy(
   const actualDmg = Math.max(1, Math.round(damage));
   enemy.hp -= actualDmg;
   enemy.hurtFlashTicks = 4;
-  enemy.vx += knockX * (enemy.isBoss ? 0.15 : 0.65);
-  enemy.vy += knockY * (enemy.isBoss ? 0.15 : 0.65);
+  enemy.vx += knockX * (enemy.isBoss ? 0.16 : 0.78);
+  enemy.vy += knockY * (enemy.isBoss ? 0.16 : 0.78);
   state.stats.damageDealt += actualDmg;
 
   const def = ENEMIES[enemy.defId];
+  const killedNow = enemy.hp <= 0;
 
   emitEvent(state, {
     type: 'damage_number',
@@ -650,6 +651,18 @@ export function applyDamageToEnemy(
     amount: actualDmg,
     crit: opts.isCrit || opts.isHeavy,
   });
+
+  if (!enemy.friendly) {
+    emitEvent(state, {
+      type: 'hit_confirm',
+      x: enemy.x,
+      y: enemy.y,
+      damage: actualDmg,
+      killed: killedNow,
+      crit: Boolean(opts.isCrit || opts.isHeavy),
+      melee: Boolean(opts.isMelee),
+    });
+  }
 
   if (state.boss && state.boss.entityId === enemy.id) {
     state.boss.hp = Math.max(0, enemy.hp);
@@ -667,6 +680,10 @@ export function applyDamageToEnemy(
   }
 
   if (enemy.hp > 0) {
+    if ((opts.isHeavy || (opts.isMelee && actualDmg >= 10)) && state.hitstopTicks < 1) {
+      state.hitstopTicks = 1;
+      emitEvent(state, { type: 'hitstop', ticks: 1 });
+    }
     emitEvent(state, {
       type: 'sfx',
       sound: def?.sounds.hurt ?? 'sndHitFlesh',
@@ -729,14 +746,20 @@ export function applyDamageToEnemy(
     },
   });
 
-  // Spawn flying corpse (Impact Wrists flings much harder!)
-  const impactMult = hasMutation(player, 'impact_wrists') ? 2.4 : 1.0;
+  // Spawn high-velocity flying corpse (combines momentum + killing blow; Impact Wrists rockets them!)
+  const hasIW = hasMutation(player, 'impact_wrists');
+  const impactMult = hasIW ? 2.45 : 1.25;
+  const rawVx = (enemy.vx * 0.55 + (knockX || rng.range(-2.4, 2.4))) * impactMult;
+  const rawVy = (enemy.vy * 0.55 + (knockY || rng.range(-2.4, 2.4))) * impactMult;
+  const maxCorpseSpd = hasIW ? 22 : 14;
+  const rawSpd = Math.hypot(rawVx, rawVy);
+  const scale = rawSpd > maxCorpseSpd && rawSpd > 1e-4 ? maxCorpseSpd / rawSpd : 1;
   spawnCorpse(
     state,
     enemy.x,
     enemy.y,
-    (knockX || rng.range(-2, 2)) * 0.9 * impactMult,
-    (knockY || rng.range(-2, 2)) * 0.9 * impactMult,
+    rawVx * scale,
+    rawVy * scale,
     enemy.facing,
     def?.sprites.dead ?? 'sprBanditDead',
     enemy.radius * 1.5,

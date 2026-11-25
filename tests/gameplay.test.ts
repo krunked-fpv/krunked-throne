@@ -21,6 +21,7 @@ import {
 import {
   SeededRng,
   allocEntityId,
+  hasLineOfSight,
   hashSimState,
   isWorldSolid,
   setTile,
@@ -608,5 +609,278 @@ describe('gameplay: All 5 Bosses & Full Progression Determinism', () => {
     const hashDiff = run(20261126);
     expect(hashA).toBe(hashB);
     expect(hashA).not.toBe(hashDiff);
+  });
+});
+
+describe('gameplay: Encounter Parity (Safe Spawns, Alert Telegraphs, Cover, Corpse Bowling)', () => {
+  it('guarantees zero tick-0 LoS snipes and zero 2-second stand-still hits across 30 seeds & biomes', () => {
+    const checkAreas: AreaCode[] = ['1-1', '1-2', '2-1', '3-1', '5-1'];
+    for (const area of checkAreas) {
+      const seeds = area === '1-1' ? 30 : 10;
+      for (let i = 0; i < seeds; i++) {
+        const seed = 100 + i;
+        const state = createRunState({ mutant: 'fish', seed });
+        if (area !== '1-1') {
+          warpToArea(state, area, 0);
+        }
+
+        expect(state.enemies.length).toBeGreaterThanOrEqual(6);
+
+        // Zero hostile enemies within direct screen LOS on tick 0
+        for (const e of state.enemies) {
+          if (e.friendly) continue;
+          const dist = Math.hypot(e.x - state.player.x, e.y - state.player.y);
+          expect(dist).toBeGreaterThanOrEqual(112);
+          if (dist < 220) {
+            expect(hasLineOfSight(state.map, state.player.x, state.player.y, e.x, e.y)).toBe(false);
+          }
+        }
+
+        // Standing still for 60 ticks (2 full seconds) takes zero cheap spawn-ambush damage
+        for (let t = 0; t < 60; t++) {
+          stepSimulation(
+            state,
+            makeInput({ aimWorldX: state.player.x + 48, aimWorldY: state.player.y }),
+          );
+        }
+        expect(state.player.hp).toBe(state.player.maxHp);
+        expect(state.player.alive).toBe(true);
+      }
+    }
+  });
+
+  it('transitions enemies through idle -> alert (enemy_alert + squad wake) -> tell -> fire without instant frame-0 shots', () => {
+    const state = createRunState({ mutant: 'fish', seed: 88101 });
+    state.enemies = [];
+    state.props = [];
+    state.projectiles = [];
+    clearChamber(state);
+
+    // Open a clean horizontal corridor to the right of the player
+    const { tx: ptx, ty: pty } = worldToTile(state.player.x, state.player.y, state.map.tileSize);
+    for (let ty = pty - 3; ty <= pty + 3; ty++) {
+      for (let tx = ptx - 2; tx <= ptx + 10; tx++) {
+        setTile(state.map, tx, ty, TileType.Floor);
+      }
+    }
+
+    const rng = SeededRng.fromState(state.rngState);
+    const lead = createEnemyEntity(state, 'scorpion', state.player.x + 92, state.player.y, rng);
+    const wingman = createEnemyEntity(state, 'bandit', state.player.x + 128, state.player.y + 12, rng);
+    // Even if attackCooldown starts at 0, enemies must alert & telegraph first!
+    lead.attackCooldown = 0;
+    wingman.attackCooldown = 0;
+    state.rngState = rng.getState();
+    state.events = [];
+
+    // Tick 1: enters 'alert' and emits enemy_alert (and wakes wingman), ZERO enemy projectiles fired!
+    stepSimulation(state, makeInput({ aimWorldX: lead.x, aimWorldY: lead.y }));
+    expect(lead.aiState).toBe('alert');
+    expect(wingman.aiState).toBe('alert');
+    expect(state.events.filter((ev) => ev.type === 'enemy_alert').length).toBeGreaterThanOrEqual(2);
+    expect(state.projectiles.some((pr) => pr.team === 'enemy')).toBe(false);
+
+    // Advance until scorpion enters 'tell' and eventually fires
+    let sawTell = false;
+    let sawEnemyFire = false;
+    for (let t = 0; t < 70; t++) {
+      stepSimulation(state, makeInput({ aimWorldX: lead.x, aimWorldY: lead.y }));
+      if (lead.aiState === 'tell') sawTell = true;
+      if (state.projectiles.some((pr) => pr.team === 'enemy')) sawEnemyFire = true;
+    }
+    expect(sawTell).toBe(true);
+    expect(sawEnemyFire).toBe(true);
+  });
+
+  it('blocks enemy projectiles with destructible cover props (cars/barrels/pillars)', () => {
+    const state = createRunState({ mutant: 'fish', seed: 88202 });
+    state.enemies = [];
+    state.props = [];
+    state.projectiles = [];
+    clearChamber(state);
+
+    // Place a Car cover prop directly between incoming enemy bullet and player
+    state.props.push({
+      id: allocEntityId(state),
+      kind: 'car',
+      x: state.player.x + 28,
+      y: state.player.y,
+      radius: 11,
+      hp: 22,
+      maxHp: 22,
+      solid: true,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprCarIdle',
+    });
+
+    spawnEnemyProjectile(state, {
+      x: state.player.x + 60,
+      y: state.player.y,
+      angle: Math.PI,
+      speed: 6,
+      damage: 3,
+    });
+
+    const hpBefore = state.player.hp;
+    for (let t = 0; t < 15; t++) {
+      stepSimulation(state, makeInput({ aimWorldX: state.player.x + 40, aimWorldY: state.player.y }));
+    }
+
+    expect(state.player.hp).toBe(hpBefore);
+    expect(state.props[0]!.hp).toBeLessThan(22);
+    expect(state.projectiles.length).toBe(0);
+  });
+
+  it('bowls flying corpses into enemies behind them (chain-killing with Impact Wrists) and emits corpse_impact', () => {
+    const state = createRunState({ mutant: 'fish', seed: 88303 });
+    state.enemies = [];
+    state.props = [];
+    state.projectiles = [];
+    state.corpses = [];
+    clearChamber(state);
+
+    const rng = SeededRng.fromState(state.rngState);
+    grantMutationById(state, 'impact_wrists', rng);
+    givePlayerWeapon(state, 'crossbow', 0, false);
+    state.player.activeSlot = 0;
+    state.player.ammo.bolt = 20;
+
+    // Two Bandits lined up: kill the first with Impact Wrists (or slam a flying corpse directly into the second!)
+    const target = createEnemyEntity(state, 'bandit', state.player.x + 64, state.player.y, rng);
+    target.hp = 5;
+    state.rngState = rng.getState();
+
+    // Launch a fast corpse flying straight into target bandit
+    spawnCorpse(state, state.player.x + 42, state.player.y, 12, 0, 1, 'sprBanditDead', 12, true);
+    state.events = [];
+
+    let sawCorpseImpact = false;
+    for (let t = 0; t < 12; t++) {
+      stepSimulation(state, makeInput({ aimWorldX: state.player.x + 80, aimWorldY: state.player.y }));
+      if (state.events.some((ev) => ev.type === 'corpse_impact' && ev.targetId === target.id)) {
+        sawCorpseImpact = true;
+      }
+    }
+
+    expect(sawCorpseImpact).toBe(true);
+    expect(state.enemies.includes(target)).toBe(false);
+    expect(state.stats.kills).toBeGreaterThanOrEqual(1);
+  });
+
+  it('emits hit_confirm, melee_deflect, ammo_empty, and supports Crossbow bolt overkill pierce', () => {
+    const state = createRunState({ mutant: 'fish', seed: 88404 });
+    state.enemies = [];
+    state.props = [];
+    state.projectiles = [];
+    clearChamber(state);
+
+    const { tx: ptx, ty: pty } = worldToTile(state.player.x, state.player.y, state.map.tileSize);
+    for (let ty = pty - 3; ty <= pty + 3; ty++) {
+      for (let tx = ptx - 2; tx <= ptx + 10; tx++) {
+        setTile(state.map, tx, ty, TileType.Floor);
+      }
+    }
+
+    // 1. Crossbow bolt overkill pierce skewers 3 Bandits in a row (even though base pierce is 1!)
+    givePlayerWeapon(state, 'crossbow', 0, false);
+    state.player.activeSlot = 0;
+    state.player.ammo.bolt = 10;
+    const rng = SeededRng.fromState(state.rngState);
+    createEnemyEntity(state, 'bandit', state.player.x + 36, state.player.y, rng);
+    createEnemyEntity(state, 'bandit', state.player.x + 64, state.player.y, rng);
+    createEnemyEntity(state, 'bandit', state.player.x + 92, state.player.y, rng);
+    state.rngState = rng.getState();
+    state.events = [];
+
+    stepSimulation(
+      state,
+      makeInput({
+        aimWorldX: state.player.x + 120,
+        aimWorldY: state.player.y,
+        fireHeld: true,
+        firePressed: true,
+      }),
+    );
+    for (let t = 0; t < 10; t++) {
+      stepSimulation(state, makeInput({ aimWorldX: state.player.x + 120, aimWorldY: state.player.y }));
+    }
+    expect(state.stats.kills).toBe(3);
+    expect(state.events.some((ev) => ev.type === 'hit_confirm' && ev.killed)).toBe(true);
+
+    // 2. Empty ammo dry-fire emits ammo_empty
+    state.player.ammo.bolt = 0;
+    state.player.weapons[0]!.reloadTicks = 0;
+    state.events = [];
+    stepSimulation(
+      state,
+      makeInput({
+        aimWorldX: state.player.x + 80,
+        aimWorldY: state.player.y,
+        firePressed: true,
+        fireHeld: true,
+      }),
+    );
+    expect(state.events.some((ev) => ev.type === 'ammo_empty' && ev.ammoType === 'bolt')).toBe(true);
+
+    // 3. Wrench swept melee deflection emits melee_deflect
+    givePlayerWeapon(state, 'wrench', 0, false);
+    state.player.weapons[0]!.reloadTicks = 0;
+    state.projectiles = [];
+    state.events = [];
+    spawnEnemyProjectile(state, {
+      x: state.player.x + 20,
+      y: state.player.y,
+      angle: Math.PI,
+      speed: 9.5,
+      damage: 2,
+    });
+    stepSimulation(
+      state,
+      makeInput({
+        aimWorldX: state.player.x + 48,
+        aimWorldY: state.player.y,
+        firePressed: true,
+        fireHeld: true,
+      }),
+    );
+    expect(state.events.some((ev) => ev.type === 'melee_deflect')).toBe(true);
+  });
+
+  it('allows shooting down giant Krunked Throne rad orbs for mid-fight ammo/HP sustain', () => {
+    const state = createRunState({ mutant: 'fish', seed: 88505 });
+    state.player.godMode = true;
+    warpToArea(state, '7-3', 0);
+    state.projectiles = [];
+    state.pickups = [];
+
+    // Spawn giant destructible Throne orb and shoot it with Revolver
+    const orb = spawnEnemyProjectile(state, {
+      kind: 'boss_orb',
+      x: state.player.x + 36,
+      y: state.player.y,
+      angle: Math.PI,
+      speed: 1.5,
+      damage: 4,
+      radius: 10,
+      lifeTicks: 100,
+      sprite: 'sprBigGuardianBullet',
+    });
+
+    stepSimulation(
+      state,
+      makeInput({
+        aimWorldX: orb.x,
+        aimWorldY: orb.y,
+        firePressed: true,
+        fireHeld: true,
+      }),
+    );
+    for (let t = 0; t < 6; t++) {
+      stepSimulation(state, makeInput({ aimWorldX: orb.x, aimWorldY: orb.y }));
+    }
+
+    expect(state.projectiles.includes(orb)).toBe(false);
+    expect(state.pickups.some((pk) => pk.kind === 'ammo' || pk.kind === 'hp')).toBe(true);
   });
 });

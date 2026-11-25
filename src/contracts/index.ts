@@ -793,7 +793,12 @@ export type SimEvent =
   | { type: 'boss_intro'; bossId: BossId; name: string; subtitle: string }
   | { type: 'level_up'; level: number; isUltra: boolean }
   | { type: 'pickup_text'; x: number; y: number; text: string; color: string }
-  | { type: 'player_died'; cause: string; killerSprite: string; areaCode: AreaCode; loop: number; kills: number };
+  | { type: 'player_died'; cause: string; killerSprite: string; areaCode: AreaCode; loop: number; kills: number }
+  | { type: 'enemy_alert'; entityId: number; x: number; y: number; defId: string }
+  | { type: 'hit_confirm'; x: number; y: number; damage: number; killed: boolean; crit?: boolean; melee?: boolean }
+  | { type: 'corpse_impact'; x: number; y: number; speed: number; targetId?: number; killed?: boolean }
+  | { type: 'melee_deflect'; x: number; y: number; angle: number }
+  | { type: 'ammo_empty'; x: number; y: number; ammoType: AmmoType };
 
 export type SimPhase =
   | 'playing'

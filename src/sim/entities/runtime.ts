@@ -9,9 +9,26 @@ export interface TrackedSpecialEnemy {
   facing: 1 | -1;
 }
 
+export interface EnemyAiMemory {
+  alerted: boolean;
+  aggroTicks: number;
+  lastSeenX: number;
+  lastSeenY: number;
+  homeX: number;
+  homeY: number;
+  burstLeft: number;
+  burstGap: number;
+  moveTicks: number;
+  pauseTicks: number;
+  strafeDir: 1 | -1;
+  carryingCar: boolean;
+}
+
 export interface AreaRuntimeState {
   mapRef: WorldMap;
   trackedSpecials: Map<number, TrackedSpecialEnemy>;
+  enemyMemory: Map<number, EnemyAiMemory>;
+  corpseHitTargets: Map<number, Set<number>>;
   processedCorpseIds: Set<number>;
   bossSummonIds: Set<number>;
   bossDeathHandled: boolean;
@@ -39,30 +56,12 @@ export const SPECIAL_DEATH_DEF_IDS: ReadonlySet<string> = new Set([
   'throne_ii',
 ]);
 
-export function getAreaRuntime(state: SimState): AreaRuntimeState {
-  let rt = runtimeMap.get(state);
-  if (!rt || rt.mapRef !== state.map) {
-    rt = {
-      mapRef: state.map,
-      trackedSpecials: new Map(),
-      processedCorpseIds: new Set(),
-      bossSummonIds: new Set(),
-      bossDeathHandled: false,
-      throneWoken: false,
-      throneLastGenCount: state.generatorsRemaining,
-      idpdWavesRemaining: 0,
-      idpdWaveTimer: 0,
-      revivedFreakCount: 0,
-    };
-    runtimeMap.set(state, rt);
-  }
-  return rt;
-}
-
-export function resetAreaRuntime(state: SimState): AreaRuntimeState {
-  const rt: AreaRuntimeState = {
+function makeFreshRuntime(state: SimState): AreaRuntimeState {
+  return {
     mapRef: state.map,
     trackedSpecials: new Map(),
+    enemyMemory: new Map(),
+    corpseHitTargets: new Map(),
     processedCorpseIds: new Set(),
     bossSummonIds: new Set(),
     bossDeathHandled: false,
@@ -72,8 +71,44 @@ export function resetAreaRuntime(state: SimState): AreaRuntimeState {
     idpdWaveTimer: 0,
     revivedFreakCount: 0,
   };
+}
+
+export function getAreaRuntime(state: SimState): AreaRuntimeState {
+  let rt = runtimeMap.get(state);
+  if (!rt || rt.mapRef !== state.map) {
+    rt = makeFreshRuntime(state);
+    runtimeMap.set(state, rt);
+  }
+  return rt;
+}
+
+export function resetAreaRuntime(state: SimState): AreaRuntimeState {
+  const rt = makeFreshRuntime(state);
   runtimeMap.set(state, rt);
   return rt;
+}
+
+export function getEnemyMemory(state: SimState, enemy: EnemyEntity): EnemyAiMemory {
+  const rt = getAreaRuntime(state);
+  let mem = rt.enemyMemory.get(enemy.id);
+  if (!mem) {
+    mem = {
+      alerted: false,
+      aggroTicks: 0,
+      lastSeenX: enemy.x,
+      lastSeenY: enemy.y,
+      homeX: enemy.x,
+      homeY: enemy.y,
+      burstLeft: 0,
+      burstGap: 0,
+      moveTicks: 0,
+      pauseTicks: 12,
+      strafeDir: enemy.id % 2 === 0 ? 1 : -1,
+      carryingCar: false,
+    };
+    rt.enemyMemory.set(enemy.id, mem);
+  }
+  return mem;
 }
 
 export function registerTrackedEnemy(

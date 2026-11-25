@@ -84,27 +84,78 @@ function countHostileEnemies(state: SimState): number {
   return count;
 }
 
-function findSpawnTileAwayFrom(
+function findRiskRewardChestSpot(
   state: SimState,
   avoidX: number,
   avoidY: number,
   minDist: number,
+  preferAlcove: boolean,
   rng: SeededRng,
 ): { x: number; y: number } {
   const map = state.map;
+  const ts = map.tileSize || 16;
   const minDistSq = minDist * minDist;
-  for (let attempt = 0; attempt < 80; attempt++) {
+  const minChestSepSq = 68 * 68;
+
+  let bestFallback: { x: number; y: number } | null = null;
+  let bestScore = -1e9;
+
+  for (let attempt = 0; attempt < 110; attempt++) {
     const tx = rng.int(3, map.width - 4);
     const ty = rng.int(3, map.height - 4);
     if (!isWalkableTile(getTile(map, tx, ty))) continue;
-    const pos = tileToWorldCenter(tx, ty, map.tileSize);
+    const pos = tileToWorldCenter(tx, ty, ts);
     const dx = pos.x - avoidX;
     const dy = pos.y - avoidY;
-    if (dx * dx + dy * dy >= minDistSq) {
+    const dSq = dx * dx + dy * dy;
+    if (dSq < minDistSq) continue;
+
+    // Keep chests spread into distinct risk-reward pockets across the level
+    let tooCloseToProp = false;
+    for (let i = 0; i < state.props.length; i++) {
+      const p = state.props[i]!;
+      const pdx = pos.x - p.x;
+      const pdy = pos.y - p.y;
+      if (pdx * pdx + pdy * pdy < minChestSepSq) {
+        tooCloseToProp = true;
+        break;
+      }
+    }
+    if (tooCloseToProp && attempt < 80) continue;
+
+    // Count cardinal solid wall neighbors: 1-2 walls = crisp alcove/corner nook (not middle of narrow choke)
+    let wallNeighbors = 0;
+    if (!isWalkableTile(getTile(map, tx - 1, ty))) wallNeighbors += 1;
+    if (!isWalkableTile(getTile(map, tx + 1, ty))) wallNeighbors += 1;
+    if (!isWalkableTile(getTile(map, tx, ty - 1))) wallNeighbors += 1;
+    if (!isWalkableTile(getTile(map, tx, ty + 1))) wallNeighbors += 1;
+
+    // Ideal alcove has 2 or 3 wall neighbors (tucked pocket) or 1 wall (edge of chamber)
+    const alcoveBonus = preferAlcove
+      ? wallNeighbors === 2
+        ? 45
+        : wallNeighbors === 3
+          ? 38
+          : wallNeighbors === 1
+            ? 20
+            : 0
+      : wallNeighbors <= 2
+        ? 15
+        : 0;
+    const distScore = Math.min(260, Math.sqrt(dSq)) * 0.18;
+    const score = alcoveBonus + distScore + (tooCloseToProp ? -60 : 0);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestFallback = pos;
+    }
+    if (!tooCloseToProp && (!preferAlcove || wallNeighbors >= 2) && dSq >= minDistSq * 1.15) {
       return pos;
     }
   }
-  return findNearestFloor(map, avoidX + 48, avoidY, 12);
+
+  if (bestFallback) return bestFallback;
+  return findNearestFloor(map, avoidX + 64, avoidY, 16);
 }
 
 export function pickTierWeaponId(state: SimState, rng: SeededRng, bonusTier = 0): string {
@@ -136,8 +187,8 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
   const isBossArena = state.areaCode === '0-1';
 
   // 1. Weapon chest (converts to Big Weapon Chest if chestSkipStreak >= 1, or Ammo Chest with Crown of Love)
-  if (!isBossArena) {
-    const pos1 = findSpawnTileAwayFrom(state, state.map.spawnX, state.map.spawnY, 48, rng);
+  if (!isBossArena && state.areaCode !== '7-3') {
+    const pos1 = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 96, true, rng);
     if (state.crown === 'love') {
       state.props.push({
         id: allocEntityId(state),
@@ -185,8 +236,8 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
       });
     }
 
-    // 2. Ammo chest
-    const pos2 = findSpawnTileAwayFrom(state, state.map.spawnX, state.map.spawnY, 64, rng);
+    // 2. Ammo chest in a separate mid/outer pocket
+    const pos2 = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 84, true, rng);
     state.props.push({
       id: allocEntityId(state),
       kind: 'ammo_chest',
@@ -202,8 +253,8 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
       openSprite: 'sprAmmoChestOpen',
     });
 
-    // 3. Rad canister (or IDPD Portal Strike canister for Rogue!)
-    const pos3 = findSpawnTileAwayFrom(state, state.map.spawnX, state.map.spawnY, 72, rng);
+    // 3. Rad canister (or IDPD Portal Strike canister for Rogue!) tucked in an outer risk-reward nook
+    const pos3 = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 108, true, rng);
     if (player.mutant === 'rogue') {
       state.props.push({
         id: allocEntityId(state),
@@ -232,13 +283,13 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
         opened: false,
         hurtFlashTicks: 0,
         sprite: 'sprRadChest',
-        radsStored: 12 + state.loop * 8,
+        radsStored: 14 + state.loop * 8,
       });
     }
 
     // 4. Open Mind extra chest
     if (hasMutation(player, 'open_mind')) {
-      const posExtra = findSpawnTileAwayFrom(state, state.map.spawnX, state.map.spawnY, 56, rng);
+      const posExtra = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 88, true, rng);
       const extraWeapon = rng.chance(0.5) && state.crown !== 'love';
       state.props.push({
         id: allocEntityId(state),
@@ -259,7 +310,7 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
     // 5. Y.V. Ultra B (Back 2 Bizniz): extra Crib weapon chests
     if (player.mutant === 'yv' && hasUltra(player, 'yv_b')) {
       for (let c = 0; c < 2; c++) {
-        const posCrib = findSpawnTileAwayFrom(state, state.map.spawnX, state.map.spawnY, 36, rng);
+        const posCrib = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 56, false, rng);
         state.props.push({
           id: allocEntityId(state),
           kind: 'weapon_chest',

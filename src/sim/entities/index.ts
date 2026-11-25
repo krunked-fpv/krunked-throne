@@ -1,2 +1,8 @@
 export * from './spawner';
-export { getAreaRuntime, resetAreaRuntime, registerTrackedEnemy } from './runtime';
+export {
+  getAreaRuntime,
+  resetAreaRuntime,
+  registerTrackedEnemy,
+  getEnemyMemory,
+  type EnemyAiMemory,
+} from './runtime';

@@ -485,4 +485,66 @@ describe('simcore: Portal Vortex & World Physics', () => {
     expect(drainEvents(state).length).toBe(1);
     expect(drainEvents(state).length).toBe(0);
   });
+
+  it('carves tucked-in safe spawn coves with adjacent solid cover walls across procedural biomes', () => {
+    const biomes: AreaCode[] = ['1-1', '1-2', '2-1', '3-1', '4-1', '5-1', '6-1', '7-1'];
+    for (let i = 0; i < 40; i++) {
+      const code = biomes[i % biomes.length]!;
+      const map = generateWorldMap(code, AREAS[code].biome, 0, new SeededRng(4100 + i * 37));
+      const { tx: stx, ty: sty } = worldToTile(map.spawnX, map.spawnY, map.tileSize);
+
+      // Perimeter ring around the 3x3 spawn cove (Chebyshev distance = 2) must contain solid rock cover
+      let solidCoverTiles = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (Math.abs(dx) !== 2 && Math.abs(dy) !== 2) continue;
+          if (isSolidTile(getTile(map, stx + dx, sty + dy))) {
+            solidCoverTiles += 1;
+          }
+        }
+      }
+      expect(solidCoverTiles).toBeGreaterThanOrEqual(8);
+    }
+  });
+
+  it('emits blood skid trails and corpse_impact events when flying corpses slam into walls', () => {
+    const state: SimState = createInitialSimState({ mutant: 'fish', seed: 202699 });
+    state.enemies = [];
+    state.corpses = [];
+    const { tx: stx, ty: sty } = worldToTile(state.map.spawnX, state.map.spawnY, TILE_SIZE);
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 3; dx++) {
+        setTile(state.map, stx + dx, sty + dy, dx === 3 ? TileType.Wall : TileType.Floor);
+      }
+    }
+    const wallCorpsePos = tileToWorldCenter(stx + 1, sty, TILE_SIZE);
+    state.corpses.push({
+      id: allocEntityId(state),
+      x: wallCorpsePos.x,
+      y: wallCorpsePos.y,
+      vx: 11,
+      vy: 0,
+      facing: 1,
+      sprite: 'sprBanditDead',
+      frame: 0,
+      baked: false,
+      explodable: true,
+      size: 12,
+    });
+    drainEvents(state);
+
+    let sawWallImpact = false;
+    let sawBloodTrail = false;
+    for (let t = 1; t <= 35; t++) {
+      state.tick = t;
+      stepCorpses(state);
+      const evs = drainEvents(state);
+      if (evs.some((e) => e.type === 'corpse_impact' && e.speed > 3)) sawWallImpact = true;
+      if (evs.some((e) => e.type === 'decal' && e.decal.kind === 'blood')) sawBloodTrail = true;
+    }
+
+    expect(sawWallImpact).toBe(true);
+    expect(sawBloodTrail).toBe(true);
+    expect(state.corpses[0]?.baked).toBe(true);
+  });
 });

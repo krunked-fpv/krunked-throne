@@ -1,4 +1,4 @@
-import type { EnemyEntity, ProjectileEntity, SimState } from '@/contracts';
+import type { EnemyEntity, ProjectileEntity, PropKind, SimState } from '@/contracts';
 import { getWeaponDef } from '@/data';
 import {
   SeededRng,
@@ -8,6 +8,7 @@ import {
   segmentCircleHit,
   sweptRayTile,
 } from '@/sim/core';
+import { getAreaRuntime } from '@/sim/entities/runtime';
 import {
   applyDamageToEnemy,
   applyDamageToPlayer,
@@ -17,6 +18,44 @@ import {
   spawnExplosion,
   spawnPickup,
 } from './helpers';
+
+const ENEMY_COVER_PROP_KINDS: ReadonlySet<PropKind> = new Set([
+  'car',
+  'pillar',
+  'barrel',
+  'toxic_barrel',
+  'proto_statue',
+  'throne_generator',
+  'cactus',
+]);
+
+function computeProjectileKnockback(proj: ProjectileEntity): number {
+  switch (proj.kind) {
+    case 'slug':
+      return 9.2;
+    case 'heavy_bullet':
+      return 6.8;
+    case 'bolt':
+    case 'seeking_bolt':
+    case 'toxic_bolt':
+      return 7.8;
+    case 'splinter':
+      return 4.8;
+    case 'shell':
+      return 4.2;
+    case 'disc':
+      return 6.4;
+    case 'plasma':
+    case 'rocket':
+    case 'nuke':
+      return 8.5;
+    case 'laser':
+    case 'lightning':
+      return 5.2;
+    default:
+      return Math.max(3.6, Math.min(8.5, 2.8 + proj.damage * 0.25));
+  }
+}
 
 function normalizeAngle(a: number): number {
   let r = a;
@@ -56,35 +95,51 @@ function resolveMeleeSlash(
 ): void {
   const reach = proj.meleeReach ?? 32;
   const halfArc = (((proj.meleeArcDeg ?? 140) * Math.PI) / 180) * 0.5;
-  const originX = proj.team === 'player' ? state.player.x : proj.x;
-  const originY = proj.team === 'player' ? state.player.y : proj.y;
+  const originX = proj.team === 'player' ? state.player.x : proj.prevX;
+  const originY = proj.team === 'player' ? state.player.y : proj.prevY;
   proj.x = originX + Math.cos(proj.angle) * (reach * 0.45);
   proj.y = originY + Math.sin(proj.angle) * (reach * 0.45);
 
-  // 1. Deflect or destroy opposing projectiles inside the melee arc (authentic NT: slashes ignore walls!)
+  // 1. Deflect or destroy opposing projectiles along swept segment inside melee arc!
   if (proj.deflectsProjectiles || proj.destroysProjectiles) {
+    let deflectedAny = false;
     for (let i = state.projectiles.length - 1; i >= 0; i--) {
       const other = state.projectiles[i]!;
       if (other.id === proj.id || other.team === proj.team) continue;
       if (other.kind === 'melee_slash' || other.kind === 'laser' || other.kind === 'enemy_laser') {
         continue;
       }
-      const dx = other.x - originX;
-      const dy = other.y - originY;
+
+      // Check both current position AND swept path so fast shots (Sniper/Boss) never slip past!
+      const segHit = segmentCircleHit(
+        other.prevX,
+        other.prevY,
+        other.x,
+        other.y,
+        originX,
+        originY,
+        reach + other.radius + 5,
+      );
+      if (!segHit.hit) continue;
+
+      const hitX = segHit.hitX;
+      const hitY = segHit.hitY;
+      const dx = hitX - originX;
+      const dy = hitY - originY;
       const dist = Math.hypot(dx, dy);
-      if (dist > reach + other.radius + 4) continue;
       const angDiff = Math.abs(normalizeAngle(Math.atan2(dy, dx) - proj.angle));
-      if (dist > 10 && angDiff > halfArc + 0.2) continue;
+      if (dist > 11 && angDiff > halfArc + 0.25) continue;
 
       if (proj.deflectsProjectiles) {
         other.team = proj.team;
-        const speed = Math.max(10, Math.hypot(other.vx, other.vy) * 1.45);
+        const speed = Math.max(11, Math.hypot(other.vx, other.vy) * 1.55);
         other.vx = Math.cos(proj.angle) * speed;
         other.vy = Math.sin(proj.angle) * speed;
         other.angle = proj.angle;
         other.damage = Math.max(other.damage * 2, 10);
-        other.lifeTicks = Math.max(other.lifeTicks, 45);
+        other.lifeTicks = Math.max(other.lifeTicks, 48);
         other.hitIds = [];
+        deflectedAny = true;
         emitEvent(state, {
           type: 'sfx',
           sound: 'sndMeleeFlip',
@@ -92,6 +147,14 @@ function resolveMeleeSlash(
           y: other.y,
           pitchJitter: 0.1,
         });
+        if (proj.team === 'player') {
+          emitEvent(state, {
+            type: 'melee_deflect',
+            x: other.x,
+            y: other.y,
+            angle: proj.angle,
+          });
+        }
       } else if (proj.destroysProjectiles) {
         emitEvent(state, {
           type: 'particle',
@@ -107,10 +170,18 @@ function resolveMeleeSlash(
         state.projectiles.splice(i, 1);
       }
     }
+    if (deflectedAny && proj.team === 'player') {
+      if (state.hitstopTicks < 1) {
+        state.hitstopTicks = 1;
+        emitEvent(state, { type: 'hitstop', ticks: 1 });
+      }
+      emitEvent(state, { type: 'shake', trauma: 0.12 });
+    }
   }
 
   // 2. Hit enemies inside arc (slices through walls!)
   if (proj.team === 'player') {
+    const meleeKnock = proj.damage >= 20 ? 10.5 : proj.damage >= 12 ? 8.5 : 7.2;
     const enemiesSnap = [...state.enemies];
     for (let i = 0; i < enemiesSnap.length; i++) {
       const e = enemiesSnap[i]!;
@@ -125,9 +196,9 @@ function resolveMeleeSlash(
       proj.hitIds.push(e.id);
       const nx = dist > 1e-4 ? dx / dist : Math.cos(proj.angle);
       const ny = dist > 1e-4 ? dy / dist : Math.sin(proj.angle);
-      applyDamageToEnemy(state, e, proj.damage, nx * 6.5, ny * 6.5, rng, {
+      applyDamageToEnemy(state, e, proj.damage, nx * meleeKnock, ny * meleeKnock, rng, {
         isMelee: true,
-        isHeavy: proj.damage >= 20,
+        isHeavy: proj.damage >= 18,
       });
     }
 
@@ -151,6 +222,19 @@ function resolveMeleeSlash(
       if (dist > prop.radius + 6 && angDiff > halfArc) continue;
       proj.hitIds.push(prop.id);
       damageProp(state, prop, proj.damage, rng);
+    }
+  } else if (state.player.alive && !proj.hitIds.includes(state.player.id)) {
+    // Enemy melee slash (e.g. Assassin pipe/blade swing!)
+    const p = state.player;
+    const dx = p.x - originX;
+    const dy = p.y - originY;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= reach + p.radius) {
+      const angDiff = Math.abs(normalizeAngle(Math.atan2(dy, dx) - proj.angle));
+      if (dist <= p.radius + 6 || angDiff <= halfArc) {
+        proj.hitIds.push(p.id);
+        applyDamageToPlayer(state, proj.damage, 'ASSASSIN', 'sprMeleeIdle', rng);
+      }
     }
   }
 }
@@ -491,8 +575,9 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
         const spd = Math.hypot(proj.vx, proj.vy) || 1;
         const nx = proj.vx / spd;
         const ny = proj.vy / spd;
+        const knockMag = computeProjectileKnockback(proj);
 
-        applyDamageToEnemy(state, rec.enemy, proj.damage, nx * 3.5, ny * 3.5, rng, {
+        const killed = applyDamageToEnemy(state, rec.enemy, proj.damage, nx * knockMag, ny * knockMag, rng, {
           fromBullet: proj.kind === 'bullet' || proj.kind === 'heavy_bullet',
           isHeavy: proj.damage >= 18,
         });
@@ -521,7 +606,17 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
           break;
         }
 
-        if (proj.pierce > 0) {
+        // Authentic Nuclear Throne bolt overkill pierce: bolts killing an enemy skewer through!
+        const boltOverkillPierce =
+          killed &&
+          (proj.kind === 'bolt' ||
+            proj.kind === 'splinter' ||
+            proj.kind === 'toxic_bolt' ||
+            proj.kind === 'seeking_bolt');
+
+        if (boltOverkillPierce) {
+          // Carry straight through the killed enemy without burning pierce!
+        } else if (proj.pierce > 0) {
           proj.pierce -= 1;
         } else {
           proj.x = rec.hx;
@@ -531,12 +626,15 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
           break;
         }
       }
+    }
 
-      // Check breakable props along segment if still alive
-      if (!destroyed) {
-        for (let pIdx = state.props.length - 1; pIdx >= 0; pIdx--) {
-          const prop = state.props[pIdx]!;
-          if (prop.hp <= 0 || prop.opened || proj.hitIds.includes(prop.id)) continue;
+    // 8b. Check breakable cover props along segment for BOTH player AND enemy projectiles!
+    // (Cars, pillars, barrels, cacti, generators act as genuine destructible tactical cover!)
+    if (!destroyed) {
+      for (let pIdx = state.props.length - 1; pIdx >= 0; pIdx--) {
+        const prop = state.props[pIdx]!;
+        if (prop.hp <= 0 || prop.opened || proj.hitIds.includes(prop.id)) continue;
+        if (proj.team === 'player') {
           if (
             prop.kind === 'weapon_chest' ||
             prop.kind === 'big_weapon_chest' ||
@@ -545,27 +643,31 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
           ) {
             continue;
           }
-          const hit = segmentCircleHit(
-            proj.x,
-            proj.y,
-            endX,
-            endY,
-            prop.x,
-            prop.y,
-            prop.radius + proj.radius,
-          );
-          if (hit.hit) {
-            proj.hitIds.push(prop.id);
-            damageProp(state, prop, proj.damage, rng);
-            if (proj.pierce > 0) {
-              proj.pierce -= 1;
-            } else {
-              proj.x = hit.hitX;
-              proj.y = hit.hitY;
-              detonateProjectile(state, proj, rng);
-              destroyed = true;
-              break;
-            }
+        } else {
+          // Enemy projectiles collide with solid/cover props (cars, barrels, pillars, cacti), not chests
+          if (!ENEMY_COVER_PROP_KINDS.has(prop.kind)) continue;
+        }
+
+        const hit = segmentCircleHit(
+          proj.x,
+          proj.y,
+          endX,
+          endY,
+          prop.x,
+          prop.y,
+          prop.radius + proj.radius,
+        );
+        if (hit.hit) {
+          proj.hitIds.push(prop.id);
+          damageProp(state, prop, proj.team === 'player' ? proj.damage : Math.max(1, Math.min(3, proj.damage)), rng);
+          if (proj.pierce > 0) {
+            proj.pierce -= 1;
+          } else {
+            proj.x = hit.hitX;
+            proj.y = hit.hitY;
+            detonateProjectile(state, proj, rng);
+            destroyed = true;
+            break;
           }
         }
       }
@@ -706,24 +808,67 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
     }
   }
 
-  // Impact Wrists corpse bowling: fast flying corpses damage enemies they slam into!
+  // Corpse bowling physics: high-velocity flying corpses slam into, knock back, and chain-kill enemies!
   const hasImpactWrists = hasMutation(player, 'impact_wrists');
-  const minCorpseSpeedSq = hasImpactWrists ? 5.0 : 18.0;
+  const minCorpseSpeedSq = hasImpactWrists ? 3.2 : 7.5;
+  const rt = getAreaRuntime(state);
+
   for (let cIdx = 0; cIdx < state.corpses.length; cIdx++) {
     const c = state.corpses[cIdx]!;
     if (c.baked) continue;
     const spdSq = c.vx * c.vx + c.vy * c.vy;
     if (spdSq < minCorpseSpeedSq) continue;
+
+    let hitSet = rt.corpseHitTargets.get(c.id);
+    const spd = Math.sqrt(spdSq);
+    const hitRadius = Math.max(6, Math.min(10, c.size * 0.55));
+
     for (let eIdx = state.enemies.length - 1; eIdx >= 0; eIdx--) {
       const e = state.enemies[eIdx]!;
-      if (e.friendly || e.hp <= 0) continue;
-      if (circleOverlap(c.x, c.y, 7, e.x, e.y, e.radius)) {
-        const dmg = hasImpactWrists ? Math.max(4, Math.round(Math.sqrt(spdSq) * 1.4)) : 2;
-        applyDamageToEnemy(state, e, dmg, c.vx * 0.5, c.vy * 0.5, rng);
-        c.vx *= 0.55;
-        c.vy *= 0.55;
-        if (hasImpactWrists) {
-          emitEvent(state, { type: 'sfx', sound: 'sndImpWristHit', x: c.x, y: c.y, pitchJitter: 0.1 });
+      if (e.friendly || e.hp <= 0 || e.invulnerable) continue;
+      if (hitSet?.has(e.id)) continue;
+
+      if (circleOverlap(c.x, c.y, hitRadius, e.x, e.y, e.radius)) {
+        if (!hitSet) {
+          hitSet = new Set<number>();
+          rt.corpseHitTargets.set(c.id, hitSet);
+        }
+        hitSet.add(e.id);
+
+        const dmg = hasImpactWrists
+          ? Math.max(6, Math.round(spd * 1.75))
+          : Math.max(3, Math.round(spd * 0.85));
+        const killed = applyDamageToEnemy(
+          state,
+          e,
+          dmg,
+          c.vx * (hasImpactWrists ? 0.95 : 0.65),
+          c.vy * (hasImpactWrists ? 0.95 : 0.65),
+          rng,
+          { isHeavy: hasImpactWrists && spd >= 6 },
+        );
+
+        c.vx *= hasImpactWrists ? 0.72 : 0.55;
+        c.vy *= hasImpactWrists ? 0.72 : 0.55;
+
+        emitEvent(state, {
+          type: 'corpse_impact',
+          x: e.x,
+          y: e.y,
+          speed: spd,
+          targetId: e.id,
+          killed,
+        });
+        emitEvent(state, {
+          type: 'sfx',
+          sound: hasImpactWrists ? 'sndImpWristHit' : 'sndHitFlesh',
+          x: c.x,
+          y: c.y,
+          pitchJitter: 0.12,
+        });
+        if (hasImpactWrists && killed && state.hitstopTicks < 2) {
+          state.hitstopTicks = 2;
+          emitEvent(state, { type: 'hitstop', ticks: 2 });
         }
       }
     }

@@ -125,26 +125,51 @@ export function stepCorpses(state: SimState): void {
       c.x = res.x;
       c.y = res.y;
 
+      // Blood skid trail while flying fast across the wasteland floor
+      if (speedSq > 14 && (state.tick + c.id) % 2 === 0) {
+        pushDecal(state, {
+          kind: 'blood',
+          x: c.x,
+          y: c.y,
+          angle: Math.atan2(c.vy, c.vx),
+          scale: 0.5,
+          color: '#7a1212',
+        });
+      }
+
       if (res.hitX) {
-        c.vx = -c.vx * 0.55;
+        c.vx = -c.vx * 0.52;
       }
       if (res.hitY) {
-        c.vy = -c.vy * 0.55;
+        c.vy = -c.vy * 0.52;
       }
       if (res.hitWall && speedSq > 4) {
+        const speed = Math.sqrt(speedSq);
         pushDecal(state, {
           kind: 'blood',
           x: c.x,
           y: c.y,
           angle: 0,
-          scale: 0.9,
+          scale: speed > 7 ? 1.25 : 0.9,
           color: '#7a1212',
         });
+        if (speedSq > 9) {
+          emitEvent(state, {
+            type: 'corpse_impact',
+            x: c.x,
+            y: c.y,
+            speed,
+          });
+          emitEvent(state, {
+            type: 'shake',
+            trauma: Math.min(0.14, speed * 0.012),
+          });
+        }
       }
     }
 
-    c.vx *= 0.8;
-    c.vy *= 0.8;
+    c.vx *= 0.85;
+    c.vy *= 0.85;
 
     if (c.vx * c.vx + c.vy * c.vy < 0.04) {
       c.vx = 0;

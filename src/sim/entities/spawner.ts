@@ -1,5 +1,6 @@
 import {
   TILE_SIZE,
+  TileType,
   type AreaCode,
   type BiomeId,
   type BossId,
@@ -10,6 +11,7 @@ import {
   type PropEntity,
   type PropKind,
   type SimState,
+  type WorldMap,
 } from '@/contracts';
 import { ENEMIES, getAreaDef, getEnemiesForBiome } from '@/data';
 import {
@@ -19,14 +21,16 @@ import {
   emitEvent,
   findNearestFloor,
   getTile,
+  hasLineOfSight,
   isCircleOverlappingSolid,
   isWalkableTile,
   isWorldSolid,
   moveCircleWithSlide,
   tileToWorldCenter,
+  worldToTile,
 } from '@/sim/core';
 import { createInitialSimState, spawnLevelChests } from '@/sim/progression';
-import { getAreaRuntime, registerTrackedEnemy, resetAreaRuntime } from './runtime';
+import { getAreaRuntime, getEnemyMemory, registerTrackedEnemy, resetAreaRuntime } from './runtime';
 
 export interface BossMeta {
   id: BossId;
@@ -86,6 +90,9 @@ export interface CreateEnemyOptions {
   carveIfTight?: boolean;
 }
 
+const MIN_SPAWN_NO_LOS_DIST = 118;
+const MIN_SPAWN_WITH_LOS_DIST = 236;
+
 function clampToMapInterior(state: SimState, x: number, y: number): { x: number; y: number } {
   const ts = state.map.tileSize || TILE_SIZE;
   const minX = ts * 2.5;
@@ -98,16 +105,97 @@ function clampToMapInterior(state: SimState, x: number, y: number): { x: number;
   };
 }
 
+function isSpotSafeFromSpawn(
+  state: SimState,
+  x: number,
+  y: number,
+  minDistNoLos: number = MIN_SPAWN_NO_LOS_DIST,
+  minDistWithLos: number = MIN_SPAWN_WITH_LOS_DIST,
+): boolean {
+  const px = state.player.x;
+  const py = state.player.y;
+  const dx = x - px;
+  const dy = y - py;
+  const distSq = dx * dx + dy * dy;
+  if (distSq < minDistNoLos * minDistNoLos) return false;
+  if (distSq < minDistWithLos * minDistWithLos) {
+    if (hasLineOfSight(state.map, px, py, x, y)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Computes 4-connected BFS tile distances from the map spawn tile for encounter zoning.
+ */
+function computeSpawnBfs(map: WorldMap): Int32Array {
+  const { width, height, tiles } = map;
+  const total = width * height;
+  const dist = new Int32Array(total);
+  dist.fill(-1);
+
+  const { tx: stx, ty: sty } = worldToTile(map.spawnX, map.spawnY, map.tileSize || TILE_SIZE);
+  if (stx < 0 || sty < 0 || stx >= width || sty >= height) return dist;
+
+  const queue = new Int32Array(total);
+  let head = 0;
+  let tail = 0;
+  const startIdx = sty * width + stx;
+  dist[startIdx] = 0;
+  queue[tail++] = startIdx;
+
+  while (head < tail) {
+    const idx = queue[head++]!;
+    const d = dist[idx]! + 1;
+    const cx = idx % width;
+    const cy = (idx - cx) / width;
+
+    if (cx > 0) {
+      const n = idx - 1;
+      if (dist[n] === -1 && isWalkableTile(tiles[n] as TileType)) {
+        dist[n] = d;
+        queue[tail++] = n;
+      }
+    }
+    if (cx + 1 < width) {
+      const n = idx + 1;
+      if (dist[n] === -1 && isWalkableTile(tiles[n] as TileType)) {
+        dist[n] = d;
+        queue[tail++] = n;
+      }
+    }
+    if (cy > 0) {
+      const n = idx - width;
+      if (dist[n] === -1 && isWalkableTile(tiles[n] as TileType)) {
+        dist[n] = d;
+        queue[tail++] = n;
+      }
+    }
+    if (cy + 1 < height) {
+      const n = idx + width;
+      if (dist[n] === -1 && isWalkableTile(tiles[n] as TileType)) {
+        dist[n] = d;
+        queue[tail++] = n;
+      }
+    }
+  }
+
+  return dist;
+}
+
 /**
  * Finds a guaranteed walkable floor tile coordinate at least `minDistFromPlayer` px away
  * from the player, avoiding existing props/enemies and never inside solid walls.
+ * When `requireNoSpawnLos` is true, also rejects direct line-of-sight tiles within screen range.
  */
 export function findSafeFloorSpot(
   state: SimState,
   rng: SeededRng,
-  minDistFromPlayer: number = 96,
+  minDistFromPlayer: number = 116,
   entityRadius: number = 7,
   avoidExistingMinDist: number = 14,
+  requireNoSpawnLos: boolean = false,
 ): { x: number; y: number } {
   const map = state.map;
   const ts = map.tileSize || TILE_SIZE;
@@ -119,7 +207,7 @@ export function findSafeFloorSpot(
   const existSq = avoidExistingMinDist * avoidExistingMinDist;
 
   // First pass: randomized rejection sampling on strictly walkable tiles with clearance
-  for (let attempt = 0; attempt < 160; attempt++) {
+  for (let attempt = 0; attempt < 180; attempt++) {
     const tx = rng.int(2, map.width - 3);
     const ty = rng.int(2, map.height - 3);
     if (!isWalkableTile(getTile(map, tx, ty))) continue;
@@ -127,15 +215,24 @@ export function findSafeFloorSpot(
     const pos = tileToWorldCenter(tx, ty, ts);
     const dx = pos.x - px;
     const dy = pos.y - py;
-    if (dx * dx + dy * dy < minDistSq) continue;
+    const dSq = dx * dx + dy * dy;
+    if (dSq < minDistSq) continue;
 
-    // Prefer tiles where circle doesn't clip solid corners (relaxed after 90 tries)
-    if (attempt < 90 && isCircleOverlappingSolid(map, pos.x, pos.y, Math.min(entityRadius, 7))) {
+    if (
+      requireNoSpawnLos &&
+      dSq < MIN_SPAWN_WITH_LOS_DIST * MIN_SPAWN_WITH_LOS_DIST &&
+      hasLineOfSight(map, px, py, pos.x, pos.y)
+    ) {
+      continue;
+    }
+
+    // Prefer tiles where circle doesn't clip solid corners (relaxed after 100 tries)
+    if (attempt < 100 && isCircleOverlappingSolid(map, pos.x, pos.y, Math.min(entityRadius, 7))) {
       continue;
     }
 
     let tooClose = false;
-    if (attempt < 120 && avoidExistingMinDist > 0) {
+    if (attempt < 130 && avoidExistingMinDist > 0) {
       for (let i = 0; i < state.enemies.length; i++) {
         const e = state.enemies[i]!;
         const edx = pos.x - e.x;
@@ -163,14 +260,21 @@ export function findSafeFloorSpot(
     const depDx = dep.x - px;
     const depDy = dep.y - py;
     if (!isWorldSolid(map, dep.x, dep.y) && depDx * depDx + depDy * depDy >= strictMinDistSq) {
-      return { x: dep.x, y: dep.y };
+      if (
+        !requireNoSpawnLos ||
+        depDx * depDx + depDy * depDy >= MIN_SPAWN_WITH_LOS_DIST * MIN_SPAWN_WITH_LOS_DIST ||
+        !hasLineOfSight(map, px, py, dep.x, dep.y)
+      ) {
+        return { x: dep.x, y: dep.y };
+      }
     }
     return pos;
   }
 
-  // Deterministic scan fallback: collect all walkable tiles >= minDistFromPlayer (or farthest)
+  // Deterministic scan fallback: prefer no-LOS safe tiles first, then any >= minDist, then farthest
   let bestFar: { x: number; y: number } | null = null;
   let bestFarDistSq = -1;
+  const noLosCandidates: Array<{ x: number; y: number }> = [];
   const candidates: Array<{ x: number; y: number }> = [];
 
   for (let ty = 2; ty < map.height - 2; ty++) {
@@ -186,12 +290,20 @@ export function findSafeFloorSpot(
       }
       if (dSq >= minDistSq) {
         candidates.push(pos);
+        if (
+          requireNoSpawnLos &&
+          (dSq >= MIN_SPAWN_WITH_LOS_DIST * MIN_SPAWN_WITH_LOS_DIST ||
+            !hasLineOfSight(map, px, py, pos.x, pos.y))
+        ) {
+          noLosCandidates.push(pos);
+        }
       }
     }
   }
 
-  if (candidates.length > 0) {
-    const picked = rng.pick(candidates);
+  const chosenList = noLosCandidates.length > 0 ? noLosCandidates : candidates;
+  if (chosenList.length > 0) {
+    const picked = rng.pick(chosenList);
     const dep = moveCircleWithSlide(map, picked.x, picked.y, 0, 0, Math.min(entityRadius, 6));
     return isWorldSolid(map, dep.x, dep.y) ? picked : { x: dep.x, y: dep.y };
   }
@@ -278,9 +390,9 @@ export function createEnemyEntity(
     hurtFlashTicks: 0,
     snaredTicks: 0,
     aiState: opts.initialAiState ?? defaultState,
-    aiTimer: rng.int(8, 28),
+    aiTimer: rng.int(12, 34),
     aiPhase: 0,
-    attackCooldown: rng.int(16, 42),
+    attackCooldown: rng.int(22, 48),
     targetX: safe.x,
     targetY: safe.y,
     animFrame: rng.range(0, 4),
@@ -295,6 +407,10 @@ export function createEnemyEntity(
 
   state.enemies.push(enemy);
   registerTrackedEnemy(state, enemy, opts.isBossSummon ?? false);
+  const mem = getEnemyMemory(state, enemy);
+  mem.homeX = safe.x;
+  mem.homeY = safe.y;
+  mem.pauseTicks = rng.int(10, 32);
   return enemy;
 }
 
@@ -319,39 +435,38 @@ export function spawnBossEntity(
 
   if (bossId === 'nuclear_throne') {
     const cx = Math.floor(map.width / 2);
-    // Dais carpet platform sits at rows 9..15 in 7-3; place Throne proudly on north dais
     const daisTy = state.areaCode === '7-3' ? 12 : Math.max(4, Math.floor(map.height * 0.22));
     const desired = tileToWorldCenter(cx, daisTy, ts);
     spawnPos = ensureSafeEntityPosition(state, desired.x, desired.y, 34, true);
     initialAiState = 'sleep';
   } else if (bossId === 'throne_ii') {
     const cx = Math.floor(map.width / 2);
-    const cy = Math.max(5, Math.floor(map.height * 0.25));
+    const cy = Math.max(5, Math.floor(map.height * 0.22));
     const desired = tileToWorldCenter(cx, cy, ts);
     const dx = desired.x - state.player.x;
     const dy = desired.y - state.player.y;
-    if (dx * dx + dy * dy < 104 * 104) {
-      spawnPos = findSafeFloorSpot(state, rng, 112, 26, 20);
+    if (dx * dx + dy * dy < 120 * 120) {
+      spawnPos = findSafeFloorSpot(state, rng, 128, 26, 20, false);
     } else {
       spawnPos = ensureSafeEntityPosition(state, desired.x, desired.y, 26, true);
     }
-    initialAiState = 'chase';
+    initialAiState = 'intro';
     elevated = true;
-    elevZ = 14;
+    elevZ = 18;
   } else if (bossId === 'big_dog') {
-    spawnPos = findSafeFloorSpot(state, rng, 128, 22, 20);
+    spawnPos = findSafeFloorSpot(state, rng, 152, 22, 22, true);
     spawnPos = ensureSafeEntityPosition(state, spawnPos.x, spawnPos.y, 22, true);
     initialAiState = 'sleep';
   } else if (bossId === 'lil_hunter') {
-    spawnPos = findSafeFloorSpot(state, rng, 112, 11, 16);
+    spawnPos = findSafeFloorSpot(state, rng, 144, 11, 18, true);
     initialAiState = 'arrive_slam';
     elevated = true;
-    elevZ = 64;
+    elevZ = 72;
     invulnerable = true;
   } else {
-    // Big Bandit (1-3)
-    spawnPos = findSafeFloorSpot(state, rng, 128, 14, 16);
-    initialAiState = 'reposition';
+    // Big Bandit (1-3): spawns safely around a bend with dramatic intro beat
+    spawnPos = findSafeFloorSpot(state, rng, 156, 14, 18, true);
+    initialAiState = 'intro';
   }
 
   const boss = createEnemyEntity(state, bossId, spawnPos.x, spawnPos.y, rng, {
@@ -364,19 +479,29 @@ export function spawnBossEntity(
   });
 
   if (bossId === 'lil_hunter') {
-    boss.aiTimer = 22;
+    boss.aiTimer = 30;
     boss.targetX = spawnPos.x;
     boss.targetY = spawnPos.y;
   } else if (bossId === 'big_bandit') {
-    boss.aiTimer = 20;
-    boss.attackCooldown = 22;
+    boss.aiTimer = 26;
+    boss.attackCooldown = 28;
   } else if (bossId === 'throne_ii') {
-    boss.aiTimer = 24;
+    boss.aiTimer = 22;
     boss.attackCooldown = 28;
   } else if (bossId === 'nuclear_throne') {
-    boss.aimAngle = Math.PI * 0.5; // Facing straight down the red carpet
+    boss.aimAngle = Math.PI * 0.5;
     boss.aiTimer = 18;
     boss.attackCooldown = 36;
+  } else if (bossId === 'big_dog') {
+    // Give Big Dog's scrapyard arena 2 tactical explosive barrels nearby
+    for (let b = 0; b < 2; b++) {
+      const ang = b * Math.PI + rng.range(-0.5, 0.5);
+      const bx = boss.x + Math.cos(ang) * 44;
+      const by = boss.y + Math.sin(ang) * 44;
+      if (!isWorldSolid(state.map, bx, by) && isSpotSafeFromSpawn(state, bx, by, 72, 90)) {
+        addProp(state, 'barrel', bx, by, 'sprBarrel', 10, 8, true);
+      }
+    }
   }
 
   const rt = getAreaRuntime(state);
@@ -391,7 +516,7 @@ export function spawnBossEntity(
     subtitle: meta.subtitle,
     hp: boss.hp,
     maxHp: boss.maxHp,
-    introTicks: 75,
+    introTicks: 60,
     defeated: false,
   };
 
@@ -437,7 +562,7 @@ export function spawnIdpdWave(
   const baseSpot =
     opts.anchorX !== undefined && opts.anchorY !== undefined
       ? ensureSafeEntityPosition(state, opts.anchorX, opts.anchorY, 10, false)
-      : findSafeFloorSpot(state, rng, 120, 10, 16);
+      : findSafeFloorSpot(state, rng, 132, 10, 16, true);
 
   if (opts.includeVan) {
     const vanSpot = ensureSafeEntityPosition(state, baseSpot.x, baseSpot.y, 18, true);
@@ -534,7 +659,52 @@ function addProp(
   return prop;
 }
 
-function spawnBiomeProps(state: SimState, rng: SeededRng): void {
+function isPropSpotClear(state: SimState, x: number, y: number, minDist: number): boolean {
+  if (isWorldSolid(state.map, x, y)) return false;
+  const spDx = x - state.map.spawnX;
+  const spDy = y - state.map.spawnY;
+  if (spDx * spDx + spDy * spDy < 42 * 42) return false;
+  const minSq = minDist * minDist;
+  for (let i = 0; i < state.props.length; i++) {
+    const p = state.props[i]!;
+    const dx = x - p.x;
+    const dy = y - p.y;
+    if (dx * dx + dy * dy < minSq) return false;
+  }
+  return true;
+}
+
+function tryPlacePropNear(
+  state: SimState,
+  anchorX: number,
+  anchorY: number,
+  minRad: number,
+  maxRad: number,
+  rng: SeededRng,
+  kind: PropKind,
+  sprite: string,
+  hp: number,
+  radius: number,
+  solid: boolean,
+): boolean {
+  for (let attempt = 0; attempt < 14; attempt++) {
+    const ang = rng.range(0, Math.PI * 2);
+    const r = rng.range(minRad, maxRad);
+    const px = anchorX + Math.cos(ang) * r;
+    const py = anchorY + Math.sin(ang) * r;
+    if (isCircleOverlappingSolid(state.map, px, py, Math.min(radius, 7))) continue;
+    if (!isPropSpotClear(state, px, py, 20)) continue;
+    addProp(state, kind, px, py, sprite, hp, radius, solid);
+    return true;
+  }
+  return false;
+}
+
+function spawnBiomeProps(
+  state: SimState,
+  rng: SeededRng,
+  encounterAnchors: ReadonlyArray<{ x: number; y: number }>,
+): void {
   const biome: BiomeId = state.biome;
   const areaCode: AreaCode = state.areaCode;
   const map = state.map;
@@ -581,9 +751,8 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
   }
 
   if (areaCode === '0-1') {
-    // Campfire arena: scatter a few weathered desert bones / rocks around perimeter
     for (let i = 0; i < 4; i++) {
-      const pos = findSafeFloorSpot(state, rng, 84, 8, 28);
+      const pos = findSafeFloorSpot(state, rng, 84, 8, 28, false);
       addProp(state, 'bone_pile', pos.x, pos.y, 'sprBonePileIdle', 8, 7, false);
     }
     return;
@@ -593,21 +762,93 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
   if (areaCode === 'vault' || areaCode === '3-2' || areaCode === '5-2' || areaCode === '7-2') {
     const pos =
       areaCode === 'vault'
-        ? findNearestFloor(map, tileToWorldCenter(Math.floor(map.width / 2), 17, ts).x, tileToWorldCenter(Math.floor(map.width / 2), 17, ts).y, 6)
-        : findSafeFloorSpot(state, rng, 96, 12, 24);
+        ? findNearestFloor(
+            map,
+            tileToWorldCenter(Math.floor(map.width / 2), 17, ts).x,
+            tileToWorldCenter(Math.floor(map.width / 2), 17, ts).y,
+            6,
+          )
+        : findSafeFloorSpot(state, rng, 104, 12, 24, false);
     addProp(state, 'proto_statue', pos.x, pos.y, 'sprProtoStatueIdle', 60, 12, true, {
       radsStored: 0,
     });
   }
 
-  // Biome-authentic destructible cover & hazards
+  // Place strategic explosive barrels / cars right beside enemy encounter pockets for chain-kill payoffs!
+  for (let i = 0; i < encounterAnchors.length; i++) {
+    const anchor = encounterAnchors[i]!;
+    if (biome === 'desert' || biome === 'oasis') {
+      if (i % 2 === 0 && rng.chance(0.7)) {
+        tryPlacePropNear(state, anchor.x, anchor.y, 18, 38, rng, 'barrel', 'sprBarrel', 8, 8, true);
+      } else {
+        const cacti = ['sprCactus', 'sprCactus2', 'sprCactus3'] as const;
+        tryPlacePropNear(state, anchor.x, anchor.y, 20, 42, rng, 'cactus', rng.pick(cacti), 6, 7, false);
+      }
+    } else if (biome === 'sewers' || biome === 'pizza_sewers') {
+      if (rng.chance(0.75)) {
+        const toxic = rng.chance(0.65);
+        tryPlacePropNear(
+          state,
+          anchor.x,
+          anchor.y,
+          18,
+          36,
+          rng,
+          toxic ? 'toxic_barrel' : 'barrel',
+          toxic ? 'sprToxicBarrel' : 'sprBarrel',
+          10,
+          8,
+          true,
+        );
+      }
+    } else if (biome === 'scrapyard') {
+      if (i % 2 === 0) {
+        tryPlacePropNear(state, anchor.x, anchor.y, 22, 42, rng, 'car', 'sprCarIdle', 22, 11, true);
+      } else {
+        tryPlacePropNear(state, anchor.x, anchor.y, 18, 36, rng, 'barrel', 'sprBarrel', 10, 8, true);
+      }
+    } else if (biome === 'frozen_city') {
+      if (i % 2 === 0) {
+        tryPlacePropNear(state, anchor.x, anchor.y, 20, 40, rng, 'car', 'sprFrozenCar', 24, 11, true);
+      } else {
+        tryPlacePropNear(state, anchor.x, anchor.y, 20, 40, rng, 'pillar', 'sprPillar', 26, 9, true);
+      }
+    } else if (biome === 'labs') {
+      if (rng.chance(0.72)) {
+        const toxic = rng.chance(0.55);
+        tryPlacePropNear(
+          state,
+          anchor.x,
+          anchor.y,
+          18,
+          36,
+          rng,
+          toxic ? 'toxic_barrel' : 'barrel',
+          toxic ? 'sprToxicBarrel' : 'sprBarrel',
+          12,
+          8,
+          true,
+        );
+      }
+    } else if (biome === 'caves' || biome === 'cursed_caves') {
+      if (rng.chance(0.6)) {
+        tryPlacePropNear(state, anchor.x, anchor.y, 22, 42, rng, 'pillar', 'sprPillar', 24, 9, true);
+      }
+    } else if (biome === 'palace' || biome === 'vault') {
+      if (rng.chance(0.65)) {
+        tryPlacePropNear(state, anchor.x, anchor.y, 24, 44, rng, 'pillar', 'sprPalacePillar', 36, 9, true);
+      }
+    }
+  }
+
+  // Secondary ambient destructible cover across corridors & clearings
   switch (biome) {
     case 'desert':
     case 'oasis': {
       const cacti = ['sprCactus', 'sprCactus2', 'sprCactus3'] as const;
-      const count = rng.int(5, 8);
+      const count = rng.int(4, 7);
       for (let i = 0; i < count; i++) {
-        const pos = findSafeFloorSpot(state, rng, 64, 8, 22);
+        const pos = findSafeFloorSpot(state, rng, 56, 8, 24, false);
         if (rng.chance(0.65)) {
           addProp(state, 'cactus', pos.x, pos.y, rng.pick(cacti), 6, 7, false);
         } else {
@@ -618,9 +859,9 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
     }
     case 'sewers':
     case 'pizza_sewers': {
-      const count = rng.int(5, 8);
+      const count = rng.int(3, 5);
       for (let i = 0; i < count; i++) {
-        const pos = findSafeFloorSpot(state, rng, 64, 8, 24);
+        const pos = findSafeFloorSpot(state, rng, 64, 8, 26, false);
         if (rng.chance(0.6)) {
           addProp(state, 'toxic_barrel', pos.x, pos.y, 'sprToxicBarrel', 10, 8, true);
         } else {
@@ -630,44 +871,44 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
       break;
     }
     case 'scrapyard': {
-      const carCount = rng.int(3, 5);
+      const carCount = rng.int(2, 3);
       for (let i = 0; i < carCount; i++) {
-        const pos = findSafeFloorSpot(state, rng, 80, 12, 32);
-        addProp(state, 'car', pos.x, pos.y, 'sprCarIdle', 24, 12, true);
+        const pos = findSafeFloorSpot(state, rng, 80, 11, 34, false);
+        addProp(state, 'car', pos.x, pos.y, 'sprCarIdle', 22, 11, true);
       }
-      const barrelCount = rng.int(3, 5);
+      const barrelCount = rng.int(2, 4);
       for (let i = 0; i < barrelCount; i++) {
-        const pos = findSafeFloorSpot(state, rng, 64, 8, 22);
+        const pos = findSafeFloorSpot(state, rng, 64, 8, 24, false);
         addProp(state, 'barrel', pos.x, pos.y, 'sprBarrel', 10, 8, true);
       }
       break;
     }
     case 'caves':
     case 'cursed_caves': {
-      const count = rng.int(4, 6);
+      const count = rng.int(3, 5);
       for (let i = 0; i < count; i++) {
-        const pos = findSafeFloorSpot(state, rng, 72, 9, 28);
+        const pos = findSafeFloorSpot(state, rng, 72, 9, 28, false);
         addProp(state, 'pillar', pos.x, pos.y, 'sprPillar', 24, 9, true);
       }
       break;
     }
     case 'frozen_city': {
-      const carCount = rng.int(2, 4);
+      const carCount = rng.int(2, 3);
       for (let i = 0; i < carCount; i++) {
-        const pos = findSafeFloorSpot(state, rng, 80, 12, 32);
-        addProp(state, 'car', pos.x, pos.y, 'sprFrozenCar', 26, 12, true);
+        const pos = findSafeFloorSpot(state, rng, 80, 11, 32, false);
+        addProp(state, 'car', pos.x, pos.y, 'sprFrozenCar', 24, 11, true);
       }
-      const pillarCount = rng.int(2, 4);
+      const pillarCount = rng.int(2, 3);
       for (let i = 0; i < pillarCount; i++) {
-        const pos = findSafeFloorSpot(state, rng, 72, 9, 26);
+        const pos = findSafeFloorSpot(state, rng, 72, 9, 26, false);
         addProp(state, 'pillar', pos.x, pos.y, 'sprPillar', 26, 9, true);
       }
       break;
     }
     case 'labs': {
-      const count = rng.int(5, 8);
+      const count = rng.int(3, 5);
       for (let i = 0; i < count; i++) {
-        const pos = findSafeFloorSpot(state, rng, 68, 8, 24);
+        const pos = findSafeFloorSpot(state, rng, 68, 8, 26, false);
         if (rng.chance(0.55)) {
           addProp(state, 'toxic_barrel', pos.x, pos.y, 'sprToxicBarrel', 12, 8, true);
         } else {
@@ -678,20 +919,20 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
     }
     case 'palace':
     case 'vault': {
-      const count = rng.int(4, 6);
+      const count = rng.int(3, 5);
       for (let i = 0; i < count; i++) {
-        const pos = findSafeFloorSpot(state, rng, 76, 9, 28);
+        const pos = findSafeFloorSpot(state, rng, 76, 9, 28, false);
         addProp(state, 'pillar', pos.x, pos.y, 'sprPalacePillar', 36, 9, true);
       }
       break;
     }
     case 'mansion': {
       for (let i = 0; i < 2; i++) {
-        const pos = findSafeFloorSpot(state, rng, 80, 12, 32);
-        addProp(state, 'car', pos.x, pos.y, 'sprVenusCar', 28, 12, true);
+        const pos = findSafeFloorSpot(state, rng, 80, 11, 32, false);
+        addProp(state, 'car', pos.x, pos.y, 'sprVenusCar', 28, 11, true);
       }
       for (let i = 0; i < 3; i++) {
-        const pos = findSafeFloorSpot(state, rng, 68, 9, 24);
+        const pos = findSafeFloorSpot(state, rng, 68, 9, 24, false);
         addProp(state, 'pillar', pos.x, pos.y, 'sprPillar', 28, 9, true);
       }
       break;
@@ -699,7 +940,7 @@ function spawnBiomeProps(state: SimState, rng: SeededRng): void {
     default: {
       const count = rng.int(3, 5);
       for (let i = 0; i < count; i++) {
-        const pos = findSafeFloorSpot(state, rng, 68, 8, 24);
+        const pos = findSafeFloorSpot(state, rng, 68, 8, 24, false);
         addProp(state, 'barrel', pos.x, pos.y, 'sprBarrel', 12, 8, true);
       }
       break;
@@ -719,18 +960,15 @@ function getEnemyCost(def: EnemyDef): number {
 function getBiomePool(state: SimState): Array<{ def: EnemyDef; weight: number }> {
   let candidates = getEnemiesForBiome(state.biome, state.loop);
   if (candidates.length === 0) {
-    // Fallback for any biome without direct non-boss defs
     if (state.biome === 'campfire') return [];
     candidates = [ENEMIES.bandit!];
   }
 
   return candidates
     .filter((def) => {
-      // Keep 1-1 authentic: introduce big_maggot/gold_scorpion starting 1-2/1-3 unless Loop 1+
       if (state.loop === 0 && state.areaCode === '1-1') {
         if (def.id === 'gold_scorpion' || def.id === 'big_maggot') return false;
       }
-      // IDPD vans arrive via wave spawner, not static floor clutter
       if (def.id === 'idpd_van') return false;
       return true;
     })
@@ -744,6 +982,258 @@ function getBiomePool(state: SimState): Array<{ def: EnemyDef; weight: number }>
       if (def.loopOnly && state.loop > 0) weight += 2;
       return { def, weight };
     });
+}
+
+function pickBiomeSquadTemplates(state: SimState): string[][] {
+  const loop = state.loop;
+  const code = state.areaCode;
+
+  switch (state.biome) {
+    case 'desert': {
+      const templates: string[][] = [
+        ['bandit', 'bandit', 'bandit'],
+        ['bandit', 'bandit'],
+        ['maggot_nest', 'maggot', 'maggot', 'maggot'],
+        ['scorpion', 'bandit', 'bandit'],
+        ['bandit', 'maggot', 'maggot'],
+      ];
+      if (code !== '1-1' || loop > 0) {
+        templates.push(['big_maggot', 'maggot', 'maggot']);
+        templates.push(['scorpion', 'bandit']);
+      }
+      if (code === '1-3' || loop > 0) {
+        templates.push(['gold_scorpion', 'bandit', 'bandit']);
+      }
+      return templates;
+    }
+    case 'sewers':
+      return [
+        ['rat', 'rat', 'rat', 'rat'],
+        ['gator', 'gator'],
+        ['gator', 'rat', 'rat'],
+        ['big_rat', 'rat', 'ballguy'],
+        ['buff_gator', 'rat', 'rat'],
+        ['ballguy', 'ballguy', 'rat'],
+      ];
+    case 'scrapyard':
+      return [
+        ['raven', 'raven', 'sniper'],
+        ['salamander', 'raven', 'assassin'],
+        ['sniper', 'fireballer', 'assassin'],
+        ['assassin', 'assassin', 'raven'],
+        ['raven', 'raven', 'fireballer'],
+      ];
+    case 'caves':
+    case 'cursed_caves': {
+      const templates: string[][] = [
+        ['spider', 'spider', 'spider'],
+        ['laser_crystal', 'spider', 'spider'],
+        ['laser_crystal', 'spider'],
+      ];
+      if (loop > 0) {
+        templates.push(['lightning_crystal', 'spider', 'spider']);
+      }
+      return templates;
+    }
+    case 'frozen_city': {
+      const templates: string[][] = [
+        ['snowbot', 'snowbot', 'wolf'],
+        ['snow_tank', 'wolf', 'wolf'],
+        ['wolf', 'wolf', 'snowbot'],
+        ['snowbot', 'snowbot', 'snowbot'],
+      ];
+      if (loop > 0) {
+        templates.push(['gold_snow_tank', 'wolf', 'snowbot']);
+      }
+      return templates;
+    }
+    case 'labs':
+      return [
+        ['necromancer', 'freak', 'freak', 'freak', 'explo_freak'],
+        ['turret', 'rhino_freak', 'freak', 'freak'],
+        ['freak', 'freak', 'freak', 'explo_freak'],
+        ['turret', 'turret', 'freak', 'freak'],
+      ];
+    case 'palace':
+      return [
+        ['guardian', 'guardian', 'explo_guardian'],
+        ['guardian_dog', 'guardian'],
+        ['explo_guardian', 'explo_guardian', 'guardian'],
+      ];
+    case 'oasis':
+      return [
+        ['molefish', 'molefish', 'molefish'],
+        ['molefish', 'molefish'],
+      ];
+    case 'pizza_sewers':
+      return [
+        ['turtle', 'rat', 'rat'],
+        ['turtle', 'turtle'],
+      ];
+    case 'mansion':
+      return [
+        ['bandit', 'bandit', 'sniper'],
+        ['fireballer', 'bandit', 'bandit'],
+      ];
+    case 'jungle':
+      return [
+        ['jungle_bandit', 'jungle_bandit', 'jungle_assassin'],
+        ['jungle_assassin', 'jungle_assassin', 'jungle_bandit'],
+      ];
+    case 'vault':
+      return [['crown_guardian', 'crown_guardian']];
+    case 'hq':
+      return [
+        ['idpd_grunt', 'idpd_grunt', 'idpd_inspector'],
+        ['idpd_shielder', 'idpd_grunt', 'idpd_grunt'],
+        ['idpd_inspector', 'idpd_shielder', 'idpd_grunt'],
+      ];
+    default:
+      return [['bandit', 'bandit']];
+  }
+}
+
+/**
+ * Selects spatially distinct encounter anchor pockets across near-mid and deep zones,
+ * strictly respecting tick-0 safe spawn clearance and anchoring guards near chests/canisters.
+ */
+function pickEncounterAnchors(
+  state: SimState,
+  desiredCount: number,
+  rng: SeededRng,
+): Array<{ x: number; y: number; bfsDist: number }> {
+  const map = state.map;
+  const ts = map.tileSize || TILE_SIZE;
+  const bfs = computeSpawnBfs(map);
+  const anchors: Array<{ x: number; y: number; bfsDist: number }> = [];
+  const minAnchorSepSq = 68 * 68;
+
+  const tryAddAnchor = (x: number, y: number, bfsDist: number): boolean => {
+    if (!isSpotSafeFromSpawn(state, x, y, MIN_SPAWN_NO_LOS_DIST, MIN_SPAWN_WITH_LOS_DIST)) {
+      return false;
+    }
+    if (isCircleOverlappingSolid(map, x, y, 7)) return false;
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i]!;
+      const dx = x - a.x;
+      const dy = y - a.y;
+      if (dx * dx + dy * dy < minAnchorSepSq) return false;
+    }
+    anchors.push({ x, y, bfsDist });
+    return true;
+  };
+
+  // 1. Seed up to 2 risk-reward encounter pockets guarding chests & rad canisters
+  for (let i = 0; i < state.props.length && anchors.length < Math.min(2, desiredCount); i++) {
+    const prop = state.props[i]!;
+    if (
+      prop.kind !== 'weapon_chest' &&
+      prop.kind !== 'big_weapon_chest' &&
+      prop.kind !== 'rad_canister' &&
+      prop.kind !== 'ammo_chest'
+    ) {
+      continue;
+    }
+    const { tx, ty } = worldToTile(prop.x, prop.y, ts);
+    const d = tx >= 0 && ty >= 0 && tx < map.width && ty < map.height ? bfs[ty * map.width + tx]! : -1;
+    if (d >= 8) {
+      tryAddAnchor(prop.x, prop.y, d);
+    }
+  }
+
+  // 2. Collect safe walkable tiles partitioned into near-mid (first bend skirmish) and deep pockets
+  const nearMid: Array<{ x: number; y: number; d: number }> = [];
+  const deep: Array<{ x: number; y: number; d: number }> = [];
+
+  for (let ty = 3; ty < map.height - 3; ty++) {
+    for (let tx = 3; tx < map.width - 3; tx++) {
+      const d = bfs[ty * map.width + tx]!;
+      if (d < 8) continue;
+      if (!isWalkableTile(getTile(map, tx, ty))) continue;
+      const pos = tileToWorldCenter(tx, ty, ts);
+      if (!isSpotSafeFromSpawn(state, pos.x, pos.y, MIN_SPAWN_NO_LOS_DIST, MIN_SPAWN_WITH_LOS_DIST)) {
+        continue;
+      }
+      if (isCircleOverlappingSolid(map, pos.x, pos.y, 7)) continue;
+      if (d <= 17) {
+        nearMid.push({ x: pos.x, y: pos.y, d });
+      } else {
+        deep.push({ x: pos.x, y: pos.y, d });
+      }
+    }
+  }
+
+  // Pick 1..2 near-mid anchors so action ignites cleanly right past the first canyon bend
+  if (nearMid.length > 0 && anchors.length < desiredCount) {
+    const nearTarget = Math.min(desiredCount, anchors.length + 2);
+    for (let tries = 0; tries < 40 && anchors.length < nearTarget; tries++) {
+      const c = rng.pick(nearMid);
+      tryAddAnchor(c.x, c.y, c.d);
+    }
+  }
+
+  // Fill remaining anchors across deep pockets (then nearMid if map is compact)
+  const combined = deep.length > 0 ? deep : nearMid;
+  for (let tries = 0; tries < 100 && anchors.length < desiredCount && combined.length > 0; tries++) {
+    const c = rng.pick(combined);
+    tryAddAnchor(c.x, c.y, c.d);
+  }
+  for (let tries = 0; tries < 60 && anchors.length < desiredCount && nearMid.length > 0; tries++) {
+    const c = rng.pick(nearMid);
+    tryAddAnchor(c.x, c.y, c.d);
+  }
+
+  // Fallback if map is tiny (e.g., Vault / Pizza Sewers)
+  while (anchors.length < Math.max(1, Math.min(2, desiredCount))) {
+    const spot = findSafeFloorSpot(state, rng, 108, 8, 16, true);
+    anchors.push({ x: spot.x, y: spot.y, bfsDist: 12 });
+  }
+
+  return anchors;
+}
+
+function findSquadMemberSpot(
+  state: SimState,
+  anchorX: number,
+  anchorY: number,
+  radius: number,
+  rng: SeededRng,
+): { x: number; y: number } {
+  for (let attempt = 0; attempt < 28; attempt++) {
+    const ang = rng.range(0, Math.PI * 2);
+    const r = rng.range(16, 38);
+    const cx = anchorX + Math.cos(ang) * r;
+    const cy = anchorY + Math.sin(ang) * r;
+    const safe = ensureSafeEntityPosition(state, cx, cy, radius, false);
+    if (!isSpotSafeFromSpawn(state, safe.x, safe.y, MIN_SPAWN_NO_LOS_DIST, MIN_SPAWN_WITH_LOS_DIST)) {
+      continue;
+    }
+    let overlap = false;
+    for (let i = 0; i < state.enemies.length; i++) {
+      const e = state.enemies[i]!;
+      const dx = safe.x - e.x;
+      const dy = safe.y - e.y;
+      const minSep = e.radius + radius + 4;
+      if (dx * dx + dy * dy < minSep * minSep) {
+        overlap = true;
+        break;
+      }
+    }
+    if (!overlap) {
+      for (let i = 0; i < state.props.length; i++) {
+        const p = state.props[i]!;
+        const dx = safe.x - p.x;
+        const dy = safe.y - p.y;
+        const minSep = p.radius + radius + 5;
+        if (dx * dx + dy * dy < minSep * minSep) {
+          overlap = true;
+          break;
+        }
+      }
+    }
+    if (!overlap) return safe;
+  }
+  return findSafeFloorSpot(state, rng, MIN_SPAWN_NO_LOS_DIST, radius, 16, true);
 }
 
 function pickWeightedEnemy(
@@ -774,8 +1264,8 @@ function countHostiles(state: SimState): number {
 
 /**
  * Canonical area entity populator matching `PopulateAreaFn`.
- * Spawns biome-authentic enemies, props, chests (if not already present), mimics,
- * bosses on boss levels, and schedules IDPD waves on Loop 1+ or Rogue/high idpdHeat.
+ * Spawns biome-authentic encounter squads in safe pockets (zero tick-0 spawn LOS snipes),
+ * strategic explosive barrels/cover near packs, chests, mimics, bosses, and IDPD waves.
  */
 export function populateAreaEntities(state: SimState, rng: SeededRng): void {
   const rt = resetAreaRuntime(state);
@@ -794,60 +1284,68 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
     spawnLevelChests(state, rng);
   }
 
-  // 1. Biome props & 7-3 symmetrical Throne Generators
-  spawnBiomeProps(state, rng);
-  rt.throneLastGenCount = state.generatorsRemaining;
-
-  // 2. Biome enemy roster scaled by areaDef.enemyBudgetBase, loop count, and Crown of Blood/Luck
+  // 1. Compute spatial encounter pockets before placing props so barrels/cover sit beside enemy packs!
   const pool = getBiomePool(state);
   let budget = areaDef.enemyBudgetBase;
-  if (budget > 0 && pool.length > 0) {
+  if (budget > 0) {
     budget = Math.round(budget * (1 + state.loop * 0.55));
     if (state.crown === 'blood') budget = Math.round(budget * 1.45);
     if (state.crown === 'luck') budget = Math.round(budget * 0.85);
+  }
 
-    const maxEnemiesCap = Math.min(72, 22 + state.loop * 14 + (state.crown === 'blood' ? 12 : 0));
+  const desiredAnchors =
+    budget > 0 && pool.length > 0
+      ? Math.max(3, Math.min(8, Math.round(budget / 8)))
+      : 0;
+  const anchors =
+    desiredAnchors > 0 ? pickEncounterAnchors(state, desiredAnchors, rng) : [];
+
+  // 2. Biome props, explosive barrels/cars near encounter pockets & 7-3 symmetrical Throne Generators
+  spawnBiomeProps(state, rng, anchors);
+  rt.throneLastGenCount = state.generatorsRemaining;
+
+  // 3. Purposeful Biome Enemy Squads across encounter pockets
+  if (budget > 0 && pool.length > 0) {
+    const maxEnemiesCap = Math.min(76, 26 + state.loop * 14 + (state.crown === 'blood' ? 12 : 0));
+    const templates = pickBiomeSquadTemplates(state);
+    const allowedIds = new Set(pool.map((p) => p.def.id));
     let remaining = budget;
-    let guard = 0;
 
-    while (remaining >= 2 && state.enemies.length < maxEnemiesCap && guard < 120) {
+    // First pass: stamp 1 cohesive biome squad at each encounter anchor
+    for (let aIdx = 0; aIdx < anchors.length && remaining >= 2 && state.enemies.length < maxEnemiesCap; aIdx++) {
+      const anchor = anchors[aIdx]!;
+      const rawTemplate = rng.pick(templates);
+      const squadIds = rawTemplate.filter((id) => allowedIds.has(id) && Boolean(ENEMIES[id]));
+      if (squadIds.length === 0) continue;
+
+      for (let m = 0; m < squadIds.length && remaining >= 1 && state.enemies.length < maxEnemiesCap; m++) {
+        const def = ENEMIES[squadIds[m]!]!;
+        const cost = getEnemyCost(def);
+        if (m > 0 && cost > remaining + 1) continue;
+        const spot = findSquadMemberSpot(state, anchor.x, anchor.y, def.radius, rng);
+        createEnemyEntity(state, def.id, spot.x, spot.y, rng);
+        remaining -= cost;
+      }
+    }
+
+    // Second pass: spend any leftover budget reinforcing existing encounter anchors (keeping pack cohesion)
+    let guard = 0;
+    while (remaining >= 2 && state.enemies.length < maxEnemiesCap && guard < 80) {
       guard += 1;
       const chosen = pickWeightedEnemy(pool, rng);
       const cost = getEnemyCost(chosen);
-      if (cost > remaining && remaining >= 2 && guard < 40) {
-        continue;
-      }
+      if (cost > remaining && remaining >= 2 && guard < 30) continue;
 
-      const spot = findSafeFloorSpot(state, rng, 96, chosen.radius, 16);
+      const anchor = anchors.length > 0 ? rng.pick(anchors) : null;
+      const spot = anchor
+        ? findSquadMemberSpot(state, anchor.x, anchor.y, chosen.radius, rng)
+        : findSafeFloorSpot(state, rng, MIN_SPAWN_NO_LOS_DIST, chosen.radius, 16, true);
       createEnemyEntity(state, chosen.id, spot.x, spot.y, rng);
       remaining -= cost;
-
-      // Spawn small packs for swarm enemies (maggots, rats, freaks)
-      if (
-        (chosen.id === 'maggot' || chosen.id === 'rat' || chosen.id === 'freak') &&
-        remaining >= 2 &&
-        rng.chance(0.45) &&
-        state.enemies.length < maxEnemiesCap
-      ) {
-        const packExtra = rng.int(1, 2);
-        for (let k = 0; k < packExtra && remaining >= 2 && state.enemies.length < maxEnemiesCap; k++) {
-          const nearX = spot.x + rng.range(-18, 18);
-          const nearY = spot.y + rng.range(-18, 18);
-          const candidate = ensureSafeEntityPosition(state, nearX, nearY, chosen.radius, false);
-          const dPx = candidate.x - state.player.x;
-          const dPy = candidate.y - state.player.y;
-          const packSpot =
-            dPx * dPx + dPy * dPy >= 96 * 96
-              ? candidate
-              : findSafeFloorSpot(state, rng, 96, chosen.radius, 12);
-          createEnemyEntity(state, chosen.id, packSpot.x, packSpot.y, rng);
-          remaining -= Math.max(1, cost - 1);
-        }
-      }
     }
   }
 
-  // 3. Mimics on 2-1+ or Loop 1+ (never on 1-1..1-3 Loop 0 or 7-3/0-1 boss arenas)
+  // 4. Mimics on 2-1+ or Loop 1+ (never on 1-1..1-3 Loop 0 or 7-3/0-1 boss arenas)
   const isEarlyDesert =
     state.loop === 0 &&
     (state.areaCode === '1-1' || state.areaCode === '1-2' || state.areaCode === '1-3');
@@ -855,19 +1353,19 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
     const mimicChance = state.loop > 0 ? 0.35 : 0.18;
     if (rng.chance(mimicChance)) {
       const mimicDef = rng.chance(0.35) ? 'weapon_mimic' : 'mimic';
-      const spot = findSafeFloorSpot(state, rng, 104, 8, 20);
+      const spot = findSafeFloorSpot(state, rng, 118, 8, 22, true);
       createEnemyEntity(state, mimicDef, spot.x, spot.y, rng, {
         initialAiState: 'disguised',
       });
     }
   }
 
-  // 4. Bosses on boss areas: 1-3, 3-3, 5-3, 7-3, 0-1
+  // 5. Bosses on boss areas: 1-3, 3-3, 5-3, 7-3, 0-1
   if (areaDef.bossId) {
     spawnBossEntity(state, areaDef.bossId, rng);
   }
 
-  // 5. Loop 1+ / Rogue / high idpdHeat IDPD Portal & Van reinforcements
+  // 6. Loop 1+ / Rogue / high idpdHeat IDPD Portal & Van reinforcements
   const allowIdpdWaves =
     state.areaCode !== '7-3' &&
     state.areaCode !== '0-1' &&
@@ -875,15 +1373,14 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
   if (allowIdpdWaves && (state.loop > 0 || state.player.mutant === 'rogue' || state.idpdHeat > 0)) {
     const waves = Math.min(3, 1 + state.loop + (state.idpdHeat >= 3 ? 1 : 0));
     rt.idpdWavesRemaining = waves;
-    rt.idpdWaveTimer = state.loop > 0 ? rng.int(75, 135) : rng.int(120, 210);
+    rt.idpdWaveTimer = state.loop > 0 ? rng.int(85, 145) : rng.int(130, 215);
 
-    // On Loop 1+, also seed an initial IDPD squad on floor start for immediate Loop intensity
     if (state.loop > 0 && state.areaCode !== 'hq-1') {
       spawnIdpdWave(state, rng, { includeVan: false, count: 2 });
     }
   }
 
-  // 6. Accurate level start enemy count (hostiles only)
+  // 7. Accurate level start enemy count (hostiles only)
   state.levelStartEnemyCount = countHostiles(state);
 }
 

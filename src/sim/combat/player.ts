@@ -240,6 +240,7 @@ function tryFireWeaponSlot(
   if (wep.ammoType !== 'melee' && player.ammo[wep.ammoType] < totalAmmoCost) {
     if (isTriggerEdge) {
       emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
+      emitEvent(state, { type: 'ammo_empty', x: player.x, y: player.y, ammoType: wep.ammoType });
     }
     return false;
   }
