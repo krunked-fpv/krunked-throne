@@ -9,11 +9,13 @@ import {
   type CrownId,
   type DebugBridge,
   type GameScreen,
+  type InputDeviceMode,
   type InputFrame,
   type KeyBindings,
   type MutantId,
   type MutationId,
   type PlaytestTelemetry,
+  type RenderSettings,
   type SimEvent,
   type SimState,
   type TargetFps,
@@ -43,7 +45,14 @@ import {
   givePlayerWeapon,
   grantMutationById,
 } from '@/sim/progression';
-import { HudRenderer, MenuSystem, SaveManager, type MenuAction, type MenuRenderContext } from '@/ui';
+import {
+  HudRenderer,
+  MenuSystem,
+  SaveManager,
+  type HudRenderContext,
+  type MenuAction,
+  type MenuRenderContext,
+} from '@/ui';
 import { createGameDataProvider } from './data-adapter';
 import { DevPlaytestOverlay } from './debug-overlay';
 
@@ -139,9 +148,13 @@ export class GameApp {
   private lastPickerOpenMs = 0;
   private fileInputEl: HTMLInputElement | null = null;
 
+  // Audio unlock resilience across mouse, touch, keyboard, and gamepad
+  private audioUnlockDone = false;
+  private audioUnlockInFlight = false;
+
   // Bound event listeners
   private boundResize = () => this.handleResize();
-  private boundUnlock = () => this.handleFirstUserGesture();
+  private boundUnlock = () => this.tryUnlockAudio();
   private boundCanvasClick = (e: MouseEvent) => this.handleCanvasSyncClick(e);
   private boundWindowError = (e: ErrorEvent) => {
     this.consoleErrors.push(e.message || String(e.error ?? 'Unknown error'));
@@ -187,12 +200,15 @@ export class GameApp {
       resolveAudioUrl: (relPath) => this.bundle.getAudioUrl(relPath),
     });
 
-    this.input = new InputManager(save.keybinds);
+    this.input = new InputManager(save.keybinds, {
+      controls: save.controls,
+      onUserInteraction: () => this.tryUnlockAudio(),
+    });
     this.renderer = new GameRenderer(this.bundle, this.dataProvider);
     this.hud = new HudRenderer(this.bundle, this.dataProvider);
     this.menus = new MenuSystem(this.bundle, this.dataProvider);
 
-    this.renderer.applyCanvasSize(this.canvas, save.render);
+    this.applyResponsiveCanvasSize(save.render);
     const sz = this.renderer.getLogicalSize();
     this.input.setLogicalSize(sz.width, sz.height);
     this.input.attach(this.canvas);
@@ -203,8 +219,14 @@ export class GameApp {
 
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', this.boundResize);
-      window.addEventListener('pointerdown', this.boundUnlock, { once: true });
-      window.addEventListener('keydown', this.boundUnlock, { once: true });
+      window.addEventListener('orientationchange', this.boundResize);
+      window.visualViewport?.addEventListener('resize', this.boundResize);
+      window.addEventListener('pointerdown', this.boundUnlock);
+      window.addEventListener('touchstart', this.boundUnlock, { passive: true });
+      window.addEventListener('touchend', this.boundUnlock, { passive: true });
+      window.addEventListener('mousedown', this.boundUnlock);
+      window.addEventListener('keydown', this.boundUnlock);
+      window.addEventListener('gamepadconnected', this.boundUnlock);
       const bridge = this.createDebugBridge();
       window.__NT_DEBUG__ = bridge;
       const isDevOrDebug =
@@ -235,29 +257,76 @@ export class GameApp {
     this.audio?.stopAmbience(0);
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.boundResize);
-      window.removeEventListener('pointerdown', this.boundUnlock);
-      window.removeEventListener('keydown', this.boundUnlock);
+      window.removeEventListener('orientationchange', this.boundResize);
+      window.visualViewport?.removeEventListener('resize', this.boundResize);
+      this.removeAudioUnlockListeners();
       window.removeEventListener('error', this.boundWindowError);
       window.removeEventListener('unhandledrejection', this.boundRejection);
     }
   }
 
+  private removeAudioUnlockListeners(): void {
+    if (typeof window === 'undefined') return;
+    window.removeEventListener('pointerdown', this.boundUnlock);
+    window.removeEventListener('touchstart', this.boundUnlock);
+    window.removeEventListener('touchend', this.boundUnlock);
+    window.removeEventListener('mousedown', this.boundUnlock);
+    window.removeEventListener('keydown', this.boundUnlock);
+    window.removeEventListener('gamepadconnected', this.boundUnlock);
+  }
+
+  private applyResponsiveCanvasSize(renderSettings: RenderSettings): void {
+    this.renderer.applyCanvasSize(this.canvas, renderSettings);
+    if (typeof window === 'undefined') return;
+    const { width: targetW, height: targetH } = this.renderer.getLogicalSize();
+    const vv = window.visualViewport;
+    const availW = Math.max(1, Math.floor(vv ? vv.width : window.innerWidth));
+    const availH = Math.max(1, Math.floor(vv ? vv.height : window.innerHeight));
+    const curW = parseFloat(this.canvas.style.width) || targetW;
+    const curH = parseFloat(this.canvas.style.height) || targetH;
+    if (curW > availW || curH > availH) {
+      const scale = Math.min(availW / targetW, availH / targetH);
+      this.canvas.style.width = `${Math.max(1, Math.floor(targetW * scale))}px`;
+      this.canvas.style.height = `${Math.max(1, Math.floor(targetH * scale))}px`;
+    }
+  }
+
   private handleResize(): void {
     const save = this.saveManager.getData();
-    this.renderer.applyCanvasSize(this.canvas, save.render);
+    this.applyResponsiveCanvasSize(save.render);
     const sz = this.renderer.getLogicalSize();
     this.input.setLogicalSize(sz.width, sz.height);
   }
 
-  private handleFirstUserGesture(): void {
-    void this.audio.unlock().then(() => {
-      if (this.bundle.sourceMode === 'steam') {
-        const validCore = CORE_PRELOAD_SFX.filter((k) => Boolean(this.bundle.manifest.sounds[k]));
-        void this.audio.preloadSounds(validCore);
-        this.lastMusicSignature = '';
-        this.syncMusicRouting();
-      }
-    });
+  private tryUnlockAudio(): void {
+    if (this.audioUnlockDone || this.audioUnlockInFlight || !this.audio) return;
+    if (this.audio.getStats().unlocked) {
+      this.audioUnlockDone = true;
+      this.removeAudioUnlockListeners();
+      return;
+    }
+
+    this.audioUnlockInFlight = true;
+    void this.audio
+      .unlock()
+      .then((unlocked) => {
+        if (unlocked) {
+          this.audioUnlockDone = true;
+          this.removeAudioUnlockListeners();
+          if (this.bundle.sourceMode === 'steam') {
+            const validCore = CORE_PRELOAD_SFX.filter((k) => Boolean(this.bundle.manifest.sounds[k]));
+            void this.audio.preloadSounds(validCore);
+            this.lastMusicSignature = '';
+            this.syncMusicRouting();
+          }
+        }
+      })
+      .catch(() => {
+        // Retry gracefully on next pointer, touch, key, or gamepad interaction
+      })
+      .finally(() => {
+        this.audioUnlockInFlight = false;
+      });
   }
 
   private startLoop(): void {
@@ -323,6 +392,12 @@ export class GameApp {
     this.presentationDt += dt;
     let screenTransitioned = false;
 
+    this.input.setGameplayActive(this.screen === 'playing');
+    this.canvas.classList.toggle(
+      'hide-cursor',
+      this.screen === 'playing' && this.input.getInputMode() === 'gamepad',
+    );
+
     if (this.screen === 'playing' && this.simState) {
       this.simAccumulator += dt;
 
@@ -334,11 +409,13 @@ export class GameApp {
           this.renderer.getCamera(),
           this.simState.player.x,
           this.simState.player.y,
+          { enemies: this.simState.enemies, map: this.simState.map },
         );
 
         if (inputFrame.pausePressed) {
           this.screen = 'paused';
           screenTransitioned = true;
+          this.input.setGameplayActive(false);
           this.audio.setPaused(true);
           this.simAccumulator = 0;
           this.input.consumeMenuInput(); // clear simultaneous menuBack latch
@@ -352,6 +429,7 @@ export class GameApp {
 
         if (this.screen !== 'playing') {
           screenTransitioned = true;
+          this.input.setGameplayActive(false);
           this.simAccumulator = 0;
           break;
         }
@@ -374,6 +452,7 @@ export class GameApp {
         const interpAlpha =
           targetFps === 30 ? 1 : Math.max(0, Math.min(1, this.simAccumulator / SIM_DT));
 
+        this.input.updatePresentation(renderDt);
         const pointer = this.input.getPointerLogical();
         const aimWorld = this.renderer.getCamera().screenToWorld(pointer.x, pointer.y);
         this.renderer.updatePresentation(
@@ -385,15 +464,7 @@ export class GameApp {
           interpAlpha,
         );
 
-        this.renderer.renderWorld(this.ctx, this.simState, save.render, interpAlpha, pointer);
-        this.hud.render(this.ctx, {
-          state: this.simState,
-          camera: this.renderer.getCamera(),
-          renderSettings: save.render,
-          fps: this.measuredFps,
-          width,
-          height,
-        });
+        this.renderPlayingFrame(this.simState, save.render, interpAlpha, pointer, width, height);
         this.recordRenderedFrame(nowMs);
         return;
       }
@@ -408,6 +479,7 @@ export class GameApp {
         ? this.assetStatusText
         : undefined;
 
+    const gpInfo = this.input.getGamepadInfo();
     const menuCtx: MenuRenderContext = {
       screen: this.screen,
       save: this.saveManager.getData(),
@@ -421,6 +493,10 @@ export class GameApp {
       hasServerSteam: this.hasServerSteam,
       assetStatusText: activeStatusText,
       assetLoading: this.assetLoading,
+      inputMode: this.input.getInputMode(),
+      gamepadConnected: gpInfo.connected,
+      gamepadName: gpInfo.padName,
+      gamepadProfile: gpInfo.profile,
     };
 
     // Ensure hit regions are populated for this screen before sampling menu input
@@ -451,27 +527,27 @@ export class GameApp {
     const curSize = this.renderer.getLogicalSize();
     if (this.screen === 'playing' && this.simState) {
       const pointer = this.input.getPointerLogical();
-      this.renderer.renderWorld(this.ctx, this.simState, latestSave.render, 1, pointer);
-      this.hud.render(this.ctx, {
-        state: this.simState,
-        camera: this.renderer.getCamera(),
-        renderSettings: latestSave.render,
-        fps: this.measuredFps,
-        width: curSize.width,
-        height: curSize.height,
-      });
+      this.renderPlayingFrame(
+        this.simState,
+        latestSave.render,
+        1,
+        pointer,
+        curSize.width,
+        curSize.height,
+      );
     } else {
+      const latestGp = this.input.getGamepadInfo();
+      const curInputMode = this.input.getInputMode();
       if (this.simState && this.shouldRenderWorldBehindScreen(this.screen)) {
-        this.renderer.renderWorld(this.ctx, this.simState, latestSave.render, 1);
+        this.renderWorldWithMode(this.simState, latestSave.render, 1, undefined, curInputMode);
         if (this.shouldRenderHudBehindScreen(this.screen)) {
-          this.hud.render(this.ctx, {
-            state: this.simState,
-            camera: this.renderer.getCamera(),
-            renderSettings: latestSave.render,
-            fps: this.measuredFps,
-            width: curSize.width,
-            height: curSize.height,
-          });
+          this.renderHudWithMode(
+            this.simState,
+            latestSave.render,
+            curSize.width,
+            curSize.height,
+            curInputMode,
+          );
         }
       }
       this.menus.render(this.ctx, {
@@ -487,9 +563,100 @@ export class GameApp {
         hasServerSteam: this.hasServerSteam,
         assetStatusText: activeStatusText,
         assetLoading: this.assetLoading,
+        inputMode: curInputMode,
+        gamepadConnected: latestGp.connected,
+        gamepadName: latestGp.padName,
+        gamepadProfile: latestGp.profile,
       });
     }
     this.recordRenderedFrame(nowMs);
+  }
+
+  private renderWorldWithMode(
+    state: SimState,
+    renderSettings: RenderSettings,
+    interpAlpha: number,
+    pointerLogical: { x: number; y: number } | undefined,
+    inputMode: InputDeviceMode,
+  ): void {
+    const fn = this.renderer.renderWorld as (
+      ctx: CanvasRenderingContext2D,
+      state: SimState,
+      settings: RenderSettings,
+      interpAlpha: number,
+      pointerLogical?: { x: number; y: number },
+      inputMode?: InputDeviceMode,
+    ) => void;
+    fn.call(this.renderer, this.ctx, state, renderSettings, interpAlpha, pointerLogical, inputMode);
+  }
+
+  private renderHudWithMode(
+    state: SimState,
+    renderSettings: RenderSettings,
+    width: number,
+    height: number,
+    inputMode: InputDeviceMode,
+  ): void {
+    const hudCtx: HudRenderContext & { inputMode?: InputDeviceMode } = {
+      state,
+      camera: this.renderer.getCamera(),
+      renderSettings,
+      fps: this.measuredFps,
+      width,
+      height,
+      inputMode,
+    };
+    this.hud.render(this.ctx, hudCtx);
+  }
+
+  private hasNearbyInteractable(state: SimState): boolean {
+    const p = state.player;
+    if (!p.alive) return false;
+    const maxDistSq = 34 * 34;
+    for (let i = 0; i < state.pickups.length; i++) {
+      const pk = state.pickups[i]!;
+      if (pk.kind !== 'weapon') continue;
+      const dx = pk.x - p.x;
+      const dy = pk.y - p.y;
+      if (dx * dx + dy * dy <= maxDistSq) return true;
+    }
+    for (let i = 0; i < state.props.length; i++) {
+      const pr = state.props[i]!;
+      if (
+        pr.opened ||
+        (pr.kind !== 'weapon_chest' &&
+          pr.kind !== 'big_weapon_chest' &&
+          pr.kind !== 'ammo_chest' &&
+          pr.kind !== 'proto_statue')
+      ) {
+        continue;
+      }
+      const dx = pr.x - p.x;
+      const dy = pr.y - p.y;
+      if (dx * dx + dy * dy <= maxDistSq) return true;
+    }
+    return false;
+  }
+
+  private renderPlayingFrame(
+    state: SimState,
+    renderSettings: RenderSettings,
+    interpAlpha: number,
+    pointer: { x: number; y: number },
+    width: number,
+    height: number,
+  ): void {
+    const inputMode = this.input.getInputMode();
+    this.renderWorldWithMode(state, renderSettings, interpAlpha, pointer, inputMode);
+    this.renderHudWithMode(state, renderSettings, width, height, inputMode);
+    // Strict visibility rule: renders ZERO pixels unless active touch mode is enabled
+    this.input.renderTouchOverlay(
+      this.ctx,
+      width,
+      height,
+      this.hasNearbyInteractable(state),
+      this.timeSec,
+    );
   }
 
   private shouldRenderHudBehindScreen(screen: GameScreen): boolean {
@@ -525,11 +692,46 @@ export class GameApp {
     this.renderer.consumeEvents(events, this.simState);
     this.warmSteamAudioForEvents(events);
     this.audio.consumeEvents(events, this.simState.player.x, this.simState.player.y);
+    this.triggerRumbleForEvents(events);
 
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
       if (ev.type === 'area_change' || ev.type === 'boss_intro' || ev.type === 'player_died') {
         this.syncMusicRouting();
+      }
+    }
+  }
+
+  private triggerRumbleForEvents(events: readonly SimEvent[]): void {
+    if (this.input.getInputMode() !== 'gamepad') return;
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i] as SimEvent | { type: string; killed?: boolean; speed?: number };
+      if (ev.type === 'player_died') {
+        this.input.rumble('death');
+      } else if (ev.type === 'sfx') {
+        const s = (ev as Extract<SimEvent, { type: 'sfx' }>).sound;
+        if (s === 'sndExplosion') {
+          this.input.rumble('explosion');
+        } else if (s.startsWith('sndMutant') && s.endsWith('Hurt')) {
+          this.input.rumble('hurt');
+        } else if (s.endsWith('Die') || s === 'sndEnemyDie') {
+          this.input.rumble('kill');
+        }
+      } else if (ev.type === 'shake') {
+        const sh = ev as Extract<SimEvent, { type: 'shake' }>;
+        if (sh.trauma >= 0.48) {
+          this.input.rumble('explosion');
+        } else if ((sh.kick ?? 0) >= 3.5 || sh.trauma >= 0.24) {
+          this.input.rumble('fire_heavy');
+        } else if ((sh.kick ?? 0) > 0 || sh.trauma >= 0.08) {
+          this.input.rumble('fire_light');
+        }
+      } else if (ev.type === 'melee_deflect') {
+        this.input.rumble('parry');
+      } else if (ev.type === 'hit_confirm' && (ev as { killed?: boolean }).killed) {
+        this.input.rumble('kill');
+      } else if (ev.type === 'corpse_impact') {
+        this.input.rumble('fire_light');
       }
     }
   }
@@ -787,7 +989,7 @@ export class GameApp {
 
       case 'update_render': {
         const updated = this.saveManager.updateRender(action.partial);
-        this.renderer.applyCanvasSize(this.canvas, updated);
+        this.applyResponsiveCanvasSize(updated);
         const sz = this.renderer.getLogicalSize();
         this.input.setLogicalSize(sz.width, sz.height);
         if (action.partial.targetFps !== undefined || action.partial.classic30Fps !== undefined) {
@@ -800,9 +1002,21 @@ export class GameApp {
         break;
       }
 
+      case 'update_controls': {
+        const updated = this.saveManager.updateControls(action.partial);
+        this.input.setControlSettings(updated);
+        break;
+      }
+
       case 'begin_rebind': {
         this.rebindingField = action.field;
         this.input.beginKeyCapture();
+        break;
+      }
+
+      case 'cancel_rebind': {
+        this.rebindingField = null;
+        this.input.cancelKeyCapture();
         break;
       }
 
@@ -1051,6 +1265,10 @@ export class GameApp {
           canvasWidth: w,
           canvasHeight: LOGICAL_HEIGHT,
           consoleErrors: [...this.consoleErrors],
+          inputMode: this.input.getInputMode(),
+          gamepadConnected: this.input.getGamepadInfo().connected,
+          gamepadName: this.input.getGamepadInfo().padName,
+          touchOverlayVisible: this.input.isTouchOverlayVisible(),
         };
       },
 

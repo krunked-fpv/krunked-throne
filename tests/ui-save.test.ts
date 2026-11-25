@@ -62,6 +62,12 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
       showFps: true,
     });
     sm1.updateKeybinds({ up: 'KeyI', swap: 'KeyF' });
+    sm1.updateControls({
+      gamepadAimAssist: false,
+      gamepadRumble: false,
+      gamepadDeadzone: 0.24,
+      touchMode: 'off',
+    });
     sm1.recordRunStart('melting');
     sm1.recordRunEnd({
       mutant: 'melting',
@@ -89,6 +95,12 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     expect(loaded.render.crosshairStyle).toBe(5);
     expect(loaded.keybinds.up).toBe('KeyI');
     expect(loaded.keybinds.swap).toBe('KeyF');
+    expect(loaded.controls).toEqual({
+      gamepadAimAssist: false,
+      gamepadRumble: false,
+      gamepadDeadzone: 0.24,
+      touchMode: 'off',
+    });
     expect(loaded.totalRuns).toBe(1);
     expect(loaded.totalKills).toBe(412);
     expect(loaded.bestArea).toBe('5-3');
@@ -108,6 +120,12 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
       selectedCrown: 'bogus_crown',
       audio: { masterVolume: 99, sfxVolume: -5, musicVolume: Number.NaN },
       render: { crosshairStyle: 999, screenShakeScale: -10 },
+      controls: {
+        gamepadAimAssist: 'yes',
+        gamepadRumble: 123,
+        gamepadDeadzone: 0.99,
+        touchMode: 'always_on',
+      },
       totalKills: -42,
       mutants: { fish: { unlocked: false, bestKills: 77, bestArea: '7-3', bestLoop: 2 } },
     });
@@ -118,6 +136,12 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     expect(sanitized.audio.musicVolume).toBe(def.audio.musicVolume);
     expect(sanitized.render.crosshairStyle).toBe(6);
     expect(sanitized.render.screenShakeScale).toBe(0);
+    expect(sanitized.controls).toEqual({
+      gamepadAimAssist: true,
+      gamepadRumble: true,
+      gamepadDeadzone: 0.35,
+      touchMode: 'auto',
+    });
     expect(sanitized.totalKills).toBe(0);
     expect(sanitized.mutants.fish.unlocked).toBe(true);
     expect(sanitized.mutants.fish.bestKills).toBe(77);

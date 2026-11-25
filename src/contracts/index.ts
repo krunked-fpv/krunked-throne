@@ -894,6 +894,17 @@ export interface KeyBindings {
   activeAlt: string;
 }
 
+export type InputDeviceMode = 'kbm' | 'gamepad' | 'touch';
+
+export type TouchControlsMode = 'auto' | 'off';
+
+export interface ControlSettings {
+  gamepadAimAssist: boolean; // subtle magnetic cone toward nearby LoS enemies when using gamepad
+  gamepadRumble: boolean; // safe feature-detected dual-rumble haptic feedback
+  gamepadDeadzone: number; // radial stick deadzone 0.08..0.35 (default 0.16)
+  touchMode: TouchControlsMode; // 'auto' (strictly invisible until real touch) | 'off'
+}
+
 export interface MutantSaveProgress {
   unlocked: boolean;
   bSkinUnlocked: boolean;
@@ -914,6 +925,7 @@ export interface SaveData {
   audio: AudioSettings;
   render: RenderSettings;
   keybinds: KeyBindings;
+  controls: ControlSettings;
   mutants: Record<MutantId, MutantSaveProgress>;
   totalRuns: number;
   totalKills: number;
@@ -975,6 +987,10 @@ export interface PlaytestTelemetry {
   canvasWidth: number;
   canvasHeight: number;
   consoleErrors: string[];
+  inputMode?: InputDeviceMode;
+  gamepadConnected?: boolean;
+  gamepadName?: string | null;
+  touchOverlayVisible?: boolean;
 }
 
 export interface DebugBridge {
