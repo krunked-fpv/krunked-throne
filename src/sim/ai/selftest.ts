@@ -289,8 +289,8 @@ function runTest2AllFiveBossesAndLoopChain(): void {
     }
     assert(damagedDuringFight, `Boss ${bossId} never took damage`);
 
-    // Step through hitstop + death resolution so portal opens cleanly!
-    for (let k = 0; k < 10 && !state.portal.active; k++) {
+    // Step through hitstop + death resolution (incl. Lil' Hunter's visible jetpack death spiral!) so portal opens cleanly
+    for (let k = 0; k < 50 && !state.portal.active; k++) {
       stepSimulation(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }));
     }
 
@@ -327,7 +327,7 @@ function runTest2AllFiveBossesAndLoopChain(): void {
     );
   }
 
-  // Verify RT-10: Nuclear Throne defeated with generators intact triggers victory_throne (no 0-1 portal)
+  // Verify RT-10: Nuclear Throne defeated with generators intact spawns sit-able broken Throne -> victory_throne (no 0-1 portal)
   {
     const sitState = createRunState({ mutant: 'fish', seed: 202 });
     sitState.player.godMode = true;
@@ -342,8 +342,15 @@ function runTest2AllFiveBossesAndLoopChain(): void {
       stepSimulation(sitState, makeInput({ aimWorldX: sitState.player.x, aimWorldY: sitState.player.y }));
     }
     assert(sitState.boss?.defeated === true, 'Intact-generator Nuclear Throne not marked defeated');
-    assert(sitState.phase === 'victory_throne', `Expected victory_throne, got ${sitState.phase}`);
     assert(!sitState.portal.active, 'Intact-generator Nuclear Throne unexpectedly opened Loop portal');
+    const brokenThrone = sitState.props.find((p) => p.sprite === 'sprThroneCorpseIdle');
+    assert(brokenThrone, 'Intact-generator Nuclear Throne did not spawn sit-able sprThroneCorpseIdle');
+    assert(brokenThrone!.interactPrompt === '[E] SIT ON THRONE', `Unexpected broken throne prompt: ${brokenThrone!.interactPrompt}`);
+    sitState.player.x = brokenThrone!.x;
+    sitState.player.y = brokenThrone!.y;
+    stepSimulation(sitState, makeInput({ aimWorldX: brokenThrone!.x, aimWorldY: brokenThrone!.y, pickupPressed: true }));
+    assert(sitState.phase === 'victory_throne', `Expected victory_throne after sitting on Throne, got ${sitState.phase}`);
+    assert(!sitState.portal.active, 'Sitting on Throne unexpectedly opened Loop portal');
   }
 
   console.log(`[PASS 2/5] All 5 Bosses verified across 180 ticks + defeat portals + Loop chain + Throne victory: ${bossSummary.join(', ')}`);

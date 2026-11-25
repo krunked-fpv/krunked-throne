@@ -4,11 +4,14 @@ import {
   type AreaCode,
   type BossId,
   type EnemyEntity,
+  type ProjectileEntity,
+  type PropEntity,
   type SimState,
 } from '@/contracts';
-import { AMMO_PICKUP_AMOUNT, getAreaDef, getNextAreaTransition } from '@/data';
+import { AMMO_PICKUP_AMOUNT, ENEMIES, getAreaDef, getNextAreaTransition } from '@/data';
 import {
   SeededRng,
+  allocEntityId,
   carveCircle,
   circleOverlap,
   emitEvent,
@@ -23,9 +26,11 @@ import {
   NON_MELEE_AMMO_TYPES,
   applyDamageToEnemy,
   damageProp,
+  spawnCorpse,
   spawnEnemyProjectile,
   spawnExplosion,
   spawnPickup,
+  type SpawnEnemyProjectileOptions,
 } from '@/sim/combat';
 import {
   BOSS_META,
@@ -33,6 +38,18 @@ import {
   getAreaRuntime,
   spawnIdpdWave,
 } from '@/sim/entities';
+
+function fireBossProjectile(
+  state: SimState,
+  bossId: BossId,
+  opts: SpawnEnemyProjectileOptions,
+): ProjectileEntity {
+  const def = ENEMIES[bossId]!;
+  const proj = spawnEnemyProjectile(state, opts);
+  proj.sourceCause = def.name.toUpperCase();
+  proj.sourceSprite = def.sprites.idle;
+  return proj;
+}
 
 function normalizeAngle(a: number): number {
   let r = a;
@@ -175,7 +192,7 @@ export function openBossPortal(
   });
 }
 
-function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng): void {
+function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng, boss?: EnemyEntity): void {
   const rt = getAreaRuntime(state);
   const spiral = rt.lilHunterSpiral;
   if (!spiral || !spiral.active) return;
@@ -184,6 +201,19 @@ function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng): void {
   const mv = moveCircleWithSlide(state.map, spiral.x, spiral.y, spiral.vx, spiral.vy, 9);
   spiral.x = mv.x;
   spiral.y = mv.y;
+
+  if (boss) {
+    boss.x = mv.x;
+    boss.y = mv.y;
+    boss.invulnerable = true;
+    boss.contactDamage = 0;
+    boss.elevated = false;
+    boss.elevZ = 0;
+    boss.facing = state.tick % 4 < 2 ? 1 : -1;
+    boss.aimAngle = normalizeAngle(boss.aimAngle + 0.65);
+    boss.animFrame = (boss.animFrame + 0.6) % 8;
+    boss.aiTimer = spiral.ticksLeft;
+  }
 
   if (mv.hitX) {
     spiral.vx = -spiral.vx;
@@ -197,11 +227,14 @@ function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng): void {
     carveCircle(state.map, spiral.x, spiral.y, 20, true);
     emitEvent(state, { type: 'sfx', sound: 'sndLilHunterFly', x: spiral.x, y: spiral.y, pitchJitter: 0.2 });
     emitEvent(state, { type: 'shake', trauma: 0.25 });
-    spawnExplosion(state, spiral.x, spiral.y, 28, 16, 'player', rng, {
+    spawnExplosion(state, spiral.x, spiral.y, 28, 16, 'neutral', rng, {
       carveWalls: true,
       clearsProjectiles: true,
-      isRad: true,
+      isFire: true,
+      selfDamage: true,
       sound: 'sndExplosionS',
+      cause: "LIL' HUNTER",
+      killerSprite: 'sprLilHunter',
     });
   }
 
@@ -220,11 +253,39 @@ function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng): void {
   if (spiral.ticksLeft <= 0) {
     spiral.active = false;
     rt.lilHunterSpiral = null;
-    spawnExplosion(state, spiral.x, spiral.y, 44, 24, 'player', rng, {
+    if (boss) {
+      rt.trackedSpecials.delete(boss.id);
+      const idx = state.enemies.indexOf(boss);
+      if (idx !== -1) state.enemies.splice(idx, 1);
+    } else {
+      for (let i = state.enemies.length - 1; i >= 0; i--) {
+        const cand = state.enemies[i]!;
+        if (cand.bossId === 'lil_hunter' && cand.aiState === 'death_spiral') {
+          rt.trackedSpecials.delete(cand.id);
+          state.enemies.splice(i, 1);
+        }
+      }
+    }
+    const corpse = spawnCorpse(
+      state,
+      spiral.x,
+      spiral.y,
+      spiral.vx * 0.35,
+      spiral.vy * 0.35,
+      boss?.facing ?? 1,
+      'sprLilHunterDead',
+      16,
+      true,
+    );
+    rt.processedCorpseIds.add(corpse.id);
+    spawnExplosion(state, spiral.x, spiral.y, 48, 28, 'neutral', rng, {
       carveWalls: true,
       clearsProjectiles: true,
-      isRad: true,
+      isFire: true,
+      selfDamage: true,
       sound: 'sndExplosionL',
+      cause: "LIL' HUNTER",
+      killerSprite: 'sprLilHunter',
     });
   }
 }
@@ -235,10 +296,15 @@ function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng): void {
  * 2. Giant Krunked Throne / Throne II green rad orbs (`boss_orb` with radius >= 9) can be shot down
  *    to drop clutch HP & ammo pickups mid-bossfight (classic Nuclear Throne sustain loop!), and
  *    burst into smaller orbs if left unshot at expiration.
- * 3. Lil' Hunter malfunctioning jetpack death pinball bounce spiral.
+ * 3. Fallback step for Lil' Hunter death spiral if no visible spiral entity is present.
  */
 export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
-  stepLilHunterDeathSpiral(state, rng);
+  const hasVisibleSpiral = state.enemies.some(
+    (e) => e.bossId === 'lil_hunter' && e.aiState === 'death_spiral' && e.hp > 0,
+  );
+  if (!hasVisibleSpiral) {
+    stepLilHunterDeathSpiral(state, rng);
+  }
 
   const player = state.player;
   for (let i = state.projectiles.length - 1; i >= 0; i--) {
@@ -363,9 +429,11 @@ export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
     } else if (isDestructibleGiantOrb && proj.lifeTicks <= 1) {
       // Unshot giant Throne / Throne II orbs split into a radial burst of smaller green orbs!
       state.projectiles.splice(i, 1);
+      const fallbackBoss: BossId = state.areaCode === '0-1' ? 'throne_ii' : 'nuclear_throne';
+      const fallbackDef = ENEMIES[fallbackBoss]!;
       for (let k = 0; k < 6; k++) {
         const ang = proj.angle + (k / 6) * Math.PI * 2;
-        spawnEnemyProjectile(state, {
+        const mini = spawnEnemyProjectile(state, {
           kind: 'boss_orb',
           x: proj.x + Math.cos(ang) * 6,
           y: proj.y + Math.sin(ang) * 6,
@@ -376,6 +444,8 @@ export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
           lifeTicks: 70,
           sprite: 'sprGuardianBullet',
         });
+        mini.sourceCause = proj.sourceCause ?? fallbackDef.name.toUpperCase();
+        mini.sourceSprite = proj.sourceSprite ?? fallbackDef.sprites.idle;
       }
       emitEvent(state, { type: 'sfx', sound: 'sndNothingSmallball', x: proj.x, y: proj.y, pitchJitter: 0.12 });
     }
@@ -419,7 +489,7 @@ function stepBigBandit(state: SimState, boss: EnemyEntity, rng: SeededRng): void
       const sweep = Math.sin(boss.aiTimer * 0.35) * (enraged ? 0.3 : 0.2);
       const jitter = rng.range(-0.07, 0.07);
       const isFirstShot = boss.aiTimer >= volleyStart - interval;
-      spawnEnemyProjectile(state, {
+      fireBossProjectile(state, 'big_bandit', {
         kind: 'enemy_bullet',
         x: boss.x + Math.cos(boss.aimAngle) * 14,
         y: boss.y + Math.sin(boss.aimAngle) * 14,
@@ -552,7 +622,7 @@ function stepBigDog(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
       boss.aiPhase = 0;
       const meta = BOSS_META.big_dog;
       if (state.boss && state.boss.entityId === boss.id) {
-        state.boss.introTicks = 60;
+        state.boss.introTicks = 45;
       }
       emitEvent(state, {
         type: 'boss_intro',
@@ -602,7 +672,7 @@ function stepBigDog(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
       const arms = enraged ? 6 : 4;
       for (let a = 0; a < arms; a++) {
         const ang = boss.aimAngle + (a / arms) * Math.PI * 2;
-        spawnEnemyProjectile(state, {
+        fireBossProjectile(state, 'big_dog', {
           kind: 'enemy_bullet',
           x: boss.x + Math.cos(ang) * (boss.radius * 0.7),
           y: boss.y + Math.sin(ang) * (boss.radius * 0.7),
@@ -634,7 +704,7 @@ function stepBigDog(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
     });
     if (boss.aiTimer % 9 === 0) {
       const spread = rng.range(-0.65, 0.65);
-      spawnEnemyProjectile(state, {
+      fireBossProjectile(state, 'big_dog', {
         kind: 'boss_missile',
         x: boss.x + Math.cos(toPlayer + spread) * 18,
         y: boss.y + Math.sin(toPlayer + spread) * 18,
@@ -674,7 +744,7 @@ function stepBigDog(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
   if (boss.aiTimer % 8 === 0) {
     for (let k = 0; k < 6; k++) {
       const ang = boss.aimAngle + (k / 6) * Math.PI * 2;
-      spawnEnemyProjectile(state, {
+      fireBossProjectile(state, 'big_dog', {
         kind: 'enemy_bullet',
         x: boss.x + Math.cos(ang) * 14,
         y: boss.y + Math.sin(ang) * 14,
@@ -705,6 +775,7 @@ function performLilHunterSlam(state: SimState, boss: EnemyEntity): void {
   boss.elevated = false;
   boss.elevZ = 0;
   boss.invulnerable = false;
+  boss.contactDamage = ENEMIES.lil_hunter!.contactDamage;
 
   carveCircle(state.map, boss.x, boss.y, 26, true);
   emitEvent(state, { type: 'sfx', sound: 'sndLilHunterLand', x: boss.x, y: boss.y });
@@ -713,7 +784,7 @@ function performLilHunterSlam(state: SimState, boss: EnemyEntity): void {
   // 12-way fire ring on landing!
   for (let k = 0; k < 12; k++) {
     const ang = (k / 12) * Math.PI * 2;
-    spawnEnemyProjectile(state, {
+    fireBossProjectile(state, 'lil_hunter', {
       kind: 'enemy_flame',
       x: boss.x + Math.cos(ang) * 10,
       y: boss.y + Math.sin(ang) * 10,
@@ -728,6 +799,12 @@ function performLilHunterSlam(state: SimState, boss: EnemyEntity): void {
 }
 
 function stepLilHunter(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
+  // Visible spinning jetpack death spiral — bounces off walls with lethal blasts until final detonation!
+  if (boss.aiState === 'death_spiral') {
+    stepLilHunterDeathSpiral(state, rng, boss);
+    return;
+  }
+
   const player = state.player;
   const dx = player.x - boss.x;
   const dy = player.y - boss.y;
@@ -740,16 +817,73 @@ function stepLilHunter(state: SimState, boss: EnemyEntity, rng: SeededRng): void
   boss.aiTimer -= 1;
   if (boss.attackCooldown > 0) boss.attackCooldown -= 1;
 
+  // Delayed ~4-5s drop-in before triggering boss_intro and slamming into Frozen City 5-3!
+  if (boss.aiState === 'await_drop') {
+    boss.elevated = true;
+    boss.invulnerable = true;
+    boss.contactDamage = 0;
+    boss.elevZ = 260;
+
+    // If all regular enemies are already cleared, accelerate drop-in so the player isn't waiting in an empty room
+    const hasOtherHostiles = state.enemies.some(
+      (e) => !e.friendly && e.hp > 0 && !e.isBoss && e.aiState !== 'disguised',
+    );
+    if (!hasOtherHostiles && boss.aiTimer > 12) {
+      boss.aiTimer = 12;
+    }
+
+    if (boss.aiTimer <= 0) {
+      // Pick dramatic drop point near active player (safe offset ~80-115px so it never telefrags player)
+      const dropAng = rng.range(0, Math.PI * 2);
+      const dropRad = rng.range(80, 112);
+      const cand = findNearestFloor(
+        state.map,
+        player.x + Math.cos(dropAng) * dropRad,
+        player.y + Math.sin(dropAng) * dropRad,
+        14,
+      );
+      boss.x = cand.x;
+      boss.y = cand.y;
+      boss.prevX = cand.x;
+      boss.prevY = cand.y;
+      boss.targetX = cand.x;
+      boss.targetY = cand.y;
+      boss.aiState = 'arrive_slam';
+      boss.aiTimer = 20;
+      boss.elevZ = 96;
+
+      const meta = BOSS_META.lil_hunter;
+      if (state.boss && state.boss.entityId === boss.id) {
+        state.boss.introTicks = 45;
+      }
+      emitEvent(state, {
+        type: 'boss_intro',
+        bossId: 'lil_hunter',
+        name: meta.name,
+        subtitle: meta.subtitle,
+      });
+      emitEvent(state, {
+        type: 'music',
+        track: meta.musicTrack,
+        ambience: getAreaDef(state.areaCode).ambienceTrack,
+        boss: true,
+      });
+      emitEvent(state, { type: 'sfx', sound: meta.introSound, x: boss.x, y: boss.y });
+      emitEvent(state, { type: 'shake', trauma: 0.4 });
+    }
+    return;
+  }
+
   // Initial dramatic sky-drop slam arrival
   if (boss.aiState === 'arrive_slam') {
     boss.elevated = true;
     boss.invulnerable = true;
-    boss.elevZ = Math.max(0, (boss.aiTimer / 30) * 72);
+    boss.elevZ = Math.max(0, (boss.aiTimer / 20) * 96);
     if (boss.aiTimer <= 0) {
       performLilHunterSlam(state, boss);
       boss.aiState = 'grounded';
       boss.aiTimer = 56;
-      boss.attackCooldown = 16;
+      boss.attackCooldown = 14;
     }
     return;
   }
@@ -830,7 +964,7 @@ function stepLilHunter(state: SimState, boss: EnemyEntity, rng: SeededRng): void
       boss.attackCooldown = 36;
     } else if (boss.aiPhase % 2 === 0) {
       for (let b = -1; b <= 1; b++) {
-        spawnEnemyProjectile(state, {
+        fireBossProjectile(state, 'lil_hunter', {
           kind: 'enemy_bullet',
           x: boss.x + Math.cos(toPlayer) * 10,
           y: boss.y + Math.sin(toPlayer) * 10,
@@ -848,7 +982,7 @@ function stepLilHunter(state: SimState, boss: EnemyEntity, rng: SeededRng): void
       boss.aiPhase += 1;
     } else {
       for (let f = -2; f <= 2; f++) {
-        spawnEnemyProjectile(state, {
+        fireBossProjectile(state, 'lil_hunter', {
           kind: 'enemy_flame',
           x: boss.x + Math.cos(toPlayer) * 10,
           y: boss.y + Math.sin(toPlayer) * 10,
@@ -917,7 +1051,7 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
       boss.aiPhase = 0;
       const meta = BOSS_META.nuclear_throne;
       if (state.boss && state.boss.entityId === boss.id) {
-        state.boss.introTicks = 60;
+        state.boss.introTicks = 45;
       }
       emitEvent(state, {
         type: 'boss_intro',
@@ -988,41 +1122,40 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
 
   if (boss.aiState === 'fire') {
     boss.aimAngle = Math.PI * 0.5;
-    if (boss.aiTimer % 2 === 0) {
-      const lanes = [-12, 0, 12] as const;
-      for (let l = 0; l < lanes.length; l++) {
-        spawnEnemyProjectile(state, {
-          kind: 'enemy_plasma',
-          x: boss.x + lanes[l]!,
-          y: boss.y + 28,
-          angle: Math.PI * 0.5,
-          speed: 13.5,
-          damage: 4,
-          radius: 7,
-          pierce: 2,
-          lifeTicks: 46,
-          sprite: 'sprNothingBeam',
+    // Tightened per-tick Mega-Beam emission (11.5px spacing < 24px beam sprite) for a seamless continuous beam column!
+    const lanes = [-10, 0, 10] as const;
+    for (let l = 0; l < lanes.length; l++) {
+      fireBossProjectile(state, 'nuclear_throne', {
+        kind: 'enemy_plasma',
+        x: boss.x + lanes[l]!,
+        y: boss.y + 24,
+        angle: Math.PI * 0.5,
+        speed: 11.5,
+        damage: 4,
+        radius: 8,
+        pierce: 2,
+        lifeTicks: 50,
+        sprite: 'sprNothingBeam',
+      });
+    }
+    if (boss.aiTimer % 8 === 0) {
+      // Side-cannon plasma orbs sweep the flanks during the Center Mega-Beam!
+      for (const side of [-1, 1] as const) {
+        const ang = Math.PI * 0.5 + side * (0.48 + ((boss.aiTimer / 8) % 3) * 0.14);
+        fireBossProjectile(state, 'nuclear_throne', {
+          kind: 'boss_orb',
+          x: boss.x + side * 26,
+          y: boss.y + 18,
+          angle: ang,
+          speed: 3.6,
+          damage: 2,
+          radius: 5,
+          lifeTicks: 95,
+          sprite: 'sprGuardianBullet',
         });
       }
-      if (boss.aiTimer % 8 === 0) {
-        // Side-cannon plasma orbs sweep the flanks during the Center Mega-Beam!
-        for (const side of [-1, 1] as const) {
-          const ang = Math.PI * 0.5 + side * (0.48 + ((boss.aiTimer / 8) % 3) * 0.14);
-          spawnEnemyProjectile(state, {
-            kind: 'boss_orb',
-            x: boss.x + side * 26,
-            y: boss.y + 18,
-            angle: ang,
-            speed: 3.6,
-            damage: 2,
-            radius: 5,
-            lifeTicks: 95,
-            sprite: 'sprGuardianBullet',
-          });
-        }
-        emitEvent(state, { type: 'sfx', sound: 'sndNothingBeamLoop', x: boss.x, y: boss.y });
-        emitEvent(state, { type: 'shake', trauma: 0.25 });
-      }
+      emitEvent(state, { type: 'sfx', sound: 'sndNothingBeamLoop', x: boss.x, y: boss.y });
+      emitEvent(state, { type: 'shake', trauma: 0.25 });
     }
     if (boss.aiTimer <= 0) {
       emitEvent(state, { type: 'sfx', sound: 'sndNothingBeamEnd', x: boss.x, y: boss.y });
@@ -1033,14 +1166,14 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
     return;
   }
 
-  // Phase B: Radial orb volleys + Giant Destructible Rad Orbs (drop HP/ammo when shot!)
+  // Phase B: Radial orb volleys + Giant Destructible Rad Orbs (independent timers — zero modulo shadowing!)
   boss.aimAngle = toPlayer;
   if (boss.aiTimer % 12 === 0) {
     const ringCount = boss.hp < boss.maxHp * 0.5 ? 12 : 9;
     const baseAngle = toPlayer + (boss.aiPhase % 2) * 0.18;
     for (let k = 0; k < ringCount; k++) {
       const ang = baseAngle + (k / ringCount) * Math.PI * 2;
-      spawnEnemyProjectile(state, {
+      fireBossProjectile(state, 'nuclear_throne', {
         kind: 'boss_orb',
         x: boss.x + Math.cos(ang) * 26,
         y: boss.y + Math.sin(ang) * 26,
@@ -1053,9 +1186,10 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
         sound: k === 0 ? 'sndNothingFire' : undefined,
       });
     }
-  } else if (boss.aiTimer % 16 === 8) {
+  }
+  if (boss.aiTimer % 16 === 8) {
     // Launch giant destructible Throne Rad Orb toward player (classic NT ammo/HP farm!)
-    spawnEnemyProjectile(state, {
+    fireBossProjectile(state, 'nuclear_throne', {
       kind: 'boss_orb',
       x: boss.x + Math.cos(toPlayer) * 28,
       y: boss.y + Math.sin(toPlayer) * 28,
@@ -1133,7 +1267,7 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
       const arms = enraged ? 5 : 4;
       for (let a = 0; a < arms; a++) {
         const ang = boss.aimAngle + (a / arms) * Math.PI * 2;
-        spawnEnemyProjectile(state, {
+        fireBossProjectile(state, 'throne_ii', {
           kind: 'boss_orb',
           x: boss.x + Math.cos(ang) * 20,
           y: boss.y + Math.sin(ang) * 20,
@@ -1161,7 +1295,7 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
       const count = enraged ? 7 : 5;
       for (let k = 0; k < count; k++) {
         const frac = k / (count - 1) - 0.5;
-        spawnEnemyProjectile(state, {
+        fireBossProjectile(state, 'throne_ii', {
           kind: 'boss_orb',
           x: boss.x + Math.cos(toPlayer + frac * 0.7) * 22,
           y: boss.y + Math.sin(toPlayer + frac * 0.7) * 22,
@@ -1189,7 +1323,7 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
     const spreadCount = enraged ? 3 : 1;
     for (let s = 0; s < spreadCount; s++) {
       const offset = spreadCount > 1 ? (s - 1) * 0.28 : 0;
-      spawnEnemyProjectile(state, {
+      fireBossProjectile(state, 'throne_ii', {
         kind: 'boss_orb',
         x: boss.x + Math.cos(toPlayer + offset) * 22,
         y: boss.y + Math.sin(toPlayer + offset) * 22,
@@ -1218,6 +1352,7 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
 export function stepBossAi(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
   if (state.boss && state.boss.entityId === boss.id) {
     state.boss.hp = Math.max(0, boss.hp);
+    state.boss.maxHp = Math.max(1, boss.maxHp);
     if (state.boss.introTicks > 0) {
       state.boss.introTicks -= 1;
     }
@@ -1246,8 +1381,60 @@ export function stepBossAi(state: SimState, boss: EnemyEntity, rng: SeededRng): 
 }
 
 /**
- * Handles bespoke boss defeat payoffs (explosions, clearing boss summons, and opening
- * the canonical progression portal — including 7-3 -> 0-1 Throne II -> Loop 1-1!).
+ * Completes the 7-3 intact-generator victory sequence when the player sits on the broken Throne
+ * (either by pressing [E] or walking onto `sprThroneCorpseIdle`).
+ */
+export function triggerThroneVictory(
+  state: SimState,
+  throneX: number,
+  throneY: number,
+  rng: SeededRng,
+): void {
+  const rt = getAreaRuntime(state);
+  if (rt.brokenThronePropId !== null) {
+    const idx = state.props.findIndex((p) => p.id === rt.brokenThronePropId);
+    if (idx !== -1) state.props.splice(idx, 1);
+    rt.brokenThronePropId = null;
+  }
+  if (state.boss) {
+    state.boss.hp = 0;
+    state.boss.defeated = true;
+  }
+  state.phase = 'victory_throne';
+  emitEvent(state, {
+    type: 'sfx',
+    sound: 'sndLevelUltra',
+    x: throneX,
+    y: throneY,
+  });
+  emitEvent(state, { type: 'shake', trauma: 0.6 });
+  emitEvent(state, {
+    type: 'pickup_text',
+    x: throneX,
+    y: throneY - 24,
+    text: 'YOU REACHED THE KRUNKED THRONE!',
+    color: '#ffe066',
+  });
+  for (let i = 0; i < 16; i++) {
+    const ang = (i / 16) * Math.PI * 2 + rng.range(-0.1, 0.1);
+    const spd = rng.range(1.6, 4.4);
+    emitEvent(state, {
+      type: 'particle',
+      kind: 'throne_victory',
+      x: throneX,
+      y: throneY,
+      vx: Math.cos(ang) * spd,
+      vy: Math.sin(ang) * spd,
+      color: i % 2 === 0 ? '#ffe066' : '#66ff88',
+      size: rng.range(3, 5),
+      life: rng.int(16, 28),
+    });
+  }
+}
+
+/**
+ * Handles bespoke boss defeat payoffs (lethal explosions, clearing boss summons, visible Lil' Hunter
+ * death spiral, sit-able 7-3 broken Throne, and canonical progression portals — including 7-3 -> 0-1 -> Loop 1-1!).
  */
 export function handleBossDeath(
   state: SimState,
@@ -1273,7 +1460,10 @@ export function handleBossDeath(
         carveWalls: true,
         clearsProjectiles: true,
         isRad: true,
+        selfDamage: false,
         sound: 'sndBigBanditDie',
+        cause: 'BIG BANDIT',
+        killerSprite: 'sprBanditBossIdle',
       });
       // Classic Nuclear Throne 1-1 -> 1-? Oasis secret: kill early Big Bandit within 10s (300 ticks)!
       if (
@@ -1293,15 +1483,18 @@ export function handleBossDeath(
     }
 
     case 'big_dog': {
-      // Iconic Big Dog multi-blast scrapyard detonation ring!
+      // Iconic Big Dog lethal multi-blast scrapyard detonation ring (honors Boiling Veins)!
       for (let k = 0; k < 5; k++) {
         const ang = (k / 5) * Math.PI * 2 + rng.range(-0.2, 0.2);
         const rad = k === 0 ? 0 : 20;
-        spawnExplosion(state, deathX + Math.cos(ang) * rad, deathY + Math.sin(ang) * rad, 34, 24, 'player', rng, {
+        spawnExplosion(state, deathX + Math.cos(ang) * rad, deathY + Math.sin(ang) * rad, 34, 24, 'neutral', rng, {
           carveWalls: true,
           clearsProjectiles: true,
-          isRad: true,
+          isFire: true,
+          selfDamage: true,
           sound: k === 0 ? 'sndBigDogDeath' : 'sndExplosion',
+          cause: 'BIG DOG',
+          killerSprite: 'sprScrapBossIdle',
         });
       }
       break;
@@ -1309,24 +1502,72 @@ export function handleBossDeath(
 
     case 'lil_hunter': {
       clearBossSummonsAndEnemyBullets(state, true);
-      // Iconic Lil' Hunter malfunctioning jetpack death pinball bounce!
+      // Remove premature sprLilHunterDead corpse so the spinning body visibly spirals until final detonation!
+      for (let c = state.corpses.length - 1; c >= 0; c--) {
+        if (state.corpses[c]!.sprite === 'sprLilHunterDead') {
+          state.corpses.splice(c, 1);
+        }
+      }
+      const safe = findNearestFloor(state.map, deathX, deathY, 10);
       const spiralAng = rng.range(0, Math.PI * 2);
+      const svx = Math.cos(spiralAng) * 7.5;
+      const svy = Math.sin(spiralAng) * 7.5;
+      const spiralTicks = 28;
       rt.lilHunterSpiral = {
         active: true,
-        x: deathX,
-        y: deathY,
-        vx: Math.cos(spiralAng) * 7.5,
-        vy: Math.sin(spiralAng) * 7.5,
-        ticksLeft: 20,
+        x: safe.x,
+        y: safe.y,
+        vx: svx,
+        vy: svy,
+        ticksLeft: spiralTicks,
         bounces: 0,
       };
-      emitEvent(state, { type: 'sfx', sound: 'sndLilHunterDeath', x: deathX, y: deathY });
-      emitEvent(state, { type: 'sfx', sound: 'sndLilHunterFly', x: deathX, y: deathY });
-      spawnExplosion(state, deathX, deathY, 36, 20, 'player', rng, {
+      // Keep Lil' Hunter visibly alive in state.enemies during death_spiral (delays portal until final detonation!)
+      const lhDef = ENEMIES.lil_hunter!;
+      const spiralBody: EnemyEntity = {
+        id: allocEntityId(state),
+        defId: 'lil_hunter',
+        bossId: 'lil_hunter',
+        x: safe.x,
+        y: safe.y,
+        prevX: safe.x,
+        prevY: safe.y,
+        vx: svx,
+        vy: svy,
+        radius: lhDef.radius,
+        hp: 1,
+        maxHp: 1,
+        facing: svx >= 0 ? 1 : -1,
+        aimAngle: spiralAng,
+        hurtFlashTicks: 0,
+        snaredTicks: 0,
+        aiState: 'death_spiral',
+        aiTimer: spiralTicks,
+        aiPhase: 0,
+        attackCooldown: 0,
+        targetX: safe.x,
+        targetY: safe.y,
+        animFrame: 0,
+        contactDamage: 0,
+        radDrop: 0,
+        friendly: false,
+        isBoss: true,
+        invulnerable: true,
+        elevated: false,
+        elevZ: 0,
+      };
+      state.enemies.push(spiralBody);
+
+      emitEvent(state, { type: 'sfx', sound: 'sndLilHunterDeath', x: safe.x, y: safe.y });
+      emitEvent(state, { type: 'sfx', sound: 'sndLilHunterFly', x: safe.x, y: safe.y });
+      spawnExplosion(state, safe.x, safe.y, 36, 20, 'neutral', rng, {
         carveWalls: true,
         clearsProjectiles: true,
-        isRad: true,
+        isFire: true,
+        selfDamage: true,
         sound: 'sndExplosionL',
+        cause: "LIL' HUNTER",
+        killerSprite: 'sprLilHunter',
       });
       break;
     }
@@ -1337,11 +1578,14 @@ export function handleBossDeath(
       for (let k = 0; k < 3; k++) {
         const bx = deathX + (k - 1) * 24;
         const by = deathY + (k % 2 === 0 ? -8 : 10);
-        spawnExplosion(state, bx, by, 58, 30, 'player', rng, {
+        spawnExplosion(state, bx, by, 58, 30, 'neutral', rng, {
           carveWalls: true,
           clearsProjectiles: true,
           isRad: true,
+          selfDamage: true,
           sound: k === 0 ? 'sndNothingDeath1' : 'sndNothingDeath2',
+          cause: 'THE KRUNKED THRONE',
+          killerSprite: 'sprNothingOn',
         });
       }
       if (loopUnlocked) {
@@ -1355,51 +1599,52 @@ export function handleBossDeath(
           'LOOP PORTAL TO 0-1!',
         );
       } else {
-        if (state.boss) {
-          state.boss.hp = 0;
-          state.boss.defeated = true;
+        // Intact-generator kill: leave sit-able smoking broken Throne (sprThroneCorpseIdle) so player sees death blasts & sits!
+        for (let c = state.corpses.length - 1; c >= 0; c--) {
+          if (state.corpses[c]!.sprite === 'sprNothingDeath') {
+            state.corpses.splice(c, 1);
+          }
         }
-        state.phase = 'victory_throne';
-        emitEvent(state, {
-          type: 'sfx',
-          sound: 'sndLevelUltra',
-          x: deathX,
-          y: deathY,
-        });
-        emitEvent(state, { type: 'shake', trauma: 0.6 });
+        const seatPos = findNearestFloor(state.map, deathX, deathY, 10);
+        const brokenThrone: PropEntity = {
+          id: allocEntityId(state),
+          kind: 'bone_pile',
+          x: seatPos.x,
+          y: seatPos.y,
+          radius: 22,
+          hp: 999999,
+          maxHp: 999999,
+          solid: false,
+          opened: false,
+          hurtFlashTicks: 0,
+          sprite: 'sprThroneCorpseIdle',
+          interactPrompt: '[E] SIT ON THRONE',
+        };
+        state.props.push(brokenThrone);
+        rt.brokenThronePropId = brokenThrone.id;
+        rt.brokenThroneSitDelay = 15;
+        emitEvent(state, { type: 'shake', trauma: 0.65 });
         emitEvent(state, {
           type: 'pickup_text',
-          x: deathX,
-          y: deathY - 24,
-          text: 'YOU REACHED THE KRUNKED THRONE!',
+          x: seatPos.x,
+          y: seatPos.y - 24,
+          text: 'CLAIM THE THRONE!',
           color: '#ffe066',
         });
-        for (let i = 0; i < 16; i++) {
-          const ang = (i / 16) * Math.PI * 2 + rng.range(-0.1, 0.1);
-          const spd = rng.range(1.6, 4.4);
-          emitEvent(state, {
-            type: 'particle',
-            kind: 'throne_victory',
-            x: deathX,
-            y: deathY,
-            vx: Math.cos(ang) * spd,
-            vy: Math.sin(ang) * spd,
-            color: i % 2 === 0 ? '#ffe066' : '#66ff88',
-            size: rng.range(3, 5),
-            life: rng.int(16, 28),
-          });
-        }
       }
       break;
     }
 
     case 'throne_ii': {
       clearBossSummonsAndEnemyBullets(state, true);
-      spawnExplosion(state, deathX, deathY, 64, 34, 'player', rng, {
+      spawnExplosion(state, deathX, deathY, 64, 34, 'neutral', rng, {
         carveWalls: true,
         clearsProjectiles: true,
         isRad: true,
+        selfDamage: true,
         sound: 'sndNothing2Dead',
+        cause: 'THRONE II',
+        killerSprite: 'sprNothing2Idle',
       });
       const next = getNextAreaTransition('0-1', state.loop);
       openBossPortal(

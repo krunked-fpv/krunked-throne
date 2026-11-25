@@ -4,6 +4,8 @@ import {
   type BossId,
   type EnemyDef,
   type EnemyEntity,
+  type ProjectileEntity,
+  type PropEntity,
   type SimState,
 } from '@/contracts';
 import { AMMO_PICKUP_AMOUNT, ENEMIES, getWeaponDef } from '@/data';
@@ -16,8 +18,10 @@ import {
   findNearestFloor,
   hasLineOfSight,
   isCircleOverlappingSolid,
+  isWorldSolid,
   moveCircleWithSlide,
   segmentCircleHit,
+  tileToWorldCenter,
 } from '@/sim/core';
 import {
   NON_MELEE_AMMO_TYPES,
@@ -27,6 +31,7 @@ import {
   spawnEnemyProjectile,
   spawnExplosion,
   spawnPickup,
+  type SpawnEnemyProjectileOptions,
 } from '@/sim/combat';
 import { pickTierWeaponId } from '@/sim/progression';
 import {
@@ -43,7 +48,26 @@ import {
   openBossPortal,
   stepBossAi,
   stepBossProjectiles,
+  triggerThroneVictory,
 } from './bosses';
+
+function normalizeAngle(a: number): number {
+  let r = a;
+  while (r > Math.PI) r -= Math.PI * 2;
+  while (r < -Math.PI) r += Math.PI * 2;
+  return r;
+}
+
+function fireEnemyProjectile(
+  state: SimState,
+  def: EnemyDef,
+  opts: SpawnEnemyProjectileOptions,
+): ProjectileEntity {
+  const proj = spawnEnemyProjectile(state, opts);
+  proj.sourceCause = def.name.toUpperCase();
+  proj.sourceSprite = def.sprites.idle;
+  return proj;
+}
 
 export interface StepEntitiesOptions {
   stepFriendlies?: boolean;
@@ -437,6 +461,8 @@ function triggerSpecialDeathEffect(
     return;
   }
 
+  const def = ENEMIES[defId] ?? ENEMIES.bandit!;
+
   switch (defId) {
     case 'maggot_nest':
     case 'big_maggot': {
@@ -469,17 +495,18 @@ function triggerSpecialDeathEffect(
     }
 
     case 'ballguy': {
-      // Toxic Ballguy bursts into a rad-toxic cloud + radial venom pellets on death
+      // Toxic Ballguy bursts into a lethal rad-toxic blast + radial venom pellets on death (honors Boiling Veins)!
       spawnExplosion(state, x, y, 26, 10, 'enemy', rng, {
         carveWalls: false,
         isRad: true,
+        selfDamage: true,
         sound: 'sndFrogExplode',
         cause: 'TOXIC BALLGUY',
         killerSprite: 'sprExploderIdle',
       });
       for (let k = 0; k < 6; k++) {
         const ang = (k / 6) * Math.PI * 2 + rng.range(-0.12, 0.12);
-        spawnEnemyProjectile(state, {
+        fireEnemyProjectile(state, def, {
           x: x + Math.cos(ang) * 7,
           y: y + Math.sin(ang) * 7,
           angle: ang,
@@ -533,7 +560,7 @@ function triggerSpecialDeathEffect(
       const count = defId === 'gold_snow_tank' ? 16 : 12;
       for (let k = 0; k < count; k++) {
         const ang = (k / count) * Math.PI * 2;
-        spawnEnemyProjectile(state, {
+        fireEnemyProjectile(state, def, {
           kind: 'enemy_bullet',
           x: x + Math.cos(ang) * 8,
           y: y + Math.sin(ang) * 8,
@@ -547,8 +574,9 @@ function triggerSpecialDeathEffect(
       }
       spawnExplosion(state, x, y, 30, 16, 'enemy', rng, {
         carveWalls: true,
+        selfDamage: true,
         sound: 'sndExplosion',
-        cause: 'SNOW TANK',
+        cause: defId === 'gold_snow_tank' ? 'GOLDEN SNOW TANK' : 'SNOW TANK',
         killerSprite: defId === 'gold_snow_tank' ? 'sprGoldTankIdle' : 'sprSnowTankIdle',
       });
       break;
@@ -557,6 +585,7 @@ function triggerSpecialDeathEffect(
     case 'explo_freak': {
       spawnExplosion(state, x, y, 34, 18, 'enemy', rng, {
         carveWalls: true,
+        selfDamage: true,
         sound: 'sndExplosion',
         cause: 'EXPLO FREAK',
         killerSprite: 'sprExploFreakIdle',
@@ -568,6 +597,7 @@ function triggerSpecialDeathEffect(
       spawnExplosion(state, x, y, 42, 22, 'enemy', rng, {
         carveWalls: true,
         isRad: false,
+        selfDamage: true,
         sound: 'sndExplosionL',
         cause: 'EXPLO GUARDIAN',
         killerSprite: 'sprExploGuardianIdle',
@@ -578,6 +608,7 @@ function triggerSpecialDeathEffect(
     case 'idpd_van': {
       spawnExplosion(state, x, y, 46, 26, 'neutral', rng, {
         carveWalls: true,
+        selfDamage: true,
         sound: 'sndExplosionCar',
         cause: 'I.D.P.D. VAN',
         killerSprite: 'sprVanDrive',
@@ -592,7 +623,7 @@ function processSpecialDeaths(state: SimState, rng: SeededRng): void {
   const aliveIds = new Set<number>();
   for (let i = 0; i < state.enemies.length; i++) {
     const e = state.enemies[i]!;
-    if (e.hp > 0) {
+    if (e.hp > 0 && e.aiState !== 'death_spiral') {
       aliveIds.add(e.id);
       const tracked = rt.trackedSpecials.get(e.id);
       if (tracked) {
@@ -668,27 +699,37 @@ function resolveEnemyContactDamage(
     e.aiState === 'feign' ||
     e.aiState === 'disguised' ||
     e.aiState === 'intro' ||
-    e.aiState === 'vanish'
+    e.aiState === 'vanish' ||
+    e.aiState === 'await_drop' ||
+    e.aiState === 'death_spiral'
   ) {
     return;
   }
 
   if (!circleOverlap(player.x, player.y, player.radius, e.x, e.y, e.radius)) return;
 
-  if (hasMutation(player, 'gamma_guts') && e.hurtFlashTicks <= 0) {
-    const dx = e.x - player.x;
-    const dy = e.y - player.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    const killed = applyDamageToEnemy(
-      state,
-      e,
-      6,
-      (dx / dist) * 4.5,
-      (dy / dist) * 4.5,
-      rng,
-    );
-    if (killed || e.hp <= 0) {
-      return;
+  if (hasMutation(player, 'gamma_guts') && !e.invulnerable) {
+    const mem = getEnemyMemory(state, e);
+    // Always kill low-HP enemies (<= 6 HP — e.g. 1 HP bullet-grazed Maggots, 7 HP Rats after
+    // stepPlayerAndCombat, 9 HP Scarier-Face Freaks) BEFORE enemy contact damage, even when
+    // e.hurtFlashTicks > 0! Rate-limit high-HP enemies (> 6 HP) cleanly.
+    const lethalGamma = e.hp <= 6;
+    if (lethalGamma || (e.hurtFlashTicks <= 0 && state.tick - mem.lastGammaTick >= 4)) {
+      mem.lastGammaTick = state.tick;
+      const dx = e.x - player.x;
+      const dy = e.y - player.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const killed = applyDamageToEnemy(
+        state,
+        e,
+        6,
+        (dx / dist) * 4.5,
+        (dy / dist) * 4.5,
+        rng,
+      );
+      if (killed || e.hp <= 0) {
+        return;
+      }
     }
   }
 
@@ -725,6 +766,8 @@ function reflectShielderProjectiles(state: SimState, shielder: EnemyEntity): voi
       pr.prevX = hit.hitX;
       pr.prevY = hit.hitY;
       pr.team = 'enemy';
+      pr.sourceCause = 'I.D.P.D. SHIELDER';
+      pr.sourceSprite = 'sprShielderIdle';
       pr.vx = -pr.vx;
       pr.vy = -pr.vy;
       pr.angle = Math.atan2(pr.vy, pr.vx);
@@ -777,7 +820,7 @@ function stepHostileEnemy(
           e.aiTimer = 8;
           if (e.defId === 'jungle_bandit') {
             for (let s = -1; s <= 1; s++) {
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 x: e.x + Math.cos(e.aimAngle) * 8,
                 y: e.y + Math.sin(e.aimAngle) * 8,
                 angle: e.aimAngle + s * 0.18 + rng.range(-0.04, 0.04),
@@ -806,7 +849,7 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (mem.burstLeft > 0) {
           if (mem.burstGap <= 0) {
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               x: e.x + Math.cos(e.aimAngle) * 8,
               y: e.y + Math.sin(e.aimAngle) * 8,
               angle: e.aimAngle + rng.range(-0.08, 0.08),
@@ -967,7 +1010,7 @@ function stepHostileEnemy(
             const wave = Math.sin(mem.burstLeft * 1.15) * (isGold ? 0.34 : 0.24);
             const jitter = rng.range(-0.14, 0.14);
             const ang = e.aimAngle + wave + jitter;
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               x: e.x + Math.cos(ang) * 10,
               y: e.y + Math.sin(ang) * 10,
               angle: ang,
@@ -1096,7 +1139,7 @@ function stepHostileEnemy(
           } else {
             // Fallback toxic spit when Green Rat population cap is reached
             for (let k = -1; k <= 1; k++) {
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 x: e.x + Math.cos(e.aimAngle) * 11,
                 y: e.y + Math.sin(e.aimAngle) * 11,
                 angle: e.aimAngle + k * 0.24 + rng.range(-0.06, 0.06),
@@ -1143,7 +1186,7 @@ function stepHostileEnemy(
           e.aiTimer = 12;
           if (isBuff) {
             // Genuine splitting Flak Cannon ball -> bursts at mid-range into 7 bouncing shell pellets!
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               kind: 'flak',
               x: e.x + Math.cos(e.aimAngle) * 10,
               y: e.y + Math.sin(e.aimAngle) * 10,
@@ -1161,7 +1204,7 @@ function stepHostileEnemy(
             const pellets = 5;
             for (let k = 0; k < pellets; k++) {
               const offset = (k / (pellets - 1) - 0.5) * 0.44 + rng.range(-0.04, 0.04);
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 x: e.x + Math.cos(e.aimAngle) * 9,
                 y: e.y + Math.sin(e.aimAngle) * 9,
                 angle: e.aimAngle + offset,
@@ -1207,7 +1250,7 @@ function stepHostileEnemy(
           const ring = isFire ? 6 : 8;
           for (let k = 0; k < ring; k++) {
             const ang = (k / ring) * Math.PI * 2 + (isFire ? toPlayer : 0);
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               kind: isFire ? 'enemy_flame' : 'enemy_bullet',
               x: e.x + Math.cos(ang) * 8,
               y: e.y + Math.sin(ang) * 8,
@@ -1270,7 +1313,7 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
           for (let b = -1; b <= 1; b++) {
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               x: e.x + Math.cos(e.aimAngle) * 8,
               y: e.y + Math.sin(e.aimAngle) * 8,
               angle: e.aimAngle + b * 0.14,
@@ -1327,7 +1370,7 @@ function stepHostileEnemy(
         e.aiTimer -= 1;
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
-          spawnEnemyProjectile(state, {
+          fireEnemyProjectile(state, def, {
             x: e.x + Math.cos(e.aimAngle) * 10,
             y: e.y + Math.sin(e.aimAngle) * 10,
             angle: e.aimAngle,
@@ -1374,7 +1417,7 @@ function stepHostileEnemy(
         e.facing = dx >= 0 ? 1 : -1;
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer % 2 === 0) {
-          spawnEnemyProjectile(state, {
+          fireEnemyProjectile(state, def, {
             kind: 'enemy_flame',
             x: e.x + Math.cos(e.aimAngle) * 10,
             y: e.y + Math.sin(e.aimAngle) * 10,
@@ -1481,6 +1524,8 @@ function stepHostileEnemy(
             bounce: 0,
             explosionRadius: 0,
             sprite: 'sprSlash',
+            sourceCause: def.name.toUpperCase(),
+            sourceSprite: def.sprites.idle,
             hitIds: [],
             deflectsProjectiles: false,
             destroysProjectiles: true,
@@ -1554,7 +1599,7 @@ function stepHostileEnemy(
           const bolts = 5;
           for (let b = 0; b < bolts; b++) {
             const spread = (b - (bolts - 1) * 0.5) * (isLightning ? 0.24 : 0.14);
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               kind: isLightning ? 'lightning' : 'enemy_laser',
               x: e.x + Math.cos(e.aimAngle + spread) * 12,
               y: e.y + Math.sin(e.aimAngle + spread) * 12,
@@ -1596,7 +1641,7 @@ function stepHostileEnemy(
           if (mem.carryingCar) {
             // Hurl grabbed car as an explosive high-impact missile!
             mem.carryingCar = false;
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               kind: 'grenade',
               x: e.x + Math.cos(e.aimAngle) * 12,
               y: e.y + Math.sin(e.aimAngle) * 12,
@@ -1705,7 +1750,7 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
           for (let s = -1; s <= 1; s++) {
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               x: e.x + Math.cos(e.aimAngle) * 8,
               y: e.y + Math.sin(e.aimAngle) * 8,
               angle: e.aimAngle + s * 0.16,
@@ -1756,7 +1801,7 @@ function stepHostileEnemy(
         e.aimAngle = toPlayer;
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer % 2 === 0) {
-          spawnEnemyProjectile(state, {
+          fireEnemyProjectile(state, def, {
             x: e.x + Math.cos(e.aimAngle) * 13,
             y: e.y + Math.sin(e.aimAngle) * 13,
             angle: e.aimAngle + rng.range(-0.18, 0.18),
@@ -1967,7 +2012,7 @@ function stepHostileEnemy(
           e.aiState = 'fire';
           e.aiTimer = 8;
           for (let s = -1; s <= 1; s++) {
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               x: e.x + Math.cos(toPlayer) * 9,
               y: e.y + Math.sin(toPlayer) * 9,
               angle: toPlayer + s * 0.14,
@@ -2099,7 +2144,7 @@ function stepHostileEnemy(
         const orbs = e.defId === 'crown_guardian' ? 7 : 5;
         for (let k = 0; k < orbs; k++) {
           const offset = (k / (orbs - 1) - 0.5) * 0.72;
-          spawnEnemyProjectile(state, {
+          fireEnemyProjectile(state, def, {
             kind: 'boss_orb',
             x: e.x + Math.cos(toPlayer + offset) * 10,
             y: e.y + Math.sin(toPlayer + offset) * 10,
@@ -2135,7 +2180,7 @@ function stepHostileEnemy(
             // Close-range radial explosive charge release
             for (let k = 0; k < 6; k++) {
               const ang = (k / 6) * Math.PI * 2 + e.aimAngle;
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 kind: 'boss_orb',
                 x: e.x + Math.cos(ang) * 10,
                 y: e.y + Math.sin(ang) * 10,
@@ -2151,7 +2196,7 @@ function stepHostileEnemy(
             }
           } else {
             for (let k = -1; k <= 1; k++) {
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 kind: 'boss_orb',
                 x: e.x + Math.cos(e.aimAngle) * 10,
                 y: e.y + Math.sin(e.aimAngle) * 10,
@@ -2260,7 +2305,7 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
           if (e.aiPhase % 3 === 2) {
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               kind: 'grenade',
               x: e.x + Math.cos(e.aimAngle) * 8,
               y: e.y + Math.sin(e.aimAngle) * 8,
@@ -2277,7 +2322,7 @@ function stepHostileEnemy(
             e.attackCooldown = 66;
           } else {
             for (let s = -1; s <= 1; s++) {
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 kind: 'idpd_bullet',
                 x: e.x + Math.cos(e.aimAngle) * 8,
                 y: e.y + Math.sin(e.aimAngle) * 8,
@@ -2359,7 +2404,7 @@ function stepHostileEnemy(
         }
         if (e.aiTimer <= 0) {
           e.aiState = 'idle';
-          spawnEnemyProjectile(state, {
+          fireEnemyProjectile(state, def, {
             kind: 'idpd_bullet',
             x: e.x + Math.cos(toPlayer) * 9,
             y: e.y + Math.sin(toPlayer) * 9,
@@ -2421,7 +2466,7 @@ function stepHostileEnemy(
         moveEnemy(state, e, 0, 0);
         if (e.aiTimer <= 0) {
           for (let b = -2; b <= 2; b++) {
-            spawnEnemyProjectile(state, {
+            fireEnemyProjectile(state, def, {
               kind: 'idpd_bullet',
               x: e.x + Math.cos(e.aimAngle) * 10,
               y: e.y + Math.sin(e.aimAngle) * 10,
@@ -2459,6 +2504,16 @@ function stepHostileEnemy(
     // IDPD: idpd_van (drives carving walls -> deploys squad & opens HQ hijack boarding -> departs via blue portal!)
     // ------------------------------------------------------------------------
     case 'idpd_van': {
+      const rt = getAreaRuntime(state);
+      const removeVanBoardProp = (): void => {
+        const bpId = rt.vanBoardPropIds.get(e.id);
+        if (bpId !== undefined) {
+          const pIdx = state.props.findIndex((p) => p.id === bpId);
+          if (pIdx !== -1) state.props.splice(pIdx, 1);
+          rt.vanBoardPropIds.delete(e.id);
+        }
+      };
+
       if (e.aiState === 'drive') {
         e.aiTimer -= 1;
         moveEnemy(
@@ -2482,6 +2537,29 @@ function stepHostileEnemy(
               text: 'VAN OPEN [E]',
               color: '#5ecbff',
             });
+            // Expose persistent [E] BOARD VAN interactPrompt via non-solid prompt anchor synced to the open Van!
+            if (!rt.vanBoardPropIds.has(e.id)) {
+              const safePos = isWorldSolid(state.map, e.x, e.y)
+                ? findNearestFloor(state.map, e.x, e.y, 8)
+                : { x: e.x, y: e.y };
+              const boardAnchor: PropEntity = {
+                id: allocEntityId(state),
+                kind: 'bone_pile',
+                x: safePos.x,
+                y: safePos.y,
+                radius: 16,
+                hp: 999999,
+                maxHp: 999999,
+                solid: false,
+                opened: false,
+                hurtFlashTicks: 0,
+                sprite: 'sprVanOpen',
+                flipX: e.facing === -1,
+                interactPrompt: '[E] BOARD VAN',
+              };
+              state.props.push(boardAnchor);
+              rt.vanBoardPropIds.set(e.id, boardAnchor.id);
+            }
           }
           if (e.aiPhase === 0) {
             e.aiPhase = 1;
@@ -2502,12 +2580,24 @@ function stepHostileEnemy(
         e.contactDamage = 0;
         e.aiTimer -= 1;
         moveEnemy(state, e, 0, 0, { noSep: true });
+        const bpId = rt.vanBoardPropIds.get(e.id);
+        if (bpId !== undefined) {
+          const anchor = state.props.find((p) => p.id === bpId);
+          if (anchor) {
+            anchor.x = e.x;
+            anchor.y = e.y;
+            anchor.hp = anchor.maxHp;
+            anchor.interactPrompt = '[E] BOARD VAN';
+          }
+        }
         if (e.aiTimer <= 0) {
+          removeVanBoardProp();
           e.aiState = 'parked';
           e.aiTimer = 45;
         }
       } else {
         // Parked empty van departs cleanly via blue IDPD portal so it NEVER softlocks level exit!
+        removeVanBoardProp();
         e.contactDamage = 0;
         moveEnemy(state, e, 0, 0, { noSep: true });
         const hasOtherHostiles = state.enemies.some(
@@ -2518,7 +2608,6 @@ function stepHostileEnemy(
         }
         e.aiTimer -= 1;
         if (e.aiTimer <= 0) {
-          const rt = getAreaRuntime(state);
           // Remove from trackedSpecials BEFORE splicing so portal departure does not explode!
           rt.trackedSpecials.delete(e.id);
           const idx = state.enemies.indexOf(e);
@@ -2601,7 +2690,7 @@ function stepHostileEnemy(
             const count = 4;
             for (let k = 0; k < count; k++) {
               const offset = (k / (count - 1) - 0.5) * 0.42;
-              spawnEnemyProjectile(state, {
+              fireEnemyProjectile(state, def, {
                 x: e.x + Math.cos(toPlayer) * 8,
                 y: e.y + Math.sin(toPlayer) * 8,
                 angle: toPlayer + offset,
@@ -2641,6 +2730,8 @@ function stepHostileEnemy(
               bounce: 0,
               explosionRadius: 0,
               sprite: 'sprSlash',
+              sourceCause: def.name.toUpperCase(),
+              sourceSprite: def.sprites.idle,
               hitIds: [],
               deflectsProjectiles: false,
               destroysProjectiles: false,
@@ -2848,28 +2939,46 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
     }
   }
 
-  // 3. 3-1 Golden Car repair via Screwdriver swing (Y.V.'s Mansion 3-? setup)
+  // 3. 3-1 Golden Car repair via aimed Screwdriver swing (Y.V.'s Mansion 3-? setup)
   if (state.areaCode === '3-1' && rt.venusCarPropId !== null) {
     const car = state.props.find((p) => p.id === rt.venusCarPropId);
     if (car) {
       if (!rt.venusCarFixed) {
-        for (let i = 0; i < state.projectiles.length; i++) {
-          const pr = state.projectiles[i]!;
-          if (
-            pr.team !== 'player' ||
-            pr.kind !== 'melee_slash' ||
-            (pr.weaponId !== 'screwdriver' &&
-              pr.weaponId !== 'golden_screwdriver' &&
-              pr.weaponId !== 'energy_screwdriver')
-          ) {
-            continue;
-          }
-          const reach = (pr.meleeReach ?? 26) + car.radius + 8;
-          if (Math.hypot(state.player.x - car.x, state.player.y - car.y) <= reach) {
+        if (car.sprite === 'sprVenusCarFixed') {
+          // Already repaired externally (e.g. screwdriver melee hook) — sync cleanly without double-triggering!
+          rt.venusCarFixed = true;
+          car.hp = 999;
+          car.maxHp = 999;
+          car.interactPrompt = '[E] Y.V. MANSION';
+        } else {
+          for (let i = 0; i < state.projectiles.length; i++) {
+            const pr = state.projectiles[i]!;
+            if (
+              pr.team !== 'player' ||
+              pr.kind !== 'melee_slash' ||
+              (pr.weaponId !== 'screwdriver' &&
+                pr.weaponId !== 'golden_screwdriver' &&
+                pr.weaponId !== 'energy_screwdriver')
+            ) {
+              continue;
+            }
+            const cdx = car.x - state.player.x;
+            const cdy = car.y - state.player.y;
+            const dist = Math.hypot(cdx, cdy);
+            const reach = (pr.meleeReach ?? 26) + car.radius + 8;
+            if (dist > reach) continue;
+            const halfArc = (((pr.meleeArcDeg ?? 70) * Math.PI) / 180) * 0.5 + 0.25;
+            const angToCar = Math.atan2(cdy, cdx);
+            const inArc =
+              dist <= car.radius + 6 ||
+              Math.abs(normalizeAngle(angToCar - pr.angle)) <= halfArc;
+            if (!inArc) continue;
+
             rt.venusCarFixed = true;
             car.hp = 999;
             car.maxHp = 999;
             car.sprite = 'sprVenusCarFixed';
+            car.interactPrompt = '[E] Y.V. MANSION';
             emitEvent(state, { type: 'sfx', sound: 'sndWeaponPickup', x: car.x, y: car.y });
             emitEvent(state, {
               type: 'pickup_text',
@@ -2897,6 +3006,7 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
         }
       } else {
         car.hp = car.maxHp;
+        car.interactPrompt = '[E] Y.V. MANSION';
         if (state.tick % 24 === 0) {
           emitEvent(state, {
             type: 'particle',
@@ -2911,6 +3021,17 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
           });
         }
       }
+    }
+  }
+
+  // 3B. 5-1 Ice Flower: always indestructible, dynamically prompts [E] FEED FLOWER when holding Last Wish!
+  if (state.areaCode === '5-1' && rt.jungleFlowerPropId !== null) {
+    const flower = state.props.find((p) => p.id === rt.jungleFlowerPropId);
+    if (flower) {
+      flower.hp = flower.maxHp;
+      flower.interactPrompt = state.player.mutations.includes('last_wish')
+        ? '[E] FEED FLOWER'
+        : undefined;
     }
   }
 
@@ -2929,7 +3050,7 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
     }
   }
 
-  // 5. 3-2 / 5-2 / 7-2 Proto Statue charging & shattering -> Crown Vault (vault)
+  // 5. 3-2 / 5-2 / 7-2 Proto Statue wide rad suction & shattering -> Crown Vault (vault)
   if (rt.protoStatuePropId !== null && !state.portal.entered) {
     const statue = state.props.find((p) => p.id === rt.protoStatuePropId);
     if (statue) {
@@ -2937,21 +3058,50 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
       rt.protoStatueY = statue.y;
       const stored = statue.radsStored ?? 0;
       if (stored < 30) {
-        // Pull and absorb nearby rads into the statue (activates once damaged or rads drop nearby)
-        const pullRadius = statue.hp < statue.maxHp ? 88 : 64;
+        // Once damaged/activated (hp < maxHp or radsStored > 0), pull strongly across 210px faster than
+        // player magnetism / Plutonium Hunger so the player never starves the statue!
+        const activated = statue.hp < statue.maxHp || stored > 0;
+        const pullRadius = activated ? 210 : 72;
+        const pullStep = activated ? 10.5 : 3.2;
+        const absorbDist = activated ? 22 : 16;
         for (let i = state.pickups.length - 1; i >= 0; i--) {
           const pk = state.pickups[i]!;
           if (pk.kind !== 'rad' && pk.kind !== 'big_rad') continue;
           const pdx = statue.x - pk.x;
           const pdy = statue.y - pk.y;
           const pd = Math.hypot(pdx, pdy);
-          if (pd <= 16) {
+          if (pd <= absorbDist) {
             statue.radsStored = (statue.radsStored ?? 0) + pk.value;
             state.pickups.splice(i, 1);
             emitEvent(state, { type: 'sfx', sound: 'sndStatueXP', x: statue.x, y: statue.y, pitchJitter: 0.1 });
           } else if (pd <= pullRadius) {
-            pk.x += (pdx / pd) * 2.4;
-            pk.y += (pdy / pd) * 2.4;
+            const nx = pdx / pd;
+            const ny = pdy / pd;
+            pk.x += nx * pullStep;
+            pk.y += ny * pullStep;
+            if (activated) {
+              // Override outward/player-magnetism velocity so stepPickups keeps streaming into the statue
+              pk.vx = nx * 5.0;
+              pk.vy = ny * 5.0;
+              if (state.tick % 4 === 0) {
+                emitEvent(state, {
+                  type: 'particle',
+                  kind: 'spark',
+                  x: pk.x,
+                  y: pk.y,
+                  vx: nx * 1.4,
+                  vy: ny * 1.4,
+                  color: '#66ff88',
+                  size: 2,
+                  life: 6,
+                });
+              }
+            }
+            if (Math.hypot(statue.x - pk.x, statue.y - pk.y) <= absorbDist) {
+              statue.radsStored = (statue.radsStored ?? 0) + pk.value;
+              state.pickups.splice(i, 1);
+              emitEvent(state, { type: 'sfx', sound: 'sndStatueXP', x: statue.x, y: statue.y, pitchJitter: 0.1 });
+            }
           }
         }
       }
@@ -2980,18 +3130,76 @@ function stepSecretAndWorldMechanics(state: SimState, rng: SeededRng): void {
     }
   }
 
-  // 6. Crown Vault indestructible pedestal + return-area restoration (3-2 -> 3-3, 5-2 -> 5-3, 7-2 -> 7-3)
+  // 6. Crown Vault indestructible pedestal + alcove-anchored exit portal emitting actual vaultReturnArea
   if (state.areaCode === 'vault') {
     const pedestal = state.props.find((p) => p.kind === 'proto_statue');
     if (pedestal) {
       pedestal.hp = pedestal.maxHp;
+      pedestal.interactPrompt = '[E] SWITCH CROWN';
     }
     const runRt = getRunRuntime(state);
+    // Anchor Vault exit portal in the North Exit Alcove (>= 110px away from pedestal, outside 96px portal suction!)
+    // and emit the true vaultReturnArea (3-3 / 5-3 / 7-3) directly on portal_open!
+    if (
+      !state.portal.active &&
+      state.phase === 'playing' &&
+      (state.levelStartEnemyCount > 0 || state.levelKills > 0)
+    ) {
+      const hostilesLeft = state.enemies.some(
+        (e) => !e.friendly && e.hp > 0 && e.aiState !== 'disguised',
+      );
+      if (!hostilesLeft) {
+        const ts = state.map.tileSize || TILE_SIZE;
+        const cx = Math.floor(state.map.width / 2);
+        let portalPos = tileToWorldCenter(cx, 6, ts);
+        if (Math.hypot(state.player.x - portalPos.x, state.player.y - portalPos.y) < 52) {
+          portalPos = tileToWorldCenter(cx, Math.min(state.map.height - 5, 28), ts);
+        }
+        const targetArea = runRt.vaultReturnArea ?? '4-1';
+        openBossPortal(
+          state,
+          portalPos.x,
+          portalPos.y,
+          targetArea,
+          state.loop,
+          `VAULT EXIT (${targetArea})!`,
+        );
+      }
+    }
     if (state.portal.active && runRt.vaultReturnArea && state.portal.targetArea === '4-1') {
       state.portal.targetArea = runRt.vaultReturnArea;
     }
     if (state.portal.entered && runRt.vaultReturnArea) {
       runRt.vaultReturnArea = null;
+    }
+  }
+
+  // 7. 7-3 Broken Throne (intact-generator kill): indestructible & triggers victory_throne when walked onto or [E]!
+  if (state.areaCode === '7-3' && rt.brokenThronePropId !== null && state.phase === 'playing') {
+    const broken = state.props.find((p) => p.id === rt.brokenThronePropId);
+    if (broken) {
+      broken.hp = broken.maxHp;
+      broken.interactPrompt = '[E] SIT ON THRONE';
+      if (rt.brokenThroneSitDelay > 0) {
+        rt.brokenThroneSitDelay -= 1;
+      } else if (
+        state.player.alive &&
+        Math.hypot(state.player.x - broken.x, state.player.y - broken.y) <= 24
+      ) {
+        triggerThroneVictory(state, broken.x, broken.y, rng);
+      }
+    }
+  }
+
+  // 8. Sweep stale Loop 1+ Van boarding prompt anchors if their van died or closed
+  if (rt.vanBoardPropIds.size > 0) {
+    for (const [vanId, propId] of rt.vanBoardPropIds.entries()) {
+      const van = state.enemies.find((e) => e.id === vanId && e.hp > 0 && e.aiState === 'open');
+      if (!van) {
+        const pIdx = state.props.findIndex((p) => p.id === propId);
+        if (pIdx !== -1) state.props.splice(pIdx, 1);
+        rt.vanBoardPropIds.delete(vanId);
+      }
     }
   }
 
