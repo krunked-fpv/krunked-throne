@@ -2065,5 +2065,23 @@ describe('parity-combat: Wave 2 P0 & P1 Combat, Mutants, Cause-of-Death & Progre
       SeededRng.fromState(aud.rngState),
     );
     expect(aud.events.some((e) => e.type === 'sfx' && e.sound === 'sndSwapShotgun')).toBe(true);
+
+    // 8. Pressing [E] on top of rads (lower index) + dropped weapon (higher index) never crashes on splice index shift
+    const pkShift = createRunState({ mutant: 'fish', seed: 7023 });
+    pkShift.enemies = [];
+    pkShift.pickups = [];
+    clearBox(pkShift);
+    spawnPickup(pkShift, 'rad', pkShift.player.x, pkShift.player.y, { value: 2, vx: 0, vy: 0 });
+    spawnPickup(pkShift, 'weapon', pkShift.player.x, pkShift.player.y, { weaponId: 'shotgun', value: 1, vx: 0, vy: 0 });
+    expect(() =>
+      stepPlayerAndCombat(
+        pkShift,
+        makeInput({ aimWorldX: pkShift.player.x + 20, aimWorldY: pkShift.player.y, pickupPressed: true }),
+        SeededRng.fromState(pkShift.rngState),
+      ),
+    ).not.toThrow();
+    expect(pkShift.player.rads).toBe(2);
+    expect(pkShift.player.weapons[1]?.weaponId).toBe('shotgun');
+    expect(pkShift.pickups).toHaveLength(0);
   });
 });

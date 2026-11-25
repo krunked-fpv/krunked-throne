@@ -4,6 +4,7 @@ import type {
   EnemyEntity,
   InputFrame,
   MutantId,
+  PickupEntity,
   SimState,
   WeaponDef,
   WeaponSlotState,
@@ -1565,7 +1566,7 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
   }
 
   // 2. Collect non-weapon pickups automatically; weapon pickup on E (pickupPressed)
-  let nearestWepIdx = -1;
+  let nearestWep: PickupEntity | null = null;
   let nearestWepDistSq = 28 * 28;
 
   for (let i = state.pickups.length - 1; i >= 0; i--) {
@@ -1577,7 +1578,7 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
     if (pk.kind === 'weapon') {
       if (dSq < nearestWepDistSq) {
         nearestWepDistSq = dSq;
-        nearestWepIdx = i;
+        nearestWep = pk;
       }
       continue;
     }
@@ -1638,9 +1639,9 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
     }
   }
 
-  // Pick up nearest weapon when pressing E (pickupPressed)
-  if (input.pickupPressed && nearestWepIdx !== -1) {
-    const pk = state.pickups[nearestWepIdx]!;
+  // Pick up nearest weapon when pressing E (pickupPressed) — resolve by reference so earlier splices never shift index!
+  if (input.pickupPressed && nearestWep !== null) {
+    const pk = nearestWep;
     if (
       pk.weaponId &&
       givePlayerWeapon(state, pk.weaponId, undefined, true, {
@@ -1648,7 +1649,10 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
         grantBonus: pk.value > 0,
       })
     ) {
-      state.pickups.splice(nearestWepIdx, 1);
+      const wepIdx = state.pickups.indexOf(pk);
+      if (wepIdx !== -1) {
+        state.pickups.splice(wepIdx, 1);
+      }
     }
   }
 }
