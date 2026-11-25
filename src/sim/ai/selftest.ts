@@ -142,7 +142,7 @@ function runTest1AllBiomesAndLoopPopulation(): void {
     warpToArea(state, tc.code, tc.loop);
     assertAllCoordsFiniteAndWalkable(state, `${tc.code}@L${tc.loop}`, true);
 
-    const hostiles = state.enemies.filter((e) => !e.friendly && e.hp > 0);
+    const hostiles = state.enemies.filter((e) => !e.friendly && e.hp > 0 && e.aiState !== 'disguised');
     assert(
       hostiles.length >= tc.expectMinHostiles,
       `${tc.code}@L${tc.loop}: expected >= ${tc.expectMinHostiles} hostiles, got ${hostiles.length}`,
