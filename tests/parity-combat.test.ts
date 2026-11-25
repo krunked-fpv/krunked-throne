@@ -12,6 +12,7 @@ import {
   hashSimState,
   isWorldSolid,
   setTile,
+  stepCorpses,
   stepPickups,
   stepPortal,
   tileToWorldCenter,
@@ -39,7 +40,7 @@ import {
   loadAreaIntoState,
   openChest,
 } from '@/sim/progression';
-import { createEnemyEntity, createRunState } from '@/sim/entities';
+import { createEnemyEntity, createRunState, getAreaRuntime } from '@/sim/entities';
 import { stepSimulation, warpToArea } from '@/sim/ai';
 
 function makeInput(overrides: Partial<InputFrame> = {}): InputFrame {
@@ -428,7 +429,7 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     // Pop Pop reload multiplier = 2.0x (YV passive 0.8 * 18 = 14 -> * 2.0 = 28)
     expect(state.player.weapons[0]!.maxReloadTicks).toBe(28);
 
-    // 2. Back 2 Bizniz: Pop Pop fires 3 shots for ONLY 2 ammo!
+    // 2. Back 2 Bizniz: Pop Pop fires 3 staggered shots for ONLY 2 ammo!
     grantUltraById(state, 'yv_b', rng);
     state.player.weapons[0]!.reloadTicks = 0;
     state.player.ammo.shell = 10;
@@ -438,12 +439,18 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
       makeInput({ aimWorldX: state.player.x + 40, aimWorldY: state.player.y, activePressed: true }),
       rng,
     );
+    // Shot 1 fires on tick 0; remaining 2 stagger over ticks 1-2 (never all 3 simultaneously on tick 0!)
+    expect(state.stats.shotsFired).toBe(preB2BShots + 1);
+    for (let t = 0; t < 4; t++) {
+      stepPlayerAndCombat(state, makeInput({ aimWorldX: state.player.x + 40, aimWorldY: state.player.y }), rng);
+    }
     expect(state.stats.shotsFired).toBe(preB2BShots + 3);
     expect(state.player.ammo.shell).toBe(8); // paid 2, got 3!
 
-    // 3. Brrrap + Back 2 Bizniz: fires 5 shots for ONLY 4 ammo at 3.0x reload!
+    // 3. Brrrap + Back 2 Bizniz: fires 5 staggered shots for ONLY 4 ammo at 3.0x reload!
     grantMutationById(state, 'throne_butt', rng);
     state.player.weapons[0]!.reloadTicks = 0;
+    state.player.weapons[0]!.burstRemaining = 0;
     state.player.ammo.shell = 10;
     const preBrrrap = state.stats.shotsFired;
     stepPlayerAndCombat(
@@ -451,6 +458,10 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
       makeInput({ aimWorldX: state.player.x + 40, aimWorldY: state.player.y, activePressed: true }),
       rng,
     );
+    expect(state.stats.shotsFired).toBe(preBrrrap + 1);
+    for (let t = 0; t < 6; t++) {
+      stepPlayerAndCombat(state, makeInput({ aimWorldX: state.player.x + 40, aimWorldY: state.player.y }), rng);
+    }
     expect(state.stats.shotsFired).toBe(preBrrrap + 5);
     expect(state.player.ammo.shell).toBe(6); // paid 4, got 5!
     expect(state.player.weapons[0]!.maxReloadTicks).toBe(42); // 14 * 3.0
@@ -654,11 +665,16 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     const hRng = SeededRng.fromState(hState.rngState);
     hState.player.rads = 20;
 
-    // Place a rad pickup within attraction range -> should NOT pull while beaming
+    // Place a rad pickup within attraction range -> should NOT pull while radBeamActive is true,
+    // and MUST immediately resume pulling once radBeamActive is false (even while radBeamTicks > 0)!
     const radPk = spawnPickup(hState, 'rad', hState.player.x + 30, hState.player.y, { value: 1, vx: 0, vy: 0 });
     hState.player.radBeamTicks = 10;
+    hState.player.radBeamActive = true;
     stepPickups(hState);
     expect(radPk.x).toBe(hState.player.x + 30);
+    hState.player.radBeamActive = false;
+    stepPickups(hState);
+    expect(radPk.x).toBeLessThan(hState.player.x + 30);
 
     // Beam an enemy -> absorbed rads refunded on death!
     const foe = createEnemyEntity(hState, 'bandit', hState.player.x + 28, hState.player.y, hRng);
@@ -699,19 +715,48 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     expect(anom.stats.kills).toBe(killsBefore + 1);
     expect(anom.pickups.reduce((s, p) => s + (p.kind === 'rad' || p.kind === 'big_rad' ? p.value : 0), 0)).toBe(5);
 
-    // 2. Rogue Portal Strike self-damage + rogue_a cap 6 + idpd_canister value 2
+    // 2. Rogue Portal Strike hold-to-drag targeting + rolling delayed blasts + safe quick-tap standoff + rogue_a cap 6
     const rState = createInitialSimState({ mutant: 'rogue', seed: 3013 });
     rState.enemies = [];
     clearBox(rState);
     const rRng = SeededRng.fromState(rState.rngState);
-    const hpBeforeStrike = rState.player.hp;
-    // Call Portal Strike point-blank -> hurts Rogue!
+    const hpBeforeQuickTap = rState.player.hp;
+    // Quick tap with close cursor launches safely PAST standoff (zero instant tick-0 self-nuke!)
     stepPlayerAndCombat(
       rState,
-      makeInput({ aimWorldX: rState.player.x + 2, aimWorldY: rState.player.y, activePressed: true }),
+      makeInput({ aimWorldX: rState.player.x + 2, aimWorldY: rState.player.y, activePressed: true, activeHeld: false }),
       rRng,
     );
-    expect(rState.player.hp).toBeLessThan(hpBeforeStrike);
+    for (let t = 0; t < 24; t++) {
+      rState.tick += 1;
+      stepPlayerAndCombat(rState, makeInput({ aimWorldX: rState.player.x + 2, aimWorldY: rState.player.y }), rRng);
+    }
+    expect(rState.player.hp).toBe(hpBeforeQuickTap);
+
+    // Hold-to-drag directly on top of Rogue & stand still through telegraph -> delayed blast CAN self-damage Rogue!
+    rState.player.activeCooldown = 0;
+    rState.events = [];
+    stepPlayerAndCombat(
+      rState,
+      makeInput({ aimWorldX: rState.player.x, aimWorldY: rState.player.y, activePressed: true, activeHeld: true }),
+      rRng,
+    );
+    expect(rState.player.portalStrikeAim?.active).toBe(true);
+    expect(rState.events.some((e) => e.type === 'sfx' && e.sound === 'sndRogueAim')).toBe(true);
+    // Release RMB -> queues rolling delayed blasts
+    stepPlayerAndCombat(
+      rState,
+      makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y, activeHeld: false }),
+      rRng,
+    );
+    expect(rState.player.portalStrikeAim).toBeNull();
+    expect(rState.events.some((e) => e.type === 'sfx' && e.sound === 'sndPortalStrikeLoop')).toBe(true);
+    for (let t = 0; t < 12; t++) {
+      rState.tick += 1;
+      stepPlayerAndCombat(rState, makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y }), rRng);
+    }
+    expect(rState.player.hp).toBeLessThan(hpBeforeQuickTap);
+    expect(rState.player.lastDamageCause).toBe('PORTAL STRIKE');
 
     grantUltraById(rState, 'rogue_a', rRng);
     rState.player.portalStrikes = 5;
@@ -947,9 +992,9 @@ describe('parity-combat: Mutations & Crowns 1:1 Rules', () => {
     expect(state.player.maxHp).toBe(baseHp + 4);
 
     grantMutationById(state, 'gamma_guts', rng);
-    const airborne = createEnemyEntity(state, 'bandit', state.player.x, state.player.y, rng);
+    const airborne = createEnemyEntity(state, 'scorpion', state.player.x, state.player.y, rng);
     airborne.elevated = true;
-    const ground = createEnemyEntity(state, 'bandit', state.player.x, state.player.y, rng);
+    const ground = createEnemyEntity(state, 'scorpion', state.player.x, state.player.y, rng);
     const airHp = airborne.hp;
     const grdHp = ground.hp;
     stepPlayerAndCombat(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }), rng);
@@ -1398,5 +1443,645 @@ describe('parity-combat: Iconic Weapons & Projectile Physics', () => {
       stepSimulation(run2, makeInput({ moveX: 1, aimWorldX: run2.player.x + 50, aimWorldY: run2.player.y }));
     }
     expect(hashSimState(run1)).toBe(hashSimState(run2));
+  });
+});
+
+describe('parity-combat: Wave 2 P0 & P1 Combat, Mutants, Cause-of-Death & Progression Polish', () => {
+  it('P0: animates corpses smoothly to resting frame 5 before baking and records prevX/prevY on corpses & pickups', () => {
+    const state = createRunState({ mutant: 'fish', seed: 7001 });
+    state.corpses = [];
+    state.pickups = [];
+    state.decals = [];
+    clearBox(state, 8, 6);
+
+    const corpse = spawnCorpse(state, state.player.x + 12, state.player.y, 0.1, 0, 1, 'sprBanditDead', 12, true);
+    expect(corpse.frame).toBe(0);
+    expect(corpse.prevX).toBe(corpse.x);
+    expect(corpse.prevY).toBe(corpse.y);
+
+    // After 1 tick with tiny velocity, frame advances by +0.4 and MUST NOT bake prematurely on white frame 0!
+    stepCorpses(state);
+    expect(corpse.frame).toBeCloseTo(0.4, 5);
+    expect(corpse.baked).toBe(false);
+
+    // After 15 ticks, corpse finishes animation at resting frame 5 and bakes decal at frame 5
+    for (let t = 0; t < 15; t++) stepCorpses(state);
+    expect(corpse.frame).toBe(5);
+    expect(corpse.baked).toBe(true);
+    const decal = state.decals.find((d) => d.kind === 'corpse');
+    expect(decal).toBeDefined();
+    expect(decal!.frame).toBe(5);
+
+    // Pickup prevX/prevY updates on movement for smooth 60/120 FPS interpolation
+    const pk = spawnPickup(state, 'ammo', state.player.x + 20, state.player.y, {
+      ammoType: 'bullet',
+      value: 10,
+      vx: 3,
+      vy: 0,
+    });
+    const oldX = pk.x;
+    stepPickups(state);
+    expect(pk.prevX).toBe(oldX);
+    expect(pk.x).not.toBe(oldX);
+  });
+
+  it('P0: threads authentic cause-of-death through enemy projectiles, melee slashes, explosions, Golden Disc, and headless Chicken', () => {
+    const state = createRunState({ mutant: 'fish', seed: 7002 });
+    state.enemies = [];
+    state.projectiles = [];
+    clearBox(state);
+    const rng = SeededRng.fromState(state.rngState);
+
+    // 1. Enemy ranged projectile carries sourceCause & sourceSprite
+    spawnEnemyProjectile(state, {
+      x: state.player.x + 6,
+      y: state.player.y,
+      angle: Math.PI,
+      speed: 8,
+      damage: 2,
+      kind: 'boss_orb',
+      sprite: 'sprThroneBullet',
+      sourceCause: 'THE THRONE',
+      sourceSprite: 'sprNothingOn',
+    });
+    stepPlayerAndCombat(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }), rng);
+    expect(state.player.lastDamageCause).toBe('THE THRONE');
+    expect(state.player.lastKillerSprite).toBe('sprNothingOn');
+
+    // 2. Enemy melee slash uses sourceCause/sourceSprite (Ammo Mimic != ASSASSIN!)
+    state.player.iframes = 0;
+    state.projectiles = [];
+    state.projectiles.push({
+      id: allocEntityId(state),
+      kind: 'melee_slash',
+      team: 'enemy',
+      x: state.player.x + 6,
+      y: state.player.y,
+      prevX: state.player.x + 10,
+      prevY: state.player.y,
+      vx: 0,
+      vy: 0,
+      angle: Math.PI,
+      radius: 13,
+      damage: 2,
+      lifeTicks: 3,
+      maxLifeTicks: 3,
+      pierce: 1,
+      bounce: 0,
+      explosionRadius: 0,
+      sprite: 'sprSlash',
+      hitIds: [],
+      meleeReach: 22,
+      meleeArcDeg: 110,
+      sourceCause: 'AMMO MIMIC',
+      sourceSprite: 'sprMimicIdle',
+    });
+    stepPlayerAndCombat(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }), rng);
+    expect(state.player.lastDamageCause).toBe('AMMO MIMIC');
+    expect(state.player.lastKillerSprite).toBe('sprMimicIdle');
+
+    // 3. Golden Disc Gun self-hit reports GOLDEN DISC
+    state.player.iframes = 0;
+    state.player.hp = 8;
+    state.projectiles = [];
+    state.projectiles.push({
+      id: allocEntityId(state),
+      kind: 'disc',
+      team: 'player',
+      x: state.player.x + 5,
+      y: state.player.y,
+      prevX: state.player.x + 5,
+      prevY: state.player.y,
+      vx: -8,
+      vy: 0,
+      angle: Math.PI,
+      radius: 4.5,
+      damage: 28,
+      lifeTicks: 50,
+      maxLifeTicks: 90,
+      pierce: 4,
+      bounce: 4,
+      explosionRadius: 0,
+      sprite: 'sprGoldDisc',
+      weaponId: 'golden_disc_gun',
+      hitIds: [],
+      canHitPlayer: true,
+    });
+    stepPlayerAndCombat(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }), rng);
+    expect(state.player.lastDamageCause).toBe('GOLDEN DISC');
+    expect(state.player.hp).toBe(3); // 8 - 5
+
+    // 4. Headless Chicken bleed-out fills empty lastDamageCause fallback
+    const ch = createRunState({ mutant: 'chicken', seed: 7003 });
+    ch.player.headlessTicks = 1;
+    ch.player.lastDamageCause = '';
+    ch.player.lastKillerSprite = '';
+    stepPlayerAndCombat(ch, makeInput({ aimWorldX: ch.player.x + 20, aimWorldY: ch.player.y }), SeededRng.fromState(ch.rngState));
+    expect(ch.player.alive).toBe(false);
+    expect(ch.player.lastDamageCause).toBe('BLED OUT HEADLESS');
+    expect(ch.player.lastKillerSprite).toBe('sprMutant9Dead');
+  });
+
+  it('P0: isRad explosions hurt players (Toxic Barrel, Throne Generator) while honoring Boiling Veins and keeping Flare/Plasma safe', () => {
+    const state = createRunState({ mutant: 'fish', seed: 7004 });
+    state.enemies = [];
+    state.props = [];
+    clearBox(state);
+    const rng = SeededRng.fromState(state.rngState);
+
+    // Toxic Barrel (isRad: true) hurts player
+    const toxicBarrel = {
+      id: allocEntityId(state),
+      kind: 'toxic_barrel' as const,
+      x: state.player.x + 8,
+      y: state.player.y,
+      radius: 8,
+      hp: 4,
+      maxHp: 4,
+      solid: true,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprToxicBarrel',
+    };
+    state.props.push(toxicBarrel);
+    const hpBefore = state.player.hp;
+    damageProp(state, toxicBarrel, 20, rng);
+    expect(state.player.hp).toBeLessThan(hpBefore);
+    expect(state.player.lastDamageCause).toBe('TOXIC BARREL');
+
+    // Boiling Veins at <= 4 HP blocks isRad generator explosion cleanly
+    grantMutationById(state, 'boiling_veins', rng);
+    state.player.hp = 4;
+    state.player.iframes = 0;
+    const gen = {
+      id: allocEntityId(state),
+      kind: 'throne_generator' as const,
+      x: state.player.x + 8,
+      y: state.player.y,
+      radius: 12,
+      hp: 4,
+      maxHp: 4,
+      solid: true,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprBigGenerator',
+    };
+    state.props.push(gen);
+    damageProp(state, gen, 20, rng);
+    expect(state.player.hp).toBe(4);
+
+    // Flare Gun & Flame Cannon deal ZERO self-damage even without Boiling Veins!
+    for (const wId of ['flare_gun', 'flame_cannon'] as const) {
+      const fs = createRunState({ mutant: 'fish', seed: 7005 });
+      fs.enemies = [];
+      fs.projectiles = [];
+      clearBox(fs);
+      const fRng = SeededRng.fromState(fs.rngState);
+      givePlayerWeapon(fs, wId, 0, false);
+      fs.player.ammo.shell = 10;
+      const { tx, ty } = worldToTile(fs.player.x, fs.player.y, fs.map.tileSize);
+      setTile(fs.map, tx + 1, ty, TileType.Wall);
+      const startHp = fs.player.hp;
+      stepPlayerAndCombat(
+        fs,
+        makeInput({ aimWorldX: fs.player.x + 16, aimWorldY: fs.player.y, firePressed: true, fireHeld: true }),
+        fRng,
+      );
+      for (let t = 0; t < 6; t++) {
+        stepPlayerAndCombat(fs, makeInput({ aimWorldX: fs.player.x + 16, aimWorldY: fs.player.y }), fRng);
+      }
+      expect(fs.player.hp).toBe(startHp);
+    }
+  });
+
+  it('P0: Shovel (3 arcs) and Ultra Shovel (5 arcs) hit each enemy exactly 1x (never 3x/5x)', () => {
+    for (const tc of [
+      { id: 'shovel', expectedDmg: 15, arcs: 3 },
+      { id: 'ultra_shovel', expectedDmg: 34, arcs: 5 },
+    ]) {
+      const state = createRunState({ mutant: 'fish', seed: 7006 });
+      state.enemies = [];
+      state.projectiles = [];
+      clearBox(state);
+      const rng = SeededRng.fromState(state.rngState);
+      givePlayerWeapon(state, tc.id, 0, false);
+      state.player.rads = 20;
+
+      const boss = createEnemyEntity(state, 'big_dog', state.player.x + 22, state.player.y, rng);
+      boss.hp = 200;
+      boss.maxHp = 200;
+      stepPlayerAndCombat(
+        state,
+        makeInput({ aimWorldX: boss.x, aimWorldY: boss.y, firePressed: true, fireHeld: true }),
+        rng,
+      );
+      expect(state.projectiles.filter((p) => p.kind === 'melee_slash')).toHaveLength(tc.arcs);
+      for (let t = 0; t < 6; t++) {
+        stepPlayerAndCombat(state, makeInput({ aimWorldX: boss.x, aimWorldY: boss.y }), rng);
+      }
+      expect(200 - boss.hp).toBe(tc.expectedDmg);
+    }
+  });
+
+  it('P0: Horror Throne Butt heals even from odd radBeamTicks and Steroids TB cannot farm infinite ammo', () => {
+    // 1. Horror TB starting from odd radBeamTicks = 1 still heals reliably!
+    const h = createRunState({ mutant: 'horror', seed: 7007 });
+    h.enemies = [];
+    clearBox(h);
+    const hRng = SeededRng.fromState(h.rngState);
+    grantMutationById(h, 'throne_butt', hRng);
+    h.player.hp = 2;
+    h.player.rads = 120;
+    h.player.radBeamTicks = 1; // ODD start previously broke % 60 === 0 forever!
+    for (let t = 1; t <= 90; t++) {
+      h.tick = t;
+      stepPlayerAndCombat(
+        h,
+        makeInput({ aimWorldX: h.player.x + 40, aimWorldY: h.player.y, activeHeld: true }),
+        hRng,
+      );
+    }
+    expect(h.player.hp).toBeGreaterThanOrEqual(4);
+    expect(h.player.radBeamActive).toBe(true);
+
+    // Releasing RMB immediately sets radBeamActive = false
+    stepPlayerAndCombat(
+      h,
+      makeInput({ aimWorldX: h.player.x + 40, aimWorldY: h.player.y, activeHeld: false }),
+      hRng,
+    );
+    expect(h.player.radBeamActive).toBe(false);
+
+    // 2. Steroids TB dual-firing Revolvers into a wall NEVER nets infinite ammo + stamps lastFiredTick & meleeSwingSide
+    const s = createRunState({ mutant: 'steroids', seed: 7008 });
+    s.enemies = [];
+    clearBox(s);
+    const sRng = SeededRng.fromState(s.rngState);
+    grantMutationById(s, 'throne_butt', sRng);
+    s.player.ammo.bullet = 50;
+    for (let t = 1; t <= 200; t++) {
+      s.tick = t;
+      stepPlayerAndCombat(
+        s,
+        makeInput({
+          aimWorldX: s.player.x + 40,
+          aimWorldY: s.player.y,
+          fireHeld: true,
+          firePressed: t === 1,
+          activeHeld: true,
+          activePressed: t === 1,
+        }),
+        sRng,
+      );
+    }
+    expect(s.player.ammo.bullet).toBeLessThan(50);
+    expect(s.player.weapons[0]!.lastFiredTick).toBeGreaterThan(0);
+    expect(s.player.weapons[1]!.lastFiredTick).toBeGreaterThan(0);
+  });
+
+  it('P0: solid props block player movement, Shotgun Shoulders skips enemy flak, Palace drops high-tier guns, Crown of Life + Steroids B heals, Scarier Face syncs boss HUD', () => {
+    // 1. Player cannot walk straight through a solid 3-1 car
+    const carState = createRunState({ mutant: 'fish', seed: 7009 });
+    carState.enemies = [];
+    carState.props = [];
+    clearBox(carState, 8, 5);
+    const carRng = SeededRng.fromState(carState.rngState);
+    const carX = carState.player.x + 28;
+    const carY = carState.player.y;
+    carState.props.push({
+      id: allocEntityId(carState),
+      kind: 'car',
+      x: carX,
+      y: carY,
+      radius: 11,
+      hp: 30,
+      maxHp: 30,
+      solid: true,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprCarIdle',
+    });
+    for (let t = 0; t < 25; t++) {
+      carState.tick += 1;
+      stepPlayerAndCombat(
+        carState,
+        makeInput({ moveX: 1, moveY: 0, aimWorldX: carX + 40, aimWorldY: carY }),
+        carRng,
+      );
+    }
+    expect(carState.player.x).toBeLessThan(carX - 8);
+
+    // 2. Shotgun Shoulders does NOT buff enemy flak pellets
+    const ss = createRunState({ mutant: 'fish', seed: 7010 });
+    ss.enemies = [];
+    ss.projectiles = [];
+    clearBox(ss);
+    const ssRng = SeededRng.fromState(ss.rngState);
+    grantMutationById(ss, 'shotgun_shoulders', ssRng);
+    spawnEnemyProjectile(ss, {
+      x: ss.player.x + 40,
+      y: ss.player.y,
+      angle: 0,
+      speed: 2,
+      damage: 4,
+      kind: 'flak',
+      lifeTicks: 1,
+      sprite: 'sprFlakBullet',
+    });
+    stepPlayerAndCombat(ss, makeInput({ aimWorldX: ss.player.x + 40, aimWorldY: ss.player.y }), ssRng);
+    const enemyShells = ss.projectiles.filter((p) => p.team === 'enemy' && p.kind === 'shell');
+    expect(enemyShells.length).toBeGreaterThan(0);
+    for (const sh of enemyShells) {
+      expect(sh.bounce).toBe(1);
+      expect(sh.maxLifeTicks).toBe(20);
+    }
+
+    // 3. Palace 7-2 Loop 0 Crown of Guns weapon drops use area weaponTierBase (high tier, NOT 0-3!)
+    const pal = createRunState({ mutant: 'fish', seed: 7011, crown: 'guns' });
+    warpToArea(pal, '7-2', 0);
+    pal.pickups = [];
+    const palRng = SeededRng.fromState(pal.rngState);
+    for (let k = 0; k < 40; k++) {
+      const f = createEnemyEntity(pal, 'guardian', pal.player.x + 40, pal.player.y, palRng);
+      applyDamageToEnemy(pal, f, 999, 0, 0, palRng);
+    }
+    const droppedTiers = pal.pickups
+      .filter((p) => p.kind === 'weapon' && p.weaponId)
+      .map((p) => WEAPONS[p.weaponId!]!.tier);
+    expect(droppedTiers.length).toBeGreaterThan(0);
+    expect(Math.max(...droppedTiers)).toBeGreaterThanOrEqual(8);
+
+    // 4. Crown of Life + Steroids Ultra B (Get Loaded) STILL heals on ammo chest (no softlock!)
+    const lifeSteroids = createRunState({ mutant: 'steroids', seed: 7012, crown: 'life' });
+    const lsRng = SeededRng.fromState(lifeSteroids.rngState);
+    grantUltraById(lifeSteroids, 'steroids_b', lsRng);
+    lifeSteroids.player.hp = 2;
+    const chest = {
+      id: allocEntityId(lifeSteroids),
+      kind: 'ammo_chest' as const,
+      x: lifeSteroids.player.x,
+      y: lifeSteroids.player.y,
+      radius: 8,
+      hp: 10,
+      maxHp: 10,
+      solid: false,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprAmmoChest',
+    };
+    openChest(lifeSteroids, chest, lsRng);
+    expect(lifeSteroids.player.hp).toBe(6);
+    expect(chest.sprite).toBe('sprHealthChest');
+
+    // 5. Scarier Face syncs state.boss.maxHp & state.boss.hp on area load
+    const sf = createRunState({ mutant: 'fish', seed: 7013 });
+    grantMutationById(sf, 'scarier_face', SeededRng.fromState(sf.rngState));
+    warpToArea(sf, '1-3', 0);
+    const bb = sf.enemies.find((e) => e.bossId === 'big_bandit')!;
+    expect(sf.boss).not.toBeNull();
+    expect(sf.boss!.maxHp).toBe(bb.maxHp);
+    expect(sf.boss!.hp).toBe(bb.hp);
+  });
+
+  it('P0: Gamma Guts kills pre-hurt 1 HP Maggot, 7 HP Rat, and 9 HP Scarier-Face Freak cleanly; 3-1 Golden Car repairs at low HP without exploding', () => {
+    // 1. Gamma Guts reliability
+    const gg = createRunState({ mutant: 'fish', seed: 7014 });
+    gg.enemies = [];
+    clearBox(gg);
+    const ggRng = SeededRng.fromState(gg.rngState);
+    grantMutationById(gg, 'gamma_guts', ggRng);
+    grantMutationById(gg, 'scarier_face', ggRng);
+
+    // Pre-hurt 1 HP maggot (hurtFlashTicks = 4 from bullet!)
+    const mag = createEnemyEntity(gg, 'maggot', gg.player.x, gg.player.y, ggRng);
+    mag.hp = 1;
+    mag.hurtFlashTicks = 4;
+    // 7 HP Rat
+    const rat = createEnemyEntity(gg, 'rat', gg.player.x, gg.player.y, ggRng);
+    rat.hp = 7;
+    // 9 HP Scarier-Face Freak
+    const freak = createEnemyEntity(gg, 'freak', gg.player.x, gg.player.y, ggRng);
+    freak.hp = 9;
+    gg.rngState = ggRng.getState();
+
+    const hpStart = gg.player.hp;
+    stepSimulation(gg, makeInput({ aimWorldX: gg.player.x + 20, aimWorldY: gg.player.y }));
+    expect(mag.hp).toBeLessThanOrEqual(0);
+    expect(rat.hp).toBeLessThanOrEqual(0);
+    expect(freak.hp).toBeLessThanOrEqual(0);
+    expect(gg.player.hp).toBe(hpStart);
+
+    // 2. 3-1 Golden Car at 2 HP repaired cleanly by Energy Screwdriver (16 dmg!) without exploding
+    const car = createRunState({ mutant: 'fish', seed: 7015 });
+    warpToArea(car, '3-1', 0);
+    const rt = getAreaRuntime(car);
+    const venusCar = car.props.find((p) => p.id === rt.venusCarPropId)!;
+    venusCar.hp = 2; // Previously exploded immediately on Screwdriver/Energy Screwdriver!
+    car.enemies = [];
+    givePlayerWeapon(car, 'energy_screwdriver', 0, false);
+    car.player.ammo.energy = 20;
+    car.player.x = venusCar.x - 16;
+    car.player.y = venusCar.y;
+
+    // Swinging AWAY from car must NOT repair it
+    stepPlayerAndCombat(
+      car,
+      makeInput({ aimWorldX: car.player.x - 40, aimWorldY: car.player.y, firePressed: true, fireHeld: true }),
+      SeededRng.fromState(car.rngState),
+    );
+    expect(rt.venusCarFixed).toBe(false);
+    expect(car.props.includes(venusCar)).toBe(true);
+
+    // Swinging TOWARD car repairs cleanly without exploding!
+    car.player.weapons[0]!.reloadTicks = 0;
+    stepPlayerAndCombat(
+      car,
+      makeInput({ aimWorldX: venusCar.x, aimWorldY: venusCar.y, firePressed: true, fireHeld: true }),
+      SeededRng.fromState(car.rngState),
+    );
+    expect(rt.venusCarFixed).toBe(true);
+    expect(car.props.includes(venusCar)).toBe(true);
+    expect(venusCar.sprite).toBe('sprVenusCarFixed');
+    expect(venusCar.interactPrompt).toBe('[E] Y.V. MANSION');
+  });
+
+  it('P1: Unified lasers, 5-beam Ultra Laser Pistol, Nuke sprNuke/steering, ToxicGas, Blood Hammer parry, casings, Robot/Chicken cursed UX, terrain traction, Rebel separation & authentic NT audio', () => {
+    // 1. Unified hitscan laser emits ONE visual beam carrying beamOriginX/Y; Ultra Laser Pistol fires 5 beams!
+    const ls = createRunState({ mutant: 'fish', seed: 7016 });
+    ls.enemies = [];
+    ls.projectiles = [];
+    clearBox(ls, 10, 5);
+    const lRng = SeededRng.fromState(ls.rngState);
+    givePlayerWeapon(ls, 'laser_pistol', 0, false);
+    ls.player.ammo.energy = 20;
+    stepPlayerAndCombat(
+      ls,
+      makeInput({ aimWorldX: ls.player.x + 120, aimWorldY: ls.player.y, firePressed: true, fireHeld: true }),
+      lRng,
+    );
+    const laserVisuals = ls.projectiles.filter((p) => p.kind === 'laser' && p.damage === 0);
+    expect(laserVisuals).toHaveLength(1);
+    expect(laserVisuals[0]!.beamOriginX).toBeDefined();
+    expect(laserVisuals[0]!.beamOriginY).toBeDefined();
+    // Energy weapon ejects ZERO casings!
+    expect(ls.casings).toHaveLength(0);
+
+    ls.projectiles = [];
+    givePlayerWeapon(ls, 'ultra_laser_pistol', 0, false);
+    ls.player.rads = 20;
+    stepPlayerAndCombat(
+      ls,
+      makeInput({ aimWorldX: ls.player.x + 120, aimWorldY: ls.player.y, firePressed: true, fireHeld: true }),
+      lRng,
+    );
+    const ultraVisuals = ls.projectiles.filter((p) => p.kind === 'laser' && p.damage === 0 && p.isUltra);
+    expect(ultraVisuals).toHaveLength(5);
+
+    // 2. Blood Hammer parrying an enemy bullet causes ZERO self-damage!
+    const bh = createRunState({ mutant: 'fish', seed: 7017 });
+    bh.enemies = [];
+    bh.props = [];
+    bh.projectiles = [];
+    clearBox(bh);
+    const bhRng = SeededRng.fromState(bh.rngState);
+    givePlayerWeapon(bh, 'blood_hammer', 0, false);
+    spawnEnemyProjectile(bh, {
+      x: bh.player.x + 18,
+      y: bh.player.y,
+      angle: Math.PI,
+      speed: 3,
+      damage: 2,
+    });
+    const bhHp = bh.player.hp;
+    stepPlayerAndCombat(
+      bh,
+      makeInput({ aimWorldX: bh.player.x + 32, aimWorldY: bh.player.y, firePressed: true, fireHeld: true }),
+      bhRng,
+    );
+    for (let t = 0; t < 6; t++) {
+      stepPlayerAndCombat(bh, makeInput({ aimWorldX: bh.player.x + 32, aimWorldY: bh.player.y }), bhRng);
+    }
+    expect(bh.player.hp).toBe(bhHp);
+    expect(bh.casings).toHaveLength(0);
+
+    // 3. Nuke Launcher uses sprNuke & steers toward cursor; Toxic Cloud uses sprToxicGas
+    expect(WEAPONS.nuke_launcher!.projectileSprite).toBe('sprNuke');
+    const nk = createRunState({ mutant: 'fish', seed: 7018 });
+    nk.enemies = [];
+    nk.projectiles = [];
+    clearBox(nk, 10, 6);
+    const nkRng = SeededRng.fromState(nk.rngState);
+    givePlayerWeapon(nk, 'nuke_launcher', 0, false);
+    nk.player.ammo.explosive = 10;
+    stepPlayerAndCombat(
+      nk,
+      makeInput({ aimWorldX: nk.player.x + 60, aimWorldY: nk.player.y, firePressed: true, fireHeld: true }),
+      nkRng,
+    );
+    const nukeProj = nk.projectiles.find((p) => p.kind === 'nuke')!;
+    expect(nukeProj).toBeDefined();
+    expect(nukeProj.sprite).toBe('sprNuke');
+    const initSpd = Math.hypot(nukeProj.vx, nukeProj.vy);
+    stepPlayerAndCombat(nk, makeInput({ aimWorldX: nk.player.x + 60, aimWorldY: nk.player.y + 80 }), nkRng);
+    expect(Math.hypot(nukeProj.vx, nukeProj.vy)).toBeGreaterThan(initSpd);
+    expect(nukeProj.vy).toBeGreaterThan(0);
+
+    // 4. Robot eating cursed weapon deals 7 HP CURSE damage & consumes it; full-HP eat emits +N AMMO text
+    const rob = createRunState({ mutant: 'robot', seed: 7019 });
+    rob.enemies = [];
+    clearBox(rob);
+    const robRng = SeededRng.fromState(rob.rngState);
+    givePlayerWeapon(rob, 'shotgun', 1, false, { cursed: true });
+    rob.player.activeSlot = 1;
+    rob.player.hp = 8;
+    rob.events = [];
+    stepPlayerAndCombat(
+      rob,
+      makeInput({ aimWorldX: rob.player.x + 30, aimWorldY: rob.player.y, activePressed: true }),
+      robRng,
+    );
+    expect(rob.player.weapons[1]).toBeNull();
+    expect(rob.player.hp).toBe(1);
+    expect(rob.player.lastDamageCause).toBe('CURSE');
+
+    // 5. Frozen City ice slide vs Extra Feet immunity
+    const ice = createRunState({ mutant: 'fish', seed: 7020 });
+    warpToArea(ice, '5-1', 0);
+    ice.enemies = [];
+    ice.props = [];
+    clearBox(ice, 8, 5);
+    const iceRng = SeededRng.fromState(ice.rngState);
+    for (let t = 0; t < 12; t++) {
+      ice.tick += 1;
+      stepPlayerAndCombat(ice, makeInput({ moveX: 1, aimWorldX: ice.player.x + 40, aimWorldY: ice.player.y }), iceRng);
+    }
+    // Release movement -> slides noticeably on ice
+    const vxBeforeStop = ice.player.vx;
+    stepPlayerAndCombat(ice, makeInput({ moveX: 0, aimWorldX: ice.player.x + 40, aimWorldY: ice.player.y }), iceRng);
+    expect(ice.player.vx).toBeGreaterThan(vxBeforeStop * 0.75);
+
+    // With Extra Feet, ice friction is normal (0.55)
+    grantMutationById(ice, 'extra_feet', iceRng);
+    const vxBeforeEfStop = ice.player.vx;
+    stepPlayerAndCombat(ice, makeInput({ moveX: 0, aimWorldX: ice.player.x + 40, aimWorldY: ice.player.y }), iceRng);
+    expect(ice.player.vx).toBeLessThan(vxBeforeEfStop * 0.65);
+
+    // 6. Rebel Allies spawned on identical pixel immediately separate
+    const reb = createRunState({ mutant: 'rebel', seed: 7021 });
+    reb.enemies = [];
+    clearBox(reb, 8, 5);
+    const rebRng = SeededRng.fromState(reb.rngState);
+    const a1 = spawnFriendlyUnit(reb, 'rebel_ally', reb.player.x + 20, reb.player.y);
+    const a2 = spawnFriendlyUnit(reb, 'rebel_ally', reb.player.x + 20, reb.player.y);
+    a2.x = a1.x;
+    a2.y = a1.y;
+    for (let t = 0; t < 6; t++) {
+      stepPlayerAndCombat(reb, makeInput({ aimWorldX: reb.player.x + 40, aimWorldY: reb.player.y }), rebRng);
+    }
+    expect(Math.hypot(a1.x - a2.x, a1.y - a2.y)).toBeGreaterThan(4);
+
+    // 7. Authentic NT Audio events: 7-3 emits mus/Boss4Silence, per-mutation sndMut*, per-Ultra snd/*Ultra*, class sndSwap*, Y.V. yv_a spawns Crib chests!
+    const aud = createRunState({ mutant: 'yv', seed: 7022 });
+    aud.events = [];
+    loadAreaIntoState(aud, '7-3', 0);
+    const musicEv = aud.events.find((e) => e.type === 'music');
+    expect(musicEv && musicEv.type === 'music' ? musicEv.track : '').toBe('mus/Boss4Silence');
+
+    aud.events = [];
+    grantMutationById(aud, 'shotgun_shoulders', SeededRng.fromState(aud.rngState));
+    expect(aud.events.some((e) => e.type === 'sfx' && e.sound === 'sndMutShotgunFingers')).toBe(true);
+
+    aud.events = [];
+    grantUltraById(aud, 'yv_a', SeededRng.fromState(aud.rngState));
+    expect(aud.events.some((e) => e.type === 'sfx' && e.sound === 'snd/YVUltraA')).toBe(true);
+    expect(aud.props.filter((p) => p.kind === 'big_weapon_chest').length).toBeGreaterThanOrEqual(2);
+
+    givePlayerWeapon(aud, 'shotgun', 1, false);
+    aud.player.activeSlot = 0;
+    aud.events = [];
+    stepPlayerAndCombat(
+      aud,
+      makeInput({ aimWorldX: aud.player.x + 20, aimWorldY: aud.player.y, swapPressed: true }),
+      SeededRng.fromState(aud.rngState),
+    );
+    expect(aud.events.some((e) => e.type === 'sfx' && e.sound === 'sndSwapShotgun')).toBe(true);
+
+    // 8. Pressing [E] on top of rads (lower index) + dropped weapon (higher index) never crashes on splice index shift
+    const pkShift = createRunState({ mutant: 'fish', seed: 7023 });
+    pkShift.enemies = [];
+    pkShift.pickups = [];
+    clearBox(pkShift);
+    spawnPickup(pkShift, 'rad', pkShift.player.x, pkShift.player.y, { value: 2, vx: 0, vy: 0 });
+    spawnPickup(pkShift, 'weapon', pkShift.player.x, pkShift.player.y, { weaponId: 'shotgun', value: 1, vx: 0, vy: 0 });
+    expect(() =>
+      stepPlayerAndCombat(
+        pkShift,
+        makeInput({ aimWorldX: pkShift.player.x + 20, aimWorldY: pkShift.player.y, pickupPressed: true }),
+        SeededRng.fromState(pkShift.rngState),
+      ),
+    ).not.toThrow();
+    expect(pkShift.player.rads).toBe(2);
+    expect(pkShift.player.weapons[1]?.weaponId).toBe('shotgun');
+    expect(pkShift.pickups).toHaveLength(0);
   });
 });

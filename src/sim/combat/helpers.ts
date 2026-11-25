@@ -18,6 +18,7 @@ import {
   ENEMIES,
   MUTANTS,
   WEAPONS,
+  getAreaDef,
   getWeaponDef,
   getWeaponsByTier,
 } from '@/data';
@@ -185,6 +186,8 @@ export function spawnCorpse(
     id: allocEntityId(state),
     x,
     y,
+    prevX: x,
+    prevY: y,
     vx,
     vy,
     facing,
@@ -238,6 +241,8 @@ export function spawnPickup(
     kind,
     x,
     y,
+    prevX: x,
+    prevY: y,
     vx: opts.vx ?? Math.cos(spreadAngle) * spreadSpeed,
     vy: opts.vy ?? Math.sin(spreadAngle) * spreadSpeed,
     value,
@@ -265,6 +270,8 @@ export interface SpawnEnemyProjectileOptions {
   bounce?: number;
   explosionRadius?: number;
   sound?: string;
+  sourceCause?: string;
+  sourceSprite?: string;
 }
 
 export function spawnEnemyProjectile(
@@ -293,6 +300,8 @@ export function spawnEnemyProjectile(
     explosionRadius: opts.explosionRadius ?? 0,
     sprite: opts.sprite ?? 'sprEnemyBullet1',
     hitIds: [],
+    sourceCause: opts.sourceCause,
+    sourceSprite: opts.sourceSprite,
   };
   state.projectiles.push(proj);
   if (opts.sound) {
@@ -521,8 +530,8 @@ export function spawnExplosion(
     }
   }
 
-  // Damage player (respects explicit selfDamage override, plus Boiling Veins <=4 HP protection)
-  const canHurtPlayer = opts.selfDamage ?? (!opts.isBlood && !opts.isRogue && !opts.isRad);
+  // Damage player (respects explicit selfDamage override; isRad no longer suppresses toxic/boss/generator hazards!)
+  const canHurtPlayer = opts.selfDamage ?? (!opts.isBlood && !opts.isRogue);
   if (canHurtPlayer && state.player.alive) {
     const p = state.player;
     const dx = p.x - x;
@@ -548,7 +557,7 @@ export function damageProp(
   damage: number,
   rng: SeededRng,
 ): void {
-  if (prop.hp <= 0) return;
+  if (prop.hp <= 0 || prop.sprite === 'sprVenusCarFixed') return;
   prop.hp -= damage;
   prop.hurtFlashTicks = 3;
 
@@ -615,6 +624,8 @@ export function damageProp(
       spawnExplosion(state, prop.x, prop.y, 46, 32, 'player', rng, {
         isRad: true,
         sound: 'sndBigGeneratorBreak',
+        cause: 'GENERATOR EXPLOSION',
+        killerSprite: 'sprBigGenerator',
       });
       emitEvent(state, {
         type: 'pickup_text',
@@ -977,13 +988,18 @@ export function applyDamageToEnemy(
     }
   }
 
-  // Weapon drop (Crown of Guns / Heavy Heart / Boss drop)
+  // Weapon drop (Crown of Guns / Heavy Heart / Boss drop) — uses authentic area weaponTierBase!
   let wepDropChance = enemy.isBoss ? 1.0 : 0.025;
   if (state.crown === 'guns') wepDropChance = Math.max(wepDropChance, 0.22);
   if (hasMutation(player, 'heavy_heart')) wepDropChance *= 2.5;
   if (rng.chance(wepDropChance)) {
-    const tier = Math.min(12, Math.max(0, state.loop * 4 + 3 + (player.mutant === 'robot' ? 1 : 0)));
-    const minTier = player.mutant === 'robot' && hasUltra(player, 'robot_a') ? Math.min(tier, 4) : 0;
+    const areaDef = getAreaDef(state.areaCode);
+    const robotBonus = player.mutant === 'robot' ? 1 : 0;
+    const tier = Math.min(12, Math.max(1, areaDef.weaponTierBase + state.loop * 4 + robotBonus));
+    let minTier = Math.max(0, tier - 4);
+    if (player.mutant === 'robot' && hasUltra(player, 'robot_a')) {
+      minTier = Math.min(tier, Math.max(minTier, 4));
+    }
     const allowCursed = state.crown === 'curses' || state.biome === 'cursed_caves';
     const pool = getWeaponsByTier(minTier, tier, allowCursed);
     const chosen = pool.length > 0 ? rng.pick(pool) : WEAPONS.revolver!;

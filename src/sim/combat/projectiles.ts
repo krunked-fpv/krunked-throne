@@ -1,5 +1,5 @@
 import type { EnemyEntity, ProjectileEntity, ProjectileKind, PropKind, SimState } from '@/contracts';
-import { getWeaponDef } from '@/data';
+import { ENEMIES, WEAPONS, getWeaponDef } from '@/data';
 import {
   SeededRng,
   allocEntityId,
@@ -58,6 +58,48 @@ const stickyTargets = new WeakMap<
 
 // Tracks player grenades already batted by a specific melee slash so multi-tick arcs bat once
 const meleeBattedIds = new WeakMap<ProjectileEntity, Set<number>>();
+
+// Tracks melee swings that deflected/destroyed a projectile so Blood Hammer parries never self-damage
+const meleeParriedSwings = new WeakSet<ProjectileEntity>();
+
+function resolveProjectileKiller(
+  state: SimState,
+  proj: ProjectileEntity,
+  fallbackCause: string,
+  fallbackSprite: string,
+): { cause: string; sprite: string } {
+  if (proj.sourceCause) {
+    return { cause: proj.sourceCause, sprite: proj.sourceSprite ?? proj.sprite };
+  }
+  if (proj.kind === 'disc') {
+    const isGold = proj.weaponId === 'golden_disc_gun';
+    return {
+      cause: isGold ? 'GOLDEN DISC' : 'DISC GUN',
+      sprite: proj.sprite || (isGold ? 'sprGoldDisc' : 'sprDisc'),
+    };
+  }
+  if (proj.sprite === 'sprNothingBeam') {
+    return { cause: 'THE THRONE', sprite: 'sprNothingOn' };
+  }
+  if (proj.kind === 'boss_missile') {
+    return { cause: 'BIG DOG', sprite: 'sprScrapBossIdle' };
+  }
+  if (proj.kind === 'boss_orb') {
+    const bossDef = state.boss?.bossId ? ENEMIES[state.boss.bossId] : undefined;
+    return {
+      cause: state.boss?.name ?? bossDef?.name.toUpperCase() ?? 'THE THRONE',
+      sprite: bossDef?.sprites.idle ?? proj.sprite,
+    };
+  }
+  if (proj.kind === 'idpd_bullet') {
+    return { cause: 'I.D.P.D. GRUNT', sprite: 'sprGruntIdle' };
+  }
+  if (proj.weaponId && WEAPONS[proj.weaponId]) {
+    const wep = WEAPONS[proj.weaponId]!;
+    return { cause: wep.name, sprite: wep.sprite };
+  }
+  return { cause: fallbackCause, sprite: fallbackSprite };
+}
 
 function computeProjectileKnockback(proj: ProjectileEntity): number {
   switch (proj.kind) {
@@ -257,9 +299,11 @@ function resolveMeleeSlash(
           life: 6,
         });
         state.projectiles.splice(i, 1);
+        deflectedAny = true;
       }
     }
     if (deflectedAny && proj.team === 'player') {
+      meleeParriedSwings.add(proj);
       if (state.hitstopTicks < 1) {
         state.hitstopTicks = 1;
         emitEvent(state, { type: 'hitstop', ticks: 1 });
@@ -307,6 +351,11 @@ function resolveMeleeSlash(
     }
 
     // 3. Hit breakable props inside arc (snapshot array for chain-explosion safety)
+    const isScrewdriver =
+      proj.weaponId === 'screwdriver' ||
+      proj.weaponId === 'golden_screwdriver' ||
+      proj.weaponId === 'energy_screwdriver';
+    const rt = getAreaRuntime(state);
     const propsSnap = [...state.props];
     for (let i = 0; i < propsSnap.length; i++) {
       const prop = propsSnap[i]!;
@@ -326,10 +375,56 @@ function resolveMeleeSlash(
       const angDiff = Math.abs(normalizeAngle(Math.atan2(dy, dx) - proj.angle));
       if (dist > prop.radius + 6 && angDiff > halfArc) continue;
       proj.hitIds.push(prop.id);
+
+      // 3-1 Golden Car Screwdriver Protection: repair strictly inside directional swing arc and NEVER damage/explode it!
+      if (
+        state.areaCode === '3-1' &&
+        prop.kind === 'car' &&
+        (prop.id === rt.venusCarPropId || prop.sprite === 'sprVenusCar' || prop.sprite === 'sprVenusCarFixed')
+      ) {
+        if (isScrewdriver) {
+          if (dist > 8 && angDiff > halfArc) continue;
+          if (!rt.venusCarFixed && prop.sprite === 'sprVenusCar') {
+            rt.venusCarFixed = true;
+            prop.hp = 999;
+            prop.maxHp = 999;
+            prop.sprite = 'sprVenusCarFixed';
+            prop.interactPrompt = '[E] Y.V. MANSION';
+            emitEvent(state, { type: 'sfx', sound: 'sndWrench', x: prop.x, y: prop.y });
+            emitEvent(state, { type: 'sfx', sound: 'sndWeaponPickup', x: prop.x, y: prop.y });
+            emitEvent(state, {
+              type: 'pickup_text',
+              x: prop.x,
+              y: prop.y - 16,
+              text: 'CAR FIXED! [E]',
+              color: '#ffd700',
+            });
+            for (let k = 0; k < 6; k++) {
+              const ang = (k / 6) * Math.PI * 2;
+              emitEvent(state, {
+                type: 'particle',
+                kind: 'spark',
+                x: prop.x,
+                y: prop.y,
+                vx: Math.cos(ang) * 1.8,
+                vy: Math.sin(ang) * 1.8,
+                color: '#ffd700',
+                size: 3,
+                life: 10,
+              });
+            }
+          }
+          continue;
+        }
+        if (prop.sprite === 'sprVenusCarFixed') {
+          continue;
+        }
+      }
+
       damageProp(state, prop, proj.damage, rng);
     }
   } else if (state.player.alive && !proj.hitIds.includes(state.player.id)) {
-    // Enemy melee slash (e.g. Assassin pipe/blade swing!)
+    // Enemy melee slash (Assassin, Ammo Mimic, etc.) — resolve real attacker instead of hardcoding ASSASSIN!
     const p = state.player;
     const dx = p.x - originX;
     const dy = p.y - originY;
@@ -338,7 +433,32 @@ function resolveMeleeSlash(
       const angDiff = Math.abs(normalizeAngle(Math.atan2(dy, dx) - proj.angle));
       if (dist <= p.radius + 6 || angDiff <= halfArc) {
         proj.hitIds.push(p.id);
-        applyDamageToPlayer(state, proj.damage, 'ASSASSIN', 'sprMeleeIdle', rng);
+        let meleeCause = proj.sourceCause;
+        let meleeSprite = proj.sourceSprite;
+        if (!meleeCause) {
+          let bestDistSq = 48 * 48;
+          let attackerDefId: string | null = null;
+          for (let eIdx = 0; eIdx < state.enemies.length; eIdx++) {
+            const e = state.enemies[eIdx]!;
+            if (e.friendly || e.hp <= 0) continue;
+            const edx = e.x - originX;
+            const edy = e.y - originY;
+            const edSq = edx * edx + edy * edy;
+            if (edSq < bestDistSq) {
+              bestDistSq = edSq;
+              attackerDefId = e.defId;
+            }
+          }
+          const attackerDef = attackerDefId ? ENEMIES[attackerDefId] : undefined;
+          if (attackerDef) {
+            meleeCause = attackerDef.name.toUpperCase();
+            meleeSprite = attackerDef.sprites.idle;
+          } else {
+            meleeCause = 'ASSASSIN';
+            meleeSprite = 'sprMeleeIdle';
+          }
+        }
+        applyDamageToPlayer(state, proj.damage, meleeCause, meleeSprite ?? 'sprMeleeIdle', rng);
       }
     }
   }
@@ -389,7 +509,7 @@ function splitFlakProjectile(
   }
 
   const isSuper = proj.weaponId === 'super_flak_cannon' || proj.weaponId === 'cursed_super_flak_cannon';
-  const hasShoulders = hasMutation(state.player, 'shotgun_shoulders');
+  const hasShoulders = proj.team === 'player' && hasMutation(state.player, 'shotgun_shoulders');
   const pellets = isSuper ? 12 : 7;
   const subLife = hasShoulders ? 28 : 20;
   for (let k = 0; k < pellets; k++) {
@@ -414,7 +534,10 @@ function splitFlakProjectile(
       bounce: hasShoulders ? 3 : 1,
       explosionRadius: 0,
       sprite: 'sprBullet2',
+      weaponId: proj.weaponId,
       hitIds: [],
+      sourceCause: proj.sourceCause,
+      sourceSprite: proj.sourceSprite,
     });
   }
   emitEvent(state, {
@@ -431,7 +554,7 @@ function splitPlasmaProjectile(
   proj: ProjectileEntity,
   rng: SeededRng,
 ): void {
-  const hasLaserBrain = hasMutation(state.player, 'laser_brain');
+  const hasLaserBrain = proj.team === 'player' && hasMutation(state.player, 'laser_brain');
   const wId = proj.weaponId;
   if (!wId || wId === 'plasma_mini') return;
 
@@ -569,6 +692,8 @@ function spawnToxicCloud(
   y: number,
   team: 'player' | 'enemy',
   rng: SeededRng,
+  sourceCause?: string,
+  sourceSprite?: string,
 ): void {
   for (let k = 0; k < 5; k++) {
     const ang = (k / 5) * Math.PI * 2 + rng.range(-0.35, 0.35);
@@ -591,9 +716,11 @@ function spawnToxicCloud(
       pierce: 5,
       bounce: 0,
       explosionRadius: 0,
-      sprite: 'sprToxicBolt',
+      sprite: 'sprToxicGas',
       weaponId: 'toxic_cloud',
       hitIds: [],
+      sourceCause: sourceCause ?? 'TOXIC GAS',
+      sourceSprite: sourceSprite ?? 'sprToxicGas',
     });
     emitEvent(state, {
       type: 'particle',
@@ -643,7 +770,10 @@ function spawnClusterSubmunitions(
       bounce: 1,
       explosionRadius: 24,
       sprite: 'sprGrenade',
+      weaponId: proj.weaponId,
       hitIds: [],
+      sourceCause: proj.sourceCause,
+      sourceSprite: proj.sourceSprite,
     });
   }
 }
@@ -737,6 +867,7 @@ function detonateProjectile(
   proj: ProjectileEntity,
   rng: SeededRng,
 ): void {
+  const killer = resolveProjectileKiller(state, proj, 'EXPLOSION', 'sprExplosion');
   if (proj.kind === 'snare') {
     bloomPlantSnare(state, proj.x, proj.y);
     return;
@@ -751,21 +882,29 @@ function detonateProjectile(
       spawnExplosion(state, proj.x, proj.y, proj.explosionRadius, proj.damage, proj.team, rng, {
         isFire: true,
         carveWalls: false,
+        selfDamage: proj.team === 'enemy' ? true : false,
+        cause: killer.cause,
+        killerSprite: killer.sprite,
       });
     }
     return;
   }
   if (proj.kind === 'cluster_grenade') {
-    spawnExplosion(state, proj.x, proj.y, proj.explosionRadius || 34, proj.damage, proj.team, rng);
+    spawnExplosion(state, proj.x, proj.y, proj.explosionRadius || 34, proj.damage, proj.team, rng, {
+      cause: killer.cause,
+      killerSprite: killer.sprite,
+    });
     spawnClusterSubmunitions(state, proj, rng);
     return;
   }
   if (proj.kind === 'plasma') {
-    const hasLaserBrain = hasMutation(state.player, 'laser_brain');
+    const hasLaserBrain = proj.team === 'player' && hasMutation(state.player, 'laser_brain');
     if (proj.explosionRadius > 0) {
       spawnExplosion(state, proj.x, proj.y, proj.explosionRadius, proj.damage, proj.team, rng, {
         isRad: true,
-        selfDamage: false,
+        selfDamage: proj.team === 'enemy' ? true : false,
+        cause: killer.cause,
+        killerSprite: killer.sprite,
         sound:
           proj.explosionRadius >= 40
             ? hasLaserBrain
@@ -781,12 +920,14 @@ function detonateProjectile(
     if (proj.explosionRadius > 0) {
       spawnExplosion(state, proj.x, proj.y, proj.explosionRadius, proj.damage, proj.team, rng, {
         isRad: true,
-        selfDamage: false,
+        selfDamage: proj.team === 'enemy' ? true : false,
         carveWalls: proj.weaponId === 'toxic_launcher',
         sound: 'sndToxicBoltGas',
+        cause: killer.cause,
+        killerSprite: killer.sprite,
       });
     }
-    spawnToxicCloud(state, proj.x, proj.y, proj.team, rng);
+    spawnToxicCloud(state, proj.x, proj.y, proj.team, rng, proj.sourceCause, proj.sourceSprite);
     return;
   }
   if (proj.explosionRadius > 0) {
@@ -805,6 +946,8 @@ function detonateProjectile(
         // Blood Launcher & Blood Cannon CAN hurt the player and detonate nearby corpses!
         selfDamage: isBlood ? true : undefined,
         detonateCorpses: isBlood,
+        cause: killer.cause,
+        killerSprite: killer.sprite,
         sound: isNuke
           ? 'sndNukeExplosion'
           : isBlood
@@ -827,7 +970,12 @@ function removeProjectile(state: SimState, proj: ProjectileEntity): void {
  * hitboxes, props, melee deflection arcs, Crystal Shield reflection, Bolt Marrow homing,
  * Laser/Lightning beams, Flak splits, Disc self-hits, and explosive blasts.
  */
-export function stepProjectiles(state: SimState, rng: SeededRng): void {
+export function stepProjectiles(
+  state: SimState,
+  rng: SeededRng,
+  aimWorldX?: number,
+  aimWorldY?: number,
+): void {
   const player = state.player;
   const hasBoltMarrow = hasMutation(player, 'bolt_marrow');
   const hasShotgunShoulders = hasMutation(player, 'shotgun_shoulders');
@@ -852,8 +1000,13 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
     if (proj.kind === 'melee_slash') {
       resolveMeleeSlash(state, proj, rng);
       if (proj.lifeTicks <= 0) {
-        // Blood Hammer self-damage on missed swing!
-        if (proj.team === 'player' && proj.weaponId === 'blood_hammer' && proj.hitIds.length === 0) {
+        // Blood Hammer self-damage on missed swing (deflecting/parrying a bullet counts as a hit!)
+        if (
+          proj.team === 'player' &&
+          proj.weaponId === 'blood_hammer' &&
+          proj.hitIds.length === 0 &&
+          !meleeParriedSwings.has(proj)
+        ) {
           applyDamageToPlayer(state, 1, 'BLOOD HAMMER', 'sprBloodHammer', rng, {
             ignoreIframes: true,
             bypassShield: true,
@@ -945,40 +1098,39 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
         });
       }
 
-      // Spawn continuous visual beam segments for the renderer (30px segment draw length)
-      const beamLen = Math.hypot(endX - proj.x, endY - proj.y);
+      // Spawn ONE unified continuous hitscan beam visual (beamOriginX/Y -> endX/Y, zero beaded segments!)
       const segLife = hasLaserBrain ? 6 : 4;
-      const stepDist = 26;
-      const segCount = Math.max(1, Math.ceil(beamLen / stepDist));
-      for (let seg = 1; seg <= segCount; seg++) {
-        const dist = Math.min(beamLen, seg * stepDist);
-        const sx = proj.x + cosA * dist;
-        const sy = proj.y + sinA * dist;
-        state.projectiles.push({
-          id: allocEntityId(state),
-          kind: 'laser',
-          team: 'player',
-          x: sx,
-          y: sy,
-          prevX: sx,
-          prevY: sy,
-          vx: 0,
-          vy: 0,
-          angle: proj.angle,
-          radius: 3,
-          damage: 0,
-          lifeTicks: segLife,
-          maxLifeTicks: segLife,
-          pierce: 0,
-          bounce: 0,
-          explosionRadius: 0,
-          sprite: proj.sprite,
-          weaponId: proj.weaponId,
-          hitIds: [],
-          isUltra: proj.isUltra,
-        });
-      }
+      state.projectiles.push({
+        id: allocEntityId(state),
+        kind: 'laser',
+        team: 'player',
+        x: endX,
+        y: endY,
+        prevX: endX,
+        prevY: endY,
+        vx: 0,
+        vy: 0,
+        angle: proj.angle,
+        radius: hasLaserBrain ? 4 : 3,
+        damage: 0,
+        lifeTicks: segLife,
+        maxLifeTicks: segLife,
+        pierce: 0,
+        bounce: 0,
+        explosionRadius: 0,
+        sprite: proj.sprite,
+        weaponId: proj.weaponId,
+        hitIds: [],
+        isUltra: proj.isUltra,
+        beamOriginX: proj.x,
+        beamOriginY: proj.y,
+      });
       if (rayEnd.hit) {
+        const sparkColor = proj.isUltra
+          ? '#66ff77'
+          : proj.weaponId === 'ion_cannon'
+            ? '#66eeff'
+            : '#ff6666';
         emitEvent(state, {
           type: 'particle',
           kind: 'wall_spark',
@@ -986,7 +1138,7 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
           y: endY,
           vx: rayEnd.normalX * 2,
           vy: rayEnd.normalY * 2,
-          color: '#ff6666',
+          color: sparkColor,
           size: 3,
           life: 6,
         });
@@ -1099,7 +1251,7 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
       }
     }
 
-    // 5. Velocity damping for flames / grenades
+    // 5. Velocity damping for flames/grenades & rocket/nuke acceleration + cursor steering
     if (!suspendedByEyes) {
       if (proj.kind === 'flame' || proj.kind === 'enemy_flame') {
         proj.vx *= 0.92;
@@ -1111,6 +1263,40 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
       ) {
         proj.vx *= 0.95;
         proj.vy *= 0.95;
+      } else if (proj.kind === 'rocket' || proj.kind === 'nuke') {
+        const curSpd = Math.hypot(proj.vx, proj.vy) || 8;
+        const maxSpd = proj.kind === 'nuke' ? 15 : 18;
+        const nextSpd = Math.min(maxSpd, curSpd * (proj.kind === 'nuke' ? 1.04 : 1.05));
+        if (
+          proj.kind === 'nuke' &&
+          proj.team === 'player' &&
+          aimWorldX !== undefined &&
+          aimWorldY !== undefined
+        ) {
+          const toCursorX = aimWorldX - proj.x;
+          const toCursorY = aimWorldY - proj.y;
+          if (toCursorX * toCursorX + toCursorY * toCursorY > 64) {
+            const desired = Math.atan2(toCursorY, toCursorX);
+            const diff = normalizeAngle(desired - proj.angle);
+            const maxTurn = 0.085;
+            proj.angle = normalizeAngle(proj.angle + Math.max(-maxTurn, Math.min(maxTurn, diff)));
+          }
+        }
+        proj.vx = Math.cos(proj.angle) * nextSpd;
+        proj.vy = Math.sin(proj.angle) * nextSpd;
+        if ((state.tick + proj.id) % 2 === 0) {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'smoke',
+            x: proj.x - Math.cos(proj.angle) * 4,
+            y: proj.y - Math.sin(proj.angle) * 4,
+            vx: rng.range(-0.4, 0.4),
+            vy: rng.range(-0.4, 0.4),
+            color: proj.kind === 'nuke' ? '#88ff77' : '#d8c4a0',
+            size: proj.kind === 'nuke' ? 3.5 : 2.5,
+            life: 8,
+          });
+        }
       }
     }
 
@@ -1372,11 +1558,12 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
                   ? 5
                   : 4
                 : proj.damage;
+            const killer = resolveProjectileKiller(state, proj, 'PROJECTILE', proj.sprite);
             applyDamageToPlayer(
               state,
               selfDamage,
-              proj.kind === 'disc' ? 'DISC GUN' : 'PROJECTILE',
-              proj.sprite,
+              killer.cause,
+              killer.sprite,
               rng,
               { isFire },
             );
@@ -1443,7 +1630,8 @@ export function stepProjectiles(state: SimState, rng: SeededRng): void {
         proj.x = backoffX;
         proj.y = backoffY;
         const dot = proj.vx * wallHit.normalX + proj.vy * wallHit.normalY;
-        const isShotgunBounce = (proj.kind === 'shell' || proj.kind === 'slug') && hasShotgunShoulders;
+        const isShotgunBounce =
+          proj.team === 'player' && (proj.kind === 'shell' || proj.kind === 'slug') && hasShotgunShoulders;
         const bounceDamp = isShotgunBounce
           ? 0.96
           : proj.kind === 'disc'
