@@ -563,7 +563,7 @@ export function getDefaultAreaGenParams(
         pillarChance: 0.2,
       };
       break;
-    case '3-?': // Y.V.'s Mansion
+    case '3-?': // Y.V.'s Mansion (native crimson carpet floor — no procedural strip overlay)
       base = {
         width: 60,
         height: 60,
@@ -577,7 +577,7 @@ export function getDefaultAreaGenParams(
         stamp4Chance: 0.08,
         spawnChance: 0.08,
         despawnChance: 0.04,
-        carpetChance: 0.28,
+        carpetChance: 0,
         rectilinear: true,
         minRunLen: 4,
         maxRunLen: 8,
@@ -869,10 +869,15 @@ function buildNuclearThroneHall(map: WorldMap, rng: SeededRng): { spawnTx: numbe
   carveRectSafe(map, westInner, daisTop + 6, cx - 9, daisTop + 9, TileType.Floor);
   carveRectSafe(map, cx + 9, daisTop + 6, eastInner, daisTop + 9, TileType.Floor);
 
-  // 7. Four Generator Alcoves (2 West, 2 East) along the upper-mid flanks
+  // 7. Four Generator Bays (2 West, 2 East) flush inside the main hall flanks + outer alcoves
   const genYs = [daisTop + 12, daisBottom + 10];
   for (let i = 0; i < genYs.length; i++) {
     const gy = genYs[i]!;
+    // Wide open main-hall generator bay so 96x96 sprBigGenerator (radius 22) sits flush with zero wall clipping
+    carveRectSafe(map, cx - 9, gy - 3, cx + 9, gy + 3, TileType.Floor);
+    // Keep the grand central red carpet continuous through the generator bays
+    carveRectSafe(map, cx - 1, gy - 3, cx + 1, gy + 3, TileType.Carpet);
+    // Connect cleanly to parallel side corridors & outer alcoves
     carveRectSafe(map, westOuter - 4, gy - 2, westOuter, gy + 2, TileType.Floor);
     carveRectSafe(map, westInner, gy - 1, cx - 4, gy + 1, TileType.Floor);
     carveRectSafe(map, eastOuter, gy - 2, eastOuter + 4, gy + 2, TileType.Floor);
@@ -891,15 +896,7 @@ function buildNuclearThroneHall(map: WorldMap, rng: SeededRng): { spawnTx: numbe
     }
   }
 
-  // Subtle floor wear near outer edges while keeping red carpet pristine
-  for (let ty = OUTER_MARGIN; ty < map.height - OUTER_MARGIN; ty++) {
-    for (let tx = OUTER_MARGIN; tx < map.width - OUTER_MARGIN; tx++) {
-      if (getTile(map, tx, ty) === TileType.Floor && rng.chance(0.03)) {
-        setTile(map, tx, ty, TileType.FloorCracked);
-      }
-    }
-  }
-
+  // Keep untouched floors pristine (FloorCracked is reserved strictly for explosion wall destruction!)
   return { spawnTx: cx, spawnTy };
 }
 
@@ -958,16 +955,15 @@ function buildCampfireArena(map: WorldMap, rng: SeededRng): { spawnTx: number; s
 /**
  * Generates the Crown Vault symmetrical temple layout.
  */
-function buildCrownVault(map: WorldMap, rng: SeededRng): { spawnTx: number; spawnTy: number } {
+function buildCrownVault(map: WorldMap, _rng: SeededRng): { spawnTx: number; spawnTy: number } {
   const cx = Math.floor(map.width / 2);
   const southY = map.height - 6;
   const chamberCenterY = 17;
 
   // South entrance room
   carveRectSafe(map, cx - 4, southY - 4, cx + 4, southY, TileType.Floor);
-  // Central carpeted approach corridor
+  // Central approach corridor
   carveRectSafe(map, cx - 2, chamberCenterY + 6, cx + 2, southY - 4, TileType.Floor);
-  carveRectSafe(map, cx - 1, chamberCenterY + 5, cx + 1, southY - 1, TileType.Carpet);
 
   // Grand octagonal Crown Chamber
   for (let ty = chamberCenterY - 8; ty <= chamberCenterY + 8; ty++) {
@@ -978,22 +974,17 @@ function buildCrownVault(map: WorldMap, rng: SeededRng): { spawnTx: number; spaw
       }
     }
   }
+
+  // North Exit Portal Sanctuary Alcove (>= 160px north of Crown Pedestal so portal suction never pulls player off pedestal!)
+  carveRectSafe(map, cx - 3, 4, cx + 3, chamberCenterY - 7, TileType.Floor);
+
+  // Continuous royal carpet runner from south entrance up to pedestal dais & north portal alcove (zero 1-tile gap!)
+  carveRectSafe(map, cx - 1, 6, cx + 1, southY - 1, TileType.Carpet);
   carveRectSafe(map, cx - 2, chamberCenterY - 2, cx + 2, chamberCenterY + 2, TileType.Carpet);
-  carveRectSafe(map, cx - 1, chamberCenterY - 5, cx + 1, chamberCenterY + 5, TileType.Carpet);
 
   // Two side guardian alcoves
   carveRectSafe(map, cx - 13, chamberCenterY - 3, cx - 9, chamberCenterY + 3, TileType.Floor);
   carveRectSafe(map, cx + 9, chamberCenterY - 3, cx + 13, chamberCenterY + 3, TileType.Floor);
-
-  if (rng.chance(0.8)) {
-    for (let i = 0; i < 6; i++) {
-      const tx = cx + rng.int(-7, 7);
-      const ty = chamberCenterY + rng.int(-6, 6);
-      if (getTile(map, tx, ty) === TileType.Floor) {
-        setTile(map, tx, ty, TileType.FloorCracked);
-      }
-    }
-  }
 
   return { spawnTx: cx, spawnTy: southY - 2 };
 }
@@ -1312,15 +1303,7 @@ function runDrunkenWalkers(
   // 4. Break up overly wide flat blobs with tactical 2x2 cover pillars
   insertTacticalCoverPillars(map, spawnTx, spawnTy, profile.pillarChance, rng);
 
-  // Subtle floor weathering on non-carpet floor tiles
-  for (let ty = OUTER_MARGIN; ty < map.height - OUTER_MARGIN; ty++) {
-    for (let tx = OUTER_MARGIN; tx < map.width - OUTER_MARGIN; tx++) {
-      if (getTile(map, tx, ty) === TileType.Floor && rng.chance(0.025)) {
-        setTile(map, tx, ty, TileType.FloorCracked);
-      }
-    }
-  }
-
+  // Keep untouched procedural floors pristine (FloorCracked is reserved strictly for explosion wall destruction!)
   return { spawnTx, spawnTy };
 }
 

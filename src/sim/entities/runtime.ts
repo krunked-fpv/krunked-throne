@@ -25,6 +25,7 @@ export interface EnemyAiMemory {
   necroReviveTicks: number;
   necroTargetX: number;
   necroTargetY: number;
+  lastGammaTick: number;
 }
 
 export interface LilHunterDeathSpiral {
@@ -39,6 +40,8 @@ export interface LilHunterDeathSpiral {
 
 export interface RunRuntimeState {
   vaultReturnArea: AreaCode | null;
+  crownDeathPenalty: number;
+  destinyMutationGranted: boolean;
 }
 
 export interface AreaRuntimeState {
@@ -52,6 +55,9 @@ export interface AreaRuntimeState {
   bossDeathHandled: boolean;
   throneWoken: boolean;
   throneLastGenCount: number;
+  brokenThronePropId: number | null;
+  brokenThroneSitDelay: number;
+  vanBoardPropIds: Map<number, number>;
   idpdWavesRemaining: number;
   idpdWaveTimer: number;
   revivedFreakCount: number;
@@ -106,6 +112,9 @@ function makeFreshRuntime(state: SimState): AreaRuntimeState {
     bossDeathHandled: false,
     throneWoken: false,
     throneLastGenCount: state.generatorsRemaining,
+    brokenThronePropId: null,
+    brokenThroneSitDelay: 0,
+    vanBoardPropIds: new Map(),
     idpdWavesRemaining: 0,
     idpdWaveTimer: 0,
     revivedFreakCount: 0,
@@ -130,7 +139,11 @@ function makeFreshRuntime(state: SimState): AreaRuntimeState {
 export function getRunRuntime(state: SimState): RunRuntimeState {
   let run = runRuntimeMap.get(state);
   if (!run) {
-    run = { vaultReturnArea: null };
+    run = {
+      vaultReturnArea: null,
+      crownDeathPenalty: state.crown === 'death' ? 1 : 0,
+      destinyMutationGranted: state.crown === 'destiny',
+    };
     runRuntimeMap.set(state, run);
   }
   return run;
@@ -171,6 +184,7 @@ export function getEnemyMemory(state: SimState, enemy: EnemyEntity): EnemyAiMemo
       necroReviveTicks: 0,
       necroTargetX: enemy.x,
       necroTargetY: enemy.y,
+      lastGammaTick: -999,
     };
     rt.enemyMemory.set(enemy.id, mem);
   }
