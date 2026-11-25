@@ -221,6 +221,229 @@ function hasNearbyFloor(map: WorldMap, tx: number, ty: number): boolean {
 }
 
 /**
+ * Classifies every non-walkable tile in the map into:
+ *   0 = outer map background void (connected to map border, away from floor)
+ *   1 = perimeter wall adjacent to walkable floor (8-neighborhood)
+ *   2 = enclosed interior wall island or thin wall mass between rooms (gets solid wall-top fill!)
+ */
+function buildWallRenderMask(map: WorldMap): Uint8Array {
+  const w = map.width;
+  const h = map.height;
+  const total = w * h;
+  const mask = new Uint8Array(total);
+  const outer = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let head = 0;
+  let tail = 0;
+
+  // Seed border non-walkable tiles for outer-void BFS
+  for (let tx = 0; tx < w; tx++) {
+    const topIdx = tx;
+    if (!isWalkable(map.tiles[topIdx]!)) {
+      outer[topIdx] = 1;
+      queue[tail++] = topIdx;
+    }
+    const botIdx = (h - 1) * w + tx;
+    if (h > 1 && !isWalkable(map.tiles[botIdx]!)) {
+      outer[botIdx] = 1;
+      queue[tail++] = botIdx;
+    }
+  }
+  for (let ty = 1; ty < h - 1; ty++) {
+    const leftIdx = ty * w;
+    if (!isWalkable(map.tiles[leftIdx]!)) {
+      outer[leftIdx] = 1;
+      queue[tail++] = leftIdx;
+    }
+    const rightIdx = ty * w + (w - 1);
+    if (w > 1 && !isWalkable(map.tiles[rightIdx]!)) {
+      outer[rightIdx] = 1;
+      queue[tail++] = rightIdx;
+    }
+  }
+
+  // Flood-fill outer background through non-walkable tiles
+  while (head < tail) {
+    const idx = queue[head++]!;
+    const cx = idx % w;
+    const cy = (idx - cx) / w;
+    if (cx > 0) {
+      const n = idx - 1;
+      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (cx + 1 < w) {
+      const n = idx + 1;
+      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (cy > 0) {
+      const n = idx - w;
+      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (cy + 1 < h) {
+      const n = idx + w;
+      if (!outer[n] && !isWalkable(map.tiles[n]!)) {
+        outer[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+  }
+
+  // Pass 1: mark perimeter walls adjacent to floor
+  for (let ty = 0; ty < h; ty++) {
+    const row = ty * w;
+    for (let tx = 0; tx < w; tx++) {
+      const idx = row + tx;
+      if (isWalkable(map.tiles[idx]!)) continue;
+      if (hasNearbyFloor(map, tx, ty)) {
+        mask[idx] = 1;
+      }
+    }
+  }
+
+  // Pass 2: mark enclosed interior wall islands & thin dividing walls between rooms as solid fill (2)
+  const hasFloorAt = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < w && y < h && isWalkable(map.tiles[y * w + x]!);
+
+  for (let ty = 1; ty < h - 1; ty++) {
+    const row = ty * w;
+    for (let tx = 1; tx < w - 1; tx++) {
+      const idx = row + tx;
+      if (isWalkable(map.tiles[idx]!) || mask[idx] === 1) continue;
+      if (!outer[idx]) {
+        // Completely enclosed inside a wall island -> NEVER punch a black void hole!
+        mask[idx] = 2;
+        continue;
+      }
+      // Also fill thin 3-tile dividing walls & peninsulas separating two walkable areas
+      const floorWest = hasFloorAt(tx - 2, ty) || hasFloorAt(tx - 2, ty - 1) || hasFloorAt(tx - 2, ty + 1);
+      const floorEast = hasFloorAt(tx + 2, ty) || hasFloorAt(tx + 2, ty - 1) || hasFloorAt(tx + 2, ty + 1);
+      const floorNorth = hasFloorAt(tx, ty - 2) || hasFloorAt(tx - 1, ty - 2) || hasFloorAt(tx + 1, ty - 2);
+      const floorSouth = hasFloorAt(tx, ty + 2) || hasFloorAt(tx - 1, ty + 2) || hasFloorAt(tx + 1, ty + 2);
+      if ((floorWest && floorEast) || (floorNorth && floorSouth)) {
+        mask[idx] = 2;
+        continue;
+      }
+      let perimNeighbors = 0;
+      if (mask[idx - 1] === 1) perimNeighbors += 1;
+      if (mask[idx + 1] === 1) perimNeighbors += 1;
+      if (mask[idx - w] === 1) perimNeighbors += 1;
+      if (mask[idx + w] === 1) perimNeighbors += 1;
+      if (perimNeighbors >= 3) {
+        mask[idx] = 2;
+      }
+    }
+  }
+
+  return mask;
+}
+
+/**
+ * Crisp integer-pixel circle outline (midpoint algorithm) — replaces smooth anti-aliased ctx.arc rings.
+ */
+function drawPixelRing(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  thick: number = 1,
+  dashedPeriod: number = 0,
+  dashPhase: number = 0,
+): void {
+  const icx = Math.round(cx);
+  const icy = Math.round(cy);
+  const r = Math.max(1, Math.round(radius));
+  const s = thick >= 2 ? 2 : 1;
+  let x = r;
+  let y = 0;
+  let err = 1 - r;
+  let step = 0;
+  while (x >= y) {
+    if (dashedPeriod <= 0 || ((step + dashPhase) % dashedPeriod) < Math.ceil(dashedPeriod * 0.55)) {
+      ctx.fillRect(icx + x, icy + y, s, s);
+      ctx.fillRect(icx + y, icy + x, s, s);
+      ctx.fillRect(icx - y, icy + x, s, s);
+      ctx.fillRect(icx - x, icy + y, s, s);
+      ctx.fillRect(icx - x, icy - y, s, s);
+      ctx.fillRect(icx - y, icy - x, s, s);
+      ctx.fillRect(icx + y, icy - x, s, s);
+      ctx.fillRect(icx + x, icy - y, s, s);
+    }
+    step += 1;
+    y += 1;
+    if (err < 0) {
+      err += 2 * y + 1;
+    } else {
+      x -= 1;
+      err += 2 * (y - x + 1);
+    }
+  }
+}
+
+/**
+ * Crisp integer-pixel filled disc (scanline spans) for pixel-art smoke puffs and blast cores.
+ */
+function drawPixelDisc(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+): void {
+  const icx = Math.round(cx);
+  const icy = Math.round(cy);
+  const r = Math.max(1, Math.round(radius));
+  for (let dy = -r; dy <= r; dy++) {
+    const span = Math.floor(Math.sqrt(Math.max(0, r * r - dy * dy)) + 0.35);
+    ctx.fillRect(icx - span, icy + dy, span * 2 + 1, 1);
+  }
+}
+
+/**
+ * Draws a crisp pixel-stepped straight line (Bresenham) with optional pixel width.
+ */
+function drawPixelLine(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  size: number = 1,
+): void {
+  let ix0 = Math.round(x0);
+  let iy0 = Math.round(y0);
+  const ix1 = Math.round(x1);
+  const iy1 = Math.round(y1);
+  const dx = Math.abs(ix1 - ix0);
+  const dy = Math.abs(iy1 - iy0);
+  const sx = ix0 < ix1 ? 1 : -1;
+  const sy = iy0 < iy1 ? 1 : -1;
+  let err = dx - dy;
+  const half = size > 1 ? Math.floor(size / 2) : 0;
+  let guard = 0;
+  while (guard++ < 512) {
+    ctx.fillRect(ix0 - half, iy0 - half, size, size);
+    if (ix0 === ix1 && iy0 === iy1) break;
+    const e2 = err * 2;
+    if (e2 > -dy) {
+      err -= dy;
+      ix0 += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      iy0 += sy;
+    }
+  }
+}
+
+/**
  * Main Krunked Throne Canvas 2D pixel renderer.
  * Supports 320x240 (4:3) and 426x240 (16:9 widescreen), pixel-crisp rendering,
  * 30 / 60 / 120 FPS interpolation, cached offscreen radial glow stamps,
@@ -239,6 +462,7 @@ export class GameRenderer {
 
   private lastMapRef: WorldMap | null = null;
   private lastAreaKey = '';
+  private wallRenderMask: Uint8Array | null = null;
   private floatingTexts: FloatingText[] = [];
   private transientParticles: TransientParticle[] = [];
   private smokePuffs: SmokePuff[] = [];
@@ -248,6 +472,7 @@ export class GameRenderer {
   private muzzleFlashes: MuzzleFlash[] = [];
   private shockwaves: ShockwaveRing[] = [];
   private lastShotsFired = 0;
+  private lastSlotFiredTick: [number, number] = [-1, -1];
   private lastHurtFlashTicks = 0;
   private screenHurtFlashTicks = 0;
   private screenBlastFlashTicks = 0;
@@ -256,10 +481,15 @@ export class GameRenderer {
   private crosshairRecoil = 0;
   private lastEmptyTextSec = -10;
   private lastSkidTick = -1;
+  private lastBeamScorchTick = -10;
   private lowAmmoWarnedPools = new Set<AmmoType>();
   private fxSeq = 1;
   private meleeSwingSide: 1 | -1 = 1;
+  private meleeSwingSides: [1 | -1, 1 | -1] = [1, -1];
   private meleeSwingAnim = 0;
+  private meleeSwingAnims: [number, number] = [0, 0];
+  private wasShielding = false;
+  private shieldDisappearTicks = 0;
   private logicalWidth = LOGICAL_WIDTH_4_3;
   private logicalHeight = LOGICAL_HEIGHT;
   private renderTimeSec = 0;
@@ -365,7 +595,13 @@ export class GameRenderer {
     this.crosshairHitTicks = 0;
     this.crosshairRecoil = 0;
     this.meleeSwingAnim = 0;
+    this.meleeSwingAnims = [0, 0];
+    this.lastSlotFiredTick = [-1, -1];
+    this.wasShielding = false;
+    this.shieldDisappearTicks = 0;
     this.lastSkidTick = -1;
+    this.lastBeamScorchTick = -10;
+    this.wallRenderMask = null;
     this.camera.clearFocusBias();
     if (state) {
       this.lastShotsFired = state.stats.shotsFired;
@@ -379,6 +615,7 @@ export class GameRenderer {
    */
   invalidateFloor(): void {
     this.lastMapRef = null;
+    this.wallRenderMask = null;
   }
 
   private pushFloatingText(
@@ -390,16 +627,44 @@ export class GameRenderer {
     font: string,
     vy: number = -0.5,
   ): void {
-    // Stagger vertically when another active callout is nearby so labels never stack into mush
-    let spawnY = y;
+    // Collapse identical rapid callouts nearby (e.g., repeated LOW AMMO / EMPTY! / pickup labels)
     for (let i = 0; i < this.floatingTexts.length; i++) {
-      const other = this.floatingTexts[i]!;
-      if (Math.abs(other.x - x) < 28 && Math.abs(other.y - spawnY) < 9) {
-        spawnY = Math.min(spawnY, other.y - 9);
+      const existing = this.floatingTexts[i]!;
+      if (existing.text === text && Math.abs(existing.x - x) < 36 && Math.abs(existing.y - y) < 28) {
+        existing.life = Math.max(existing.life, life);
+        existing.maxLife = Math.max(existing.maxLife, life);
+        existing.x = x;
+        existing.y = Math.min(existing.y, y);
+        return;
       }
     }
+
+    // Measure approximate horizontal footprint so labels never collide horizontally OR vertically
+    const charW = font === 'fntM1' ? 6 : 4.5;
+    const halfW = Math.max(12, text.length * charW * 0.5);
+    let spawnX = x;
+    let spawnY = y;
+    let stackAttempts = 0;
+    let shifted = true;
+    while (shifted && stackAttempts < 8) {
+      shifted = false;
+      for (let i = 0; i < this.floatingTexts.length; i++) {
+        const other = this.floatingTexts[i]!;
+        const otherHalfW = Math.max(12, other.text.length * (other.font === 'fntM1' ? 6 : 4.5) * 0.5);
+        const minHorizGap = halfW + otherHalfW + 4;
+        if (Math.abs(other.x - spawnX) < minHorizGap && Math.abs(other.y - spawnY) < 10) {
+          spawnY = Math.min(spawnY, other.y - 10);
+          if (stackAttempts >= 4) {
+            spawnX += (stackAttempts % 2 === 0 ? 1 : -1) * 16;
+          }
+          shifted = true;
+        }
+      }
+      stackAttempts += 1;
+    }
+
     this.floatingTexts.push({
-      x,
+      x: spawnX,
       y: spawnY,
       vy,
       text,
@@ -408,7 +673,7 @@ export class GameRenderer {
       maxLife: life,
       font,
     });
-    if (this.floatingTexts.length > 24) {
+    if (this.floatingTexts.length > 20) {
       this.floatingTexts.shift();
     }
   }
@@ -511,15 +776,20 @@ export class GameRenderer {
           this.camera.addShake(ev.trauma, ev.dirX, ev.dirY, ev.kick);
           break;
 
-        case 'damage_number':
+        case 'damage_number': {
+          // Suppress absurd overkill / debug clearEnemies() numbers (> 999)
+          const roundedAmt = Math.round(ev.amount);
+          if (!ev.heal && (roundedAmt <= 0 || roundedAmt > 999)) {
+            break;
+          }
           this.pushFloatingText(
             ev.x,
             ev.y - 6,
-            ev.heal ? `+${Math.round(ev.amount)}` : `${Math.round(ev.amount)}`,
+            ev.heal ? `+${roundedAmt}` : `${roundedAmt}`,
             ev.heal ? '#52e864' : ev.crit ? '#ffe047' : '#ffffff',
-            ev.crit ? 26 : 20,
+            ev.crit ? 24 : 18,
             ev.crit ? 'fntM1' : 'fntSmall',
-            ev.crit ? -0.68 : -0.55,
+            ev.crit ? -0.62 : -0.5,
           );
           if (!ev.heal) {
             this.crosshairHitTicks = Math.max(this.crosshairHitTicks, ev.crit ? 5.5 : 3.5);
@@ -535,6 +805,7 @@ export class GameRenderer {
             );
           }
           break;
+        }
 
         case 'pickup_text':
           this.pushFloatingText(
@@ -551,24 +822,33 @@ export class GameRenderer {
         case 'level_up': {
           const px = state?.player.x ?? this.camera.x;
           const py = state?.player.y ?? this.camera.y;
-          this.pushFloatingText(
-            px,
-            py - 16,
-            ev.isUltra ? 'ULTRA MUTATION!' : 'LEVEL UP!',
-            ev.isUltra ? '#ffe047' : '#6bff7c',
-            36,
-            'fntM1',
-            -0.45,
+          const label = ev.isUltra ? 'ULTRA MUTATION!' : 'LEVEL UP!';
+          const col = ev.isUltra ? '#ffe047' : '#6bff7c';
+          // Collapse rapid multi-level rad bursts into ONE clean callout instead of 7 stacked lines
+          const existingLevel = this.floatingTexts.find(
+            (ft) => ft.text === 'LEVEL UP!' || ft.text === 'ULTRA MUTATION!',
           );
+          if (existingLevel) {
+            existingLevel.x = px;
+            existingLevel.y = py - 16;
+            existingLevel.life = 36;
+            existingLevel.maxLife = 36;
+            if (ev.isUltra) {
+              existingLevel.text = 'ULTRA MUTATION!';
+              existingLevel.color = '#ffe047';
+            }
+          } else {
+            this.pushFloatingText(px, py - 16, label, col, 36, 'fntM1', -0.45);
+          }
           this.shockwaves.push({
             x: px,
             y: py,
             startR: 4,
-            endR: ev.isUltra ? 48 : 34,
+            endR: ev.isUltra ? 42 : 30,
             color: ev.isUltra ? '#ffe047' : '#5eff78',
-            glowColor: ev.isUltra ? 'rgba(255, 224, 71, 0.7)' : 'rgba(90, 255, 130, 0.65)',
-            life: 14,
-            maxLife: 14,
+            glowColor: ev.isUltra ? 'rgba(255, 224, 71, 0.9)' : 'rgba(90, 255, 130, 0.9)',
+            life: 13,
+            maxLife: 13,
           });
           this.spawnSparkBurst(px, py, 8, ev.isUltra ? '#fff080' : '#96ff9e', 1.6, 3.8, 12);
           break;
@@ -703,9 +983,9 @@ export class GameRenderer {
                   : lowerCol === '#4ca6ff'
                     ? '#1f3659'
                     : '#3b3338';
-            this.spawnSmokeBurst(ev.x, ev.y, 7, baseRadius, smokeTint);
-            this.spawnFlashLight(ev.x, ev.y, Math.min(120, baseRadius * 2.1), glowColor, 7);
-            this.screenBlastFlashTicks = Math.max(this.screenBlastFlashTicks, baseRadius >= 46 ? 3 : 1.8);
+            this.spawnSmokeBurst(ev.x, ev.y, 6, Math.min(36, baseRadius * 0.85), smokeTint);
+            this.spawnFlashLight(ev.x, ev.y, Math.min(58, baseRadius * 1.15), glowColor, 6);
+            this.screenBlastFlashTicks = Math.max(this.screenBlastFlashTicks, baseRadius >= 46 ? 2.5 : 1.4);
           } else if (ev.kind === 'wall_spark') {
             // Wall-chip masonry dust + bright spark fan bouncing off the impact normal
             const normAng = Math.atan2(ev.vy, ev.vx);
@@ -716,13 +996,13 @@ export class GameRenderer {
               x: ev.x,
               y: ev.y,
               angle: Math.atan2(ev.vy, ev.vx),
-              radius: Math.max(14, (ev.size ?? 6) * 2.5),
-              color: 'rgba(255, 195, 75, 0.85)',
+              radius: Math.max(8, Math.min(13, (ev.size ?? 5) * 1.45)),
+              color: 'rgba(255, 195, 75, 0.9)',
               coreColor: '#fff7d6',
-              life: 3.2,
-              maxLife: 3.2,
+              life: 2.6,
+              maxLife: 2.6,
             });
-            this.spawnFlashLight(ev.x, ev.y, 44, 'rgba(255, 195, 75, 0.45)', 3);
+            this.spawnFlashLight(ev.x, ev.y, 26, 'rgba(255, 195, 75, 0.9)', 2.6);
           }
           break;
 
@@ -736,23 +1016,47 @@ export class GameRenderer {
       }
     }
 
-    // Trigger bright radial muzzle flash glow, crosshair recoil & low-ammo alert on player shot
+    // Trigger crisp muzzle flash, melee swing flip, crosshair recoil & low-ammo alert for BOTH slots
+    // (supports Steroids simultaneous offhand firing via slot.lastFiredTick!)
     if (state) {
+      let triggeredBySlotTick = false;
+      for (let s = 0; s < 2; s++) {
+        const slotIndex = s as 0 | 1;
+        if (state.tick < this.lastSlotFiredTick[slotIndex]) {
+          this.lastSlotFiredTick[slotIndex] = -1;
+        }
+        const slot = state.player.weapons[slotIndex];
+        if (
+          slot &&
+          slot.lastFiredTick !== undefined &&
+          slot.lastFiredTick === state.tick &&
+          this.lastSlotFiredTick[slotIndex] !== state.tick
+        ) {
+          this.lastSlotFiredTick[slotIndex] = state.tick;
+          triggeredBySlotTick = true;
+          this.spawnPlayerMuzzleFlashForSlot(state, slotIndex);
+          this.crosshairRecoil = Math.min(4.2, this.crosshairRecoil + 1.8);
+          this.checkLowAmmoCalloutForSlot(state, slotIndex);
+        }
+      }
+
       if (state.stats.shotsFired < this.lastShotsFired) {
         this.lastShotsFired = state.stats.shotsFired;
       } else if (state.stats.shotsFired > this.lastShotsFired) {
         this.lastShotsFired = state.stats.shotsFired;
-        this.spawnPlayerMuzzleFlash(state);
-        this.crosshairRecoil = Math.min(4.5, this.crosshairRecoil + 2.2);
-        this.checkLowAmmoCallout(state);
+        if (!triggeredBySlotTick) {
+          this.spawnPlayerMuzzleFlashForSlot(state, state.player.activeSlot);
+          this.crosshairRecoil = Math.min(4.2, this.crosshairRecoil + 2.0);
+          this.checkLowAmmoCalloutForSlot(state, state.player.activeSlot);
+        }
       }
     }
   }
 
-  private checkLowAmmoCallout(state: SimState): void {
+  private checkLowAmmoCalloutForSlot(state: SimState, slotIndex: 0 | 1): void {
     const player = state.player;
     if (!player.alive || player.gunWarrantTicks > 0) return;
-    const slot = player.weapons[player.activeSlot];
+    const slot = player.weapons[slotIndex];
     if (!slot) return;
     const wep = this.data.getWeapon(slot.weaponId);
     if (!wep || wep.ammoType === 'melee') return;
@@ -770,57 +1074,95 @@ export class GameRenderer {
     }
   }
 
-  private spawnPlayerMuzzleFlash(state: SimState): void {
+  private computeHeldWeaponAnchor(
+    player: PlayerState,
+    px: number,
+    py: number,
+    isOffhand: boolean,
+    kick: number,
+  ): { x: number; y: number } {
+    const handSide = isOffhand ? -player.facing : player.facing;
+    const isDualWielding =
+      player.mutant === 'steroids' && player.weapons[0] !== null && player.weapons[1] !== null;
+    if (isDualWielding) {
+      const perpX = -Math.sin(player.aimAngle);
+      const perpY = Math.cos(player.aimAngle);
+      const dualSign = isOffhand ? -1 : 1;
+      return {
+        x: px + handSide * 4 + perpX * dualSign * 4.5 - Math.cos(player.aimAngle) * kick,
+        y: py + 1 + perpY * dualSign * 3.5 + (isOffhand ? -1.5 : 1.5) - Math.sin(player.aimAngle) * kick,
+      };
+    }
+    return {
+      x: px + handSide * 3 - Math.cos(player.aimAngle) * kick,
+      y: py + 1 - Math.sin(player.aimAngle) * kick,
+    };
+  }
+
+  private spawnPlayerMuzzleFlashForSlot(state: SimState, slotIndex: 0 | 1): void {
     const player = state.player;
     if (!player.alive) return;
-    const slot = player.weapons[player.activeSlot];
+    const slot = player.weapons[slotIndex];
     if (!slot) return;
     const wep = this.data.getWeapon(slot.weaponId);
     if (wep?.ammoType === 'melee' || wep?.projectileKind === 'melee_slash') {
-      // Authentic Nuclear Throne melee swing alternation: flip held blade side & kick swing arc!
-      this.meleeSwingSide = this.meleeSwingSide === 1 ? -1 : 1;
-      this.meleeSwingAnim = 1;
+      // Authentic Nuclear Throne melee swing alternation (independent per hand for Steroids!)
+      const nextSide: 1 | -1 = slot.meleeSwingSide ?? (this.meleeSwingSides[slotIndex] === 1 ? -1 : 1);
+      this.meleeSwingSides[slotIndex] = nextSide;
+      this.meleeSwingAnims[slotIndex] = 1;
+      if (slotIndex === player.activeSlot) {
+        this.meleeSwingSide = nextSide;
+        this.meleeSwingAnim = 1;
+      }
       return;
     }
 
+    const isOffhand = player.mutant === 'steroids' && slotIndex !== player.activeSlot;
+    const anchor = this.computeHeldWeaponAnchor(player, player.x, player.y, isOffhand, 0);
     const ang = player.aimAngle;
-    const dist = 11;
-    const mx = player.x + Math.cos(ang) * dist;
-    const my = player.y + Math.sin(ang) * dist;
+    const dist = 10;
+    const mx = anchor.x + Math.cos(ang) * dist;
+    const my = anchor.y + Math.sin(ang) * dist;
 
-    let color = 'rgba(255, 200, 75, 0.88)';
+    let color = 'rgba(255, 200, 75, 0.9)';
     let coreColor = '#fff7d4';
-    let radius = 18;
+    let radius = 10;
 
     const kind = wep?.projectileKind;
     if (kind === 'plasma' || kind === 'rad_beam') {
       color = 'rgba(90, 255, 130, 0.9)';
       coreColor = '#e2ffe8';
-      radius = 24;
+      radius = 12;
     } else if (kind === 'laser') {
-      color = 'rgba(255, 65, 105, 0.9)';
-      coreColor = '#ffe0e8';
-      radius = 22;
+      const isUltra = wep?.ultra || wep?.id === 'ultra_laser_pistol';
+      const isIon = wep?.id === 'ion_cannon';
+      color = isUltra
+        ? 'rgba(85, 255, 120, 0.9)'
+        : isIon
+          ? 'rgba(85, 225, 255, 0.9)'
+          : 'rgba(255, 65, 105, 0.9)';
+      coreColor = isUltra ? '#e8ffe8' : isIon ? '#e8fbff' : '#ffe0e8';
+      radius = 11;
     } else if (kind === 'lightning') {
       color = 'rgba(110, 225, 255, 0.9)';
       coreColor = '#e8fbff';
-      radius = 22;
+      radius = 11;
     } else if (kind === 'idpd_bullet') {
-      color = 'rgba(85, 185, 255, 0.88)';
+      color = 'rgba(85, 185, 255, 0.9)';
       coreColor = '#dff4ff';
-      radius = 19;
+      radius = 10;
     } else if (kind === 'bolt' || kind === 'seeking_bolt' || kind === 'toxic_bolt' || kind === 'splinter') {
-      color = 'rgba(130, 255, 145, 0.78)';
+      color = 'rgba(130, 255, 145, 0.85)';
       coreColor = '#eaffea';
-      radius = 15;
+      radius = 9;
     } else if (kind === 'shell' || kind === 'slug' || kind === 'flak') {
       color = 'rgba(255, 175, 55, 0.92)';
       coreColor = '#fff6cf';
-      radius = 24;
+      radius = 13;
     } else if (kind === 'rocket' || kind === 'nuke' || kind === 'grenade' || kind === 'cluster_grenade') {
       color = 'rgba(255, 140, 45, 0.92)';
       coreColor = '#fff0cc';
-      radius = 26;
+      radius = 14;
     }
 
     this.muzzleFlashes.push({
@@ -830,11 +1172,11 @@ export class GameRenderer {
       radius,
       color,
       coreColor,
-      life: 3.2,
-      maxLife: 3.2,
+      life: 2.6,
+      maxLife: 2.6,
     });
-    // Cast a brief dynamic muzzle flash light in dark biomes (Sewers, Caves, Labs, Palace)
-    this.spawnFlashLight(mx, my, Math.max(46, radius * 2.3), color, 3.2);
+    // Cast a compact dynamic muzzle light in dark biomes without washing out pixel art
+    this.spawnFlashLight(mx, my, Math.max(28, radius * 2.4), color, 2.6);
   }
 
   /**
@@ -878,9 +1220,25 @@ export class GameRenderer {
     const camPlayerPos = lerpPosSafe(state.player.prevX, state.player.prevY, state.player.x, state.player.y, alpha, 56);
     this.camera.update(camPlayerPos.x, camPlayerPos.y, aimWorldX, aimWorldY, dtSeconds, settings);
 
-    // Decay melee swing snap interpolation
+    // Decay melee swing snap interpolation (per hand for Steroids!)
     if (this.meleeSwingAnim > 0) {
       this.meleeSwingAnim = Math.max(0, this.meleeSwingAnim - ticks * 0.24);
+    }
+    if (this.meleeSwingAnims[0] > 0) {
+      this.meleeSwingAnims[0] = Math.max(0, this.meleeSwingAnims[0] - ticks * 0.24);
+    }
+    if (this.meleeSwingAnims[1] > 0) {
+      this.meleeSwingAnims[1] = Math.max(0, this.meleeSwingAnims[1] - ticks * 0.24);
+    }
+
+    // Track Crystal Shield release transition for sprShieldDisappear animation
+    const nowShielding = state.player.shielding && state.player.alive;
+    if (this.wasShielding && !nowShielding && state.player.alive) {
+      this.shieldDisappearTicks = 8;
+    }
+    this.wasShielding = nowShielding;
+    if (this.shieldDisappearTicks > 0) {
+      this.shieldDisappearTicks = Math.max(0, this.shieldDisappearTicks - ticks);
     }
 
     // Detect fresh player hurt onset for brief screen-edge damage border flash
@@ -1064,6 +1422,7 @@ export class GameRenderer {
     // Ensure persistent FloorBuffer matches current level & sync any carved walls
     const areaKey = `${state.areaCode}:${state.loop}:${map.width}x${map.height}`;
     const mapChanged = this.lastMapRef !== map || this.lastAreaKey !== areaKey;
+    let wallMaskNeedsRebuild = this.wallRenderMask === null || this.wallRenderMask.length !== map.width * map.height;
     if (mapChanged || state.floorClearTrigger) {
       if (mapChanged && this.lastMapRef !== null) {
         // Clear stale particles/floating texts & snap camera if level swapped outside consumeEvents
@@ -1079,8 +1438,13 @@ export class GameRenderer {
       }
       this.lastMapRef = map;
       this.lastAreaKey = areaKey;
+      wallMaskNeedsRebuild = true;
     } else {
-      this.floorBuffer.syncMapChanges(map, areaDef);
+      const changed = this.floorBuffer.syncMapChanges(map, areaDef);
+      if (changed > 0) wallMaskNeedsRebuild = true;
+    }
+    if (wallMaskNeedsRebuild) {
+      this.wallRenderMask = buildWallRenderMask(map);
     }
 
     // Background clear
@@ -1119,48 +1483,52 @@ export class GameRenderer {
     ctx.translate(-viewLeft, -viewTop);
 
     // ------------------------------------------------------------------------
-    // LAYER 2: 2.5D Walls (drop shadows, sprWall*Bot front faces, sprWall*Out, sprWall*Top)
-    // ------------------------------------------------------------------------
-    this.renderWalls(ctx, map, viewLeft, viewTop, w, h, areaDef);
-
-    // ------------------------------------------------------------------------
-    // LAYER 3: Throne Hall Carpet, Settled Live Corpses, Throne Beam Telegraph, Ground Shadows, Pickups, Portal
+    // LAYER 2: 7-3 Throne Hall Carpet (clipped BEFORE walls!) + Wall Base AO & Outer Outlines
     // ------------------------------------------------------------------------
     this.renderThroneHallCarpet(ctx, state, settings.pixelSnap);
+    const wallRange = this.renderWallBases(ctx, map, viewLeft, viewTop, w, h, areaDef);
+
+    // ------------------------------------------------------------------------
+    // LAYER 3: Settled Live Corpses, Throne Beam Telegraph, Plant Snares, Rogue Aim, Shadows, Pickups, Portal
+    // ------------------------------------------------------------------------
     for (let i = 0; i < state.corpses.length; i++) {
       const corpse = state.corpses[i]!;
       if (!corpse.baked) continue;
       if (this.isOutsideView(corpse.x, corpse.y, 32, viewLeft, viewTop, w, h)) continue;
-      this.renderCorpse(ctx, corpse, settings.pixelSnap);
+      this.renderCorpse(ctx, corpse, settings.pixelSnap, alpha);
     }
     this.renderThroneBeamTelegraph(ctx, state, alpha);
+    this.renderSnareTraps(ctx, state, viewLeft, viewTop, w, h, settings.pixelSnap, alpha);
+    this.renderPortalStrikeAim(ctx, state, settings.pixelSnap);
     this.renderGroundShadows(ctx, state, playerX, playerY, alpha);
-    this.renderPickups(ctx, state.pickups, state.tick, settings.pixelSnap);
+    this.renderPickups(ctx, state.pickups, state.tick, settings.pixelSnap, alpha);
     if (state.portal.active) {
       this.renderPortal(ctx, state, settings.pixelSnap);
     }
 
     // ------------------------------------------------------------------------
-    // LAYER 4: Strict Y-Sorted Entities (Props, Corpses, Casings, Player, Enemies, Bosses)
+    // LAYER 4: True 2.5D Y-Sorted Entities & Interleaved Wall Overhang Caps (row ty * ts)
     // ------------------------------------------------------------------------
     const drawList: DrawableEntity[] = [];
 
     for (let i = 0; i < state.props.length; i++) {
       const prop = state.props[i]!;
-      if (this.isOutsideView(prop.x, prop.y, 40, viewLeft, viewTop, w, h)) continue;
+      if (prop.kind === 'snare_trap') continue; // Rendered flat on floor in Layer 3
+      if (this.isOutsideView(prop.x, prop.y, 64, viewLeft, viewTop, w, h)) continue;
       drawList.push({
         sortY: prop.y,
-        draw: () => this.renderProp(ctx, prop, state.tick, settings.pixelSnap),
+        draw: () => this.renderProp(ctx, prop, state.tick, settings.pixelSnap, map),
       });
     }
 
     for (let i = 0; i < state.corpses.length; i++) {
       const corpse = state.corpses[i]!;
       if (corpse.baked) continue;
-      if (this.isOutsideView(corpse.x, corpse.y, 32, viewLeft, viewTop, w, h)) continue;
+      const cPos = lerpPosSafe(corpse.prevX ?? corpse.x, corpse.prevY ?? corpse.y, corpse.x, corpse.y, alpha, 56);
+      if (this.isOutsideView(cPos.x, cPos.y, 32, viewLeft, viewTop, w, h)) continue;
       drawList.push({
-        sortY: corpse.y - 2,
-        draw: () => this.renderCorpse(ctx, corpse, settings.pixelSnap),
+        sortY: cPos.y - 2,
+        draw: () => this.renderCorpse(ctx, corpse, settings.pixelSnap, alpha),
       });
     }
 
@@ -1186,10 +1554,42 @@ export class GameRenderer {
       const ePos = lerpPosSafe(enemy.prevX, enemy.prevY, enemy.x, enemy.y, alpha, 56);
       const ex = ePos.x;
       const ey = ePos.y;
-      if (this.isOutsideView(ex, ey, enemy.isBoss ? 80 : 36, viewLeft, viewTop, w, h)) continue;
+      if (this.isOutsideView(ex, ey, enemy.isBoss ? 140 : 36, viewLeft, viewTop, w, h)) continue;
       drawList.push({
         sortY: ey,
-        draw: () => this.renderEnemy(ctx, enemy, ex, ey, state.tick, settings.pixelSnap, map),
+        draw: () => this.renderEnemy(ctx, enemy, ex, ey, state.tick, settings.pixelSnap, map, alpha),
+      });
+    }
+
+    // Interleave visible 2.5D wall rows (front face + single roof cap at py - 8) at world Y = ty * ts!
+    // Entities north of wall row ty (y < ty * ts) draw behind the 8px roof overhang;
+    // entities in or south of row ty (y >= ty * ts) draw cleanly in front!
+    const ts = map.tileSize || TILE_SIZE;
+    const wMask = this.wallRenderMask;
+    for (let ty = wallRange.minTy; ty <= wallRange.maxTy; ty++) {
+      const rowOffset = ty * map.width;
+      let hasRowWall = false;
+      for (let tx = wallRange.minTx; tx <= wallRange.maxTx; tx++) {
+        if (wMask && wMask[rowOffset + tx]! > 0) {
+          hasRowWall = true;
+          break;
+        }
+      }
+      if (!hasRowWall) continue;
+      const rowY = ty;
+      drawList.push({
+        sortY: rowY * ts + 0.01,
+        draw: () =>
+          this.renderWallRow(
+            ctx,
+            map,
+            rowY,
+            wallRange.minTx,
+            wallRange.maxTx,
+            wallRange.wallTopSpr,
+            wallRange.wallBotSpr,
+            pal,
+          ),
       });
     }
 
@@ -1199,28 +1599,52 @@ export class GameRenderer {
     }
 
     // ------------------------------------------------------------------------
-    // LAYER 5: Projectiles + Trails, Muzzle Flashes, Shockwaves, Particles, Text
+    // LAYER 5: Cohesive Throne Mega-Beam, Projectiles + Trails, Smoke, Muzzles, Shockwaves, Particles, Text
     // ------------------------------------------------------------------------
+    this.renderThroneMegaBeamColumn(ctx, state, settings.pixelSnap, alpha);
+
     for (let i = 0; i < state.projectiles.length; i++) {
       const proj = state.projectiles[i]!;
+      // Throne Mega-Beam segments are rendered together as ONE cohesive multi-layer column above
+      if (proj.sprite === 'sprNothingBeam') continue;
       const pPos =
         proj.kind === 'melee_slash'
           ? { x: proj.x, y: proj.y }
           : lerpPosSafe(proj.prevX, proj.prevY, proj.x, proj.y, alpha, 110);
       const px = pPos.x;
       const py = pPos.y;
-      if (this.isOutsideView(px, py, 64, viewLeft, viewTop, w, h)) continue;
-      this.renderProjectile(ctx, proj, px, py, state.tick, settings.pixelSnap, alpha);
+      const isUnifiedBeam =
+        (proj.kind === 'laser' || proj.kind === 'enemy_laser') &&
+        proj.beamOriginX !== undefined &&
+        proj.beamOriginY !== undefined;
+      if (isUnifiedBeam) {
+        const minBx = Math.min(proj.beamOriginX!, px);
+        const maxBx = Math.max(proj.beamOriginX!, px);
+        const minBy = Math.min(proj.beamOriginY!, py);
+        const maxBy = Math.max(proj.beamOriginY!, py);
+        if (
+          maxBx + 16 < viewLeft ||
+          minBx - 16 > viewLeft + w ||
+          maxBy + 16 < viewTop ||
+          minBy - 16 > viewTop + h
+        ) {
+          continue;
+        }
+      } else if (this.isOutsideView(px, py, 64, viewLeft, viewTop, w, h)) {
+        continue;
+      }
+      this.renderProjectile(ctx, state, proj, px, py, state.tick, settings.pixelSnap, alpha);
     }
 
     this.renderSmokePuffs(ctx);
     this.renderMuzzleFlashes(ctx);
     this.renderShockwaves(ctx);
     this.renderParticles(ctx, state, settings.pixelSnap);
-    this.renderFloatingTexts(ctx);
+    this.renderFloatingTexts(ctx, state, viewLeft, viewTop, w);
 
-    // Nearby weapon pickup callout in world space (neatly below weapon, adaptive prompt)
-    this.renderNearbyWeaponPrompt(ctx, state, playerX, playerY, inputMode);
+    // Nearby weapon & interactable prop prompts in world space (adaptive KBM/gamepad/touch)
+    this.renderNearbyWeaponPrompt(ctx, state, playerX, playerY, inputMode, viewTop);
+    this.renderNearbyPropPrompt(ctx, state, playerX, playerY, inputMode, viewTop);
 
     ctx.restore();
 
@@ -1235,8 +1659,10 @@ export class GameRenderer {
         x: fl.x,
         y: fl.y,
         radius: fl.radius * (0.55 + 0.45 * frac),
-        intensity: frac,
+        intensity: frac * 0.85,
         glowColor: fl.glowColor,
+        glowRadius: Math.min(26, fl.radius * 0.48 * (0.6 + 0.4 * frac)),
+        glowAlpha: Math.min(0.14, 0.14 * frac),
       });
     }
     this.lighting.render(ctx, state, this.camera, playerX, playerY, alpha, this.extraLightScratch);
@@ -1268,7 +1694,7 @@ export class GameRenderer {
     );
   }
 
-  private renderWalls(
+  private renderWallBases(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     map: WorldMap,
     viewLeft: number,
@@ -1276,7 +1702,14 @@ export class GameRenderer {
     viewW: number,
     viewH: number,
     areaDef?: { wallTopSprite: string; wallBotSprite: string; wallOutSprite: string },
-  ): void {
+  ): {
+    minTx: number;
+    maxTx: number;
+    minTy: number;
+    maxTy: number;
+    wallTopSpr: string;
+    wallBotSpr: string;
+  } {
     const ts = map.tileSize || TILE_SIZE;
     const minTx = Math.max(0, Math.floor(viewLeft / ts) - 1);
     const maxTx = Math.min(map.width - 1, Math.ceil((viewLeft + viewW) / ts) + 1);
@@ -1287,9 +1720,7 @@ export class GameRenderer {
     const wallTopSpr = areaDef?.wallTopSprite ?? `sprWall${num}Top`;
     const wallBotSpr = areaDef?.wallBotSprite ?? `sprWall${num}Bot`;
     const wallOutSpr = areaDef?.wallOutSprite ?? `sprWall${num}Out`;
-    const pal = BIOME_FALLBACK_PALETTES[map.biome] ?? BIOME_FALLBACK_PALETTES.desert;
-
-    const overhang = 8; // 2.5D roof cap elevation
+    const wMask = this.wallRenderMask;
 
     // Pass 2a: Layered 2-step soft ambient occlusion along south-facing & side wall bases
     ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
@@ -1328,114 +1759,115 @@ export class GameRenderer {
       for (let ty = minTy; ty <= maxTy; ty++) {
         const row = ty * map.width;
         for (let tx = minTx; tx <= maxTx; tx++) {
-          const tile = map.tiles[row + tx]!;
-          if (isWalkable(tile)) continue;
-          if (!hasNearbyFloor(map, tx, ty)) continue;
+          const idx = row + tx;
+          if (wMask ? wMask[idx] !== 1 : isWalkable(map.tiles[idx]!) || !hasNearbyFloor(map, tx, ty)) {
+            continue;
+          }
           this.sprites.draw(ctx, wallOutSpr, tx * ts, ty * ts, { frame: 0, pixelSnap: true });
         }
       }
     }
 
-    // Pass 2c: 2.5D front-faces (sprWall*Bot) when wallMask bit4 (16) is set
-    for (let ty = minTy; ty <= maxTy; ty++) {
-      const row = ty * map.width;
-      for (let tx = minTx; tx <= maxTx; tx++) {
-        const mask = map.wallMask[row + tx]!;
-        if ((mask & 16) === 0) continue;
-        const px = tx * ts;
-        const py = ty * ts;
-        const variant = map.floorVariants[row + tx] ?? ((tx * 3 + ty * 7) & 3);
-        const drew = this.sprites.draw(ctx, wallBotSpr, px, py, { frame: variant, pixelSnap: true });
-        if (!drew) {
-          ctx.fillStyle = pal.wallBot;
-          ctx.fillRect(px, py, ts, ts);
-          ctx.fillStyle = pal.wallTop;
-          ctx.fillRect(px + 1, py + 5, 6, 4);
-          ctx.fillRect(px + 9, py + 10, 6, 4);
-          ctx.fillStyle = '#0e0a12';
-          ctx.fillRect(px, py + ts - 2, ts, 2);
-        }
+    return { minTx, maxTx, minTy, maxTy, wallTopSpr, wallBotSpr };
+  }
+
+  /**
+   * Renders a single horizontal row of 2.5D walls (front faces + ONE roof cap at py - 8 per wall tile,
+   * plus solid wall-top fill on enclosed interior wall islands with ZERO double-stamping and ZERO black holes).
+   * Called interleaved with Layer 4 entities at sortY = ty * ts for true 2.5D overhang occlusion!
+   */
+  private renderWallRow(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    map: WorldMap,
+    ty: number,
+    minTx: number,
+    maxTx: number,
+    wallTopSpr: string,
+    wallBotSpr: string,
+    pal: { wallTop: string; wallBot: string; wallEdge: string; voidBg: string },
+  ): void {
+    const ts = map.tileSize || TILE_SIZE;
+    const overhang = 8;
+    const row = ty * map.width;
+    const py = ty * ts;
+    const topY = py - overhang;
+    const wMask = this.wallRenderMask;
+
+    // 1. 2.5D south front faces (sprWall*Bot) for south-facing tiles in this row
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      const idx = row + tx;
+      const mask = map.wallMask[idx]!;
+      if ((mask & 16) === 0) continue;
+      const px = tx * ts;
+      const variant = map.floorVariants[idx] ?? ((tx * 3 + ty * 7) & 3);
+      const drew = this.sprites.draw(ctx, wallBotSpr, px, py, { frame: variant, pixelSnap: true });
+      if (!drew) {
+        ctx.fillStyle = pal.wallBot;
+        ctx.fillRect(px, py, ts, ts);
+        ctx.fillStyle = pal.wallTop;
+        ctx.fillRect(px + 1, py + 5, 6, 4);
+        ctx.fillRect(px + 9, py + 10, 6, 4);
+        ctx.fillStyle = '#0e0a12';
+        ctx.fillRect(px, py + ts - 2, ts, 2);
       }
     }
 
-    // Pass 2d: Wall top roof caps (sprWall*Top)
-    for (let ty = minTy; ty <= maxTy; ty++) {
-      const row = ty * map.width;
-      for (let tx = minTx; tx <= maxTx; tx++) {
-        const tile = map.tiles[row + tx]!;
-        if (isWalkable(tile)) continue;
-        const mask = map.wallMask[row + tx]!;
-        const px = tx * ts;
-        const py = ty * ts;
-        const nearFloor = hasNearbyFloor(map, tx, ty);
+    // 2. Single 2.5D wall roof cap (sprWall*Top at py - 8) for both perimeter walls (1)
+    //    AND enclosed interior wall islands (2) — ZERO duplicate second stamp, ZERO black holes!
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      const idx = row + tx;
+      const wallKind = wMask ? wMask[idx]! : !isWalkable(map.tiles[idx]!) && hasNearbyFloor(map, tx, ty) ? 1 : 0;
+      if (wallKind === 0) continue;
 
-        if (!nearFloor) {
-          // Deep interior solid rock block
-          ctx.fillStyle = pal.voidBg;
-          ctx.fillRect(px, py - overhang, ts, ts + overhang);
-          continue;
-        }
-
-        const variant = map.floorVariants[row + tx] ?? ((tx * 5 + ty * 11) & 7);
-        const topY = py - overhang;
-        const drewTop = this.sprites.draw(ctx, wallTopSpr, px, topY, {
-          frame: variant,
-          pixelSnap: true,
-        });
-        if (!drewTop) {
-          ctx.fillStyle = pal.wallTop;
-          ctx.fillRect(px, topY, ts, ts);
+      const px = tx * ts;
+      const mask = map.wallMask[idx]!;
+      const variant = map.floorVariants[idx] ?? ((tx * 5 + ty * 11) & 7);
+      const drewTop = this.sprites.draw(ctx, wallTopSpr, px, topY, {
+        frame: variant,
+        pixelSnap: true,
+      });
+      if (!drewTop) {
+        ctx.fillStyle = pal.wallTop;
+        ctx.fillRect(px, topY, ts, ts);
+        if (wallKind === 1) {
           ctx.fillStyle = pal.wallEdge;
           if ((mask & 1) === 0) ctx.fillRect(px, topY, ts, 2);
           if ((mask & 8) === 0) ctx.fillRect(px, topY, 2, ts);
           ctx.fillStyle = pal.wallBot;
           if ((mask & 4) === 0) ctx.fillRect(px, topY + ts - 2, ts, 2);
         }
+      }
 
-        // If this wall does NOT expose a south front-face, fill the lower 8px seam cleanly
-        if ((mask & 16) === 0) {
-          const drewLower = this.sprites.draw(ctx, wallTopSpr, px, py, {
-            frame: variant,
-            pixelSnap: true,
-          });
-          if (!drewLower) {
-            ctx.fillStyle = pal.wallTop;
-            ctx.fillRect(px, py + ts - overhang, ts, overhang);
-          }
+      // Autotiled 2.5D perimeter roof bevels & crisp outer contour for fallback art
+      // (Steam packs already carry hand-drawn wall top edges + sprWall*Out contours!)
+      if (wallKind === 1 && (this.bundle.sourceMode !== 'steam' || !drewTop)) {
+        const northOpen = (mask & 1) === 0;
+        const eastOpen = (mask & 2) === 0;
+        const southOpen = (mask & 4) === 0 || (mask & 16) !== 0;
+        const westOpen = (mask & 8) === 0;
+
+        if (northOpen) {
+          ctx.fillStyle = 'rgba(12, 8, 16, 0.72)';
+          ctx.fillRect(px, topY - 1, ts, 1);
+          ctx.fillStyle = pal.wallEdge;
+          ctx.fillRect(px, topY, ts, 2);
         }
-
-        // Autotiled 2.5D perimeter roof bevels & crisp outer contour for fallback art
-        // (Steam packs already carry hand-drawn wall top edges + sprWall*Out contours!)
-        if (this.bundle.sourceMode !== 'steam' || !drewTop) {
-          const northOpen = (mask & 1) === 0;
-          const eastOpen = (mask & 2) === 0;
-          const southOpen = (mask & 4) === 0 || (mask & 16) !== 0;
-          const westOpen = (mask & 8) === 0;
-          const capH = (mask & 16) !== 0 ? ts : ts + overhang;
-
-          if (northOpen) {
-            ctx.fillStyle = 'rgba(12, 8, 16, 0.72)';
-            ctx.fillRect(px, topY - 1, ts, 1);
-            ctx.fillStyle = pal.wallEdge;
-            ctx.fillRect(px, topY, ts, 2);
-          }
-          if (westOpen) {
-            ctx.fillStyle = 'rgba(12, 8, 16, 0.62)';
-            ctx.fillRect(px - 1, topY, 1, capH);
-            ctx.fillStyle = pal.wallEdge;
-            ctx.fillRect(px, topY, 1, capH);
-          }
-          if (eastOpen) {
-            ctx.fillStyle = 'rgba(12, 8, 16, 0.56)';
-            ctx.fillRect(px + ts - 1, topY, 1, capH);
-          }
-          if (southOpen && (mask & 16) !== 0) {
-            // Crisp sunlit cliff-edge highlight above the shaded 2.5D south overhang lip
-            ctx.fillStyle = pal.wallEdge;
-            ctx.fillRect(px, topY + ts - 2, ts, 1);
-            ctx.fillStyle = 'rgba(10, 6, 14, 0.85)';
-            ctx.fillRect(px, topY + ts - 1, ts, 1);
-          }
+        if (westOpen) {
+          ctx.fillStyle = 'rgba(12, 8, 16, 0.62)';
+          ctx.fillRect(px - 1, topY, 1, ts);
+          ctx.fillStyle = pal.wallEdge;
+          ctx.fillRect(px, topY, 1, ts);
+        }
+        if (eastOpen) {
+          ctx.fillStyle = 'rgba(12, 8, 16, 0.56)';
+          ctx.fillRect(px + ts - 1, topY, 1, ts);
+        }
+        if (southOpen && (mask & 16) !== 0) {
+          // Crisp sunlit cliff-edge highlight above the shaded 2.5D south overhang lip
+          ctx.fillStyle = pal.wallEdge;
+          ctx.fillRect(px, topY + ts - 2, ts, 1);
+          ctx.fillStyle = 'rgba(10, 6, 14, 0.85)';
+          ctx.fillRect(px, topY + ts - 1, ts, 1);
         }
       }
     }
@@ -1458,11 +1890,12 @@ export class GameRenderer {
       ctx.fill();
     }
 
-    // Enemy shadows (shrunk dynamically when airborne + landing ring under Lil' Hunter!)
+    // Enemy shadows (teleport-safe lerpPosSafe, shrunk when airborne + landing ring under Lil' Hunter!)
     for (let i = 0; i < state.enemies.length; i++) {
       const e = state.enemies[i]!;
-      const ex = lerp(e.prevX, e.x, alpha);
-      const ey = lerp(e.prevY, e.y, alpha);
+      const ePos = lerpPosSafe(e.prevX, e.prevY, e.x, e.y, alpha, 56);
+      const ex = ePos.x;
+      const ey = ePos.y;
       const elev = e.elevated ? Math.max(0, e.elevZ ?? 14) : 0;
       const elevScale = Math.max(0.45, 1 - elev * 0.015);
       const rx = Math.max(4, Math.round(e.radius * 0.98 * elevScale));
@@ -1473,12 +1906,9 @@ export class GameRenderer {
 
       if (e.bossId === 'lil_hunter' && e.elevated) {
         ctx.save();
-        const ringPulse = 10 + Math.sin(this.renderTimeSec * 22) * 3;
-        ctx.strokeStyle = 'rgba(255, 72, 82, 0.82)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.ellipse(Math.round(ex), Math.round(ey + 4), ringPulse, ringPulse * 0.55, 0, 0, Math.PI * 2);
-        ctx.stroke();
+        const ringPulse = Math.round(10 + Math.sin(this.renderTimeSec * 22) * 3);
+        ctx.fillStyle = 'rgba(255, 72, 82, 0.85)';
+        drawPixelRing(ctx, Math.round(ex), Math.round(ey + 4), ringPulse, 1, 4, Math.floor(this.renderTimeSec * 12));
         ctx.restore();
       }
     }
@@ -1494,14 +1924,15 @@ export class GameRenderer {
       ctx.fill();
     }
 
-    // Pickup contact shadows (anchor bobbing rads/medkits/ammo/weapons cleanly to the floor!)
+    // Pickup contact shadows (interpolated cleanly at 60/120 FPS!)
     ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
     for (let i = 0; i < state.pickups.length; i++) {
       const pk = state.pickups[i]!;
+      const pkPos = lerpPosSafe(pk.prevX ?? pk.x, pk.prevY ?? pk.y, pk.x, pk.y, alpha, 56);
       const rx = pk.kind === 'weapon' ? 6 : pk.kind === 'big_rad' ? 4.5 : 3.5;
       const ry = pk.kind === 'weapon' ? 2.5 : 1.8;
       ctx.beginPath();
-      ctx.ellipse(Math.round(pk.x), Math.round(pk.y + 4), rx, ry, 0, 0, Math.PI * 2);
+      ctx.ellipse(Math.round(pkPos.x), Math.round(pkPos.y + 4), rx, ry, 0, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -1515,11 +1946,166 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  /**
+   * Renders Plant Snare traps scaled accurately for Trapper (plant_a) with thorny perimeter rings
+   * and animated vine tethers pulling toward every snared enemy!
+   */
+  private renderSnareTraps(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    viewLeft: number,
+    viewTop: number,
+    w: number,
+    h: number,
+    pixelSnap: boolean,
+    alpha: number,
+  ): void {
+    const tangleSpr =
+      state.player.skin === 'b' && this.sprites.hasSprite('sprTangleB') ? 'sprTangleB' : 'sprTangle';
+    const hasTangle = this.sprites.hasSprite(tangleSpr);
+
+    for (let i = 0; i < state.props.length; i++) {
+      const prop = state.props[i]!;
+      if (prop.kind !== 'snare_trap') continue;
+      const r = Math.max(16, Math.round(prop.radius));
+      if (this.isOutsideView(prop.x, prop.y, r + 24, viewLeft, viewTop, w, h)) continue;
+
+      const cx = Math.round(prop.x);
+      const cy = Math.round(prop.y);
+      const frame = Math.min(5, Math.floor((state.tick + prop.id) * 0.2) % 6);
+
+      ctx.save();
+      // Subtle grounded bramble floor shadow + crisp pixel-stepped thorny perimeter matching exact radius (including Trapper r=76!)
+      ctx.fillStyle = 'rgba(18, 46, 22, 0.34)';
+      drawPixelDisc(ctx, cx, cy, Math.max(8, r - 2));
+      ctx.fillStyle = '#143318';
+      drawPixelRing(ctx, cx, cy, r + 1, 1);
+      ctx.fillStyle = '#4ee85e';
+      drawPixelRing(ctx, cx, cy, r, 1, 5, Math.floor(state.tick * 0.25) & 7);
+
+      // Thorny bramble spoke roots radiating from center across the snare radius
+      const spokes = r >= 54 ? 8 : 5;
+      for (let s = 0; s < spokes; s++) {
+        const ang = (s / spokes) * Math.PI * 2 + (prop.id % 7) * 0.4;
+        const ex = cx + Math.cos(ang) * (r - 2);
+        const ey = cy + Math.sin(ang) * (r - 2);
+        ctx.fillStyle = '#1b4720';
+        drawPixelLine(ctx, cx, cy, ex, ey, 2);
+        ctx.fillStyle = '#3dc74f';
+        drawPixelLine(ctx, cx, cy, ex, ey, 1);
+      }
+
+      // Draw central sprTangle (and satellite integer-scale sprTangle clusters when Trapper widens radius!)
+      if (hasTangle) {
+        this.sprites.draw(ctx, tangleSpr, cx, cy, { frame, pixelSnap });
+        if (r > 44) {
+          const satCount = 5;
+          const satDist = r * 0.54;
+          for (let k = 0; k < satCount; k++) {
+            const ang = (k / satCount) * Math.PI * 2 + 0.35;
+            this.sprites.draw(
+              ctx,
+              tangleSpr,
+              cx + Math.cos(ang) * satDist,
+              cy + Math.sin(ang) * satDist,
+              { frame: (frame + k) % 6, alpha: 0.85, pixelSnap },
+            );
+          }
+        }
+      }
+
+      // Animated thorny vine tethers binding every snared enemy inside/near this trap
+      const tetherRangeSq = (r + 22) * (r + 22);
+      for (let j = 0; j < state.enemies.length; j++) {
+        const e = state.enemies[j]!;
+        if (e.friendly || e.hp <= 0 || e.snaredTicks <= 0) continue;
+        const ePos = lerpPosSafe(e.prevX, e.prevY, e.x, e.y, alpha, 56);
+        const dx = ePos.x - cx;
+        const dy = ePos.y - cy;
+        if (dx * dx + dy * dy > tetherRangeSq) continue;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 2) continue;
+        const perpX = -dy / dist;
+        const perpY = dx / dist;
+        const wave = Math.sin(this.renderTimeSec * 14 + e.id) * 4;
+        const midX = (cx + ePos.x) * 0.5 + perpX * wave;
+        const midY = (cy + ePos.y) * 0.5 + perpY * wave;
+        ctx.fillStyle = '#143818';
+        drawPixelLine(ctx, cx, cy, midX, midY, 3);
+        drawPixelLine(ctx, midX, midY, ePos.x, ePos.y + 2, 3);
+        ctx.fillStyle = '#5eff72';
+        drawPixelLine(ctx, cx, cy, midX, midY, 1);
+        drawPixelLine(ctx, midX, midY, ePos.x, ePos.y + 2, 1);
+      }
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Renders Rogue's hold-to-drag Portal Strike targeting reticle (sprRogueStrike / pixel bombing strip).
+   */
+  private renderPortalStrikeAim(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    pixelSnap: boolean,
+  ): void {
+    const aim = state.player.portalStrikeAim;
+    if (!aim || !aim.active || !state.player.alive) return;
+
+    const hasTB = state.player.mutations.includes('throne_butt');
+    const superStrike = state.player.ultra === 'rogue_a';
+    const strikeSpr =
+      (hasTB || superStrike) && this.sprites.hasSprite('sprRogueStrikeTB')
+        ? 'sprRogueStrikeTB'
+        : 'sprRogueStrike';
+
+    ctx.save();
+    const blastCount = superStrike ? 6 : hasTB ? 5 : 4;
+    const blastR = superStrike ? 38 : hasTB ? 32 : 26;
+    const cosA = Math.cos(aim.angle);
+    const sinA = Math.sin(aim.angle);
+    const dashPhase = Math.floor(this.renderTimeSec * 16) & 7;
+
+    // Crisp blue-cyan portal strike impact preview rings along the drag vector
+    for (let b = 0; b < blastCount; b++) {
+      const bx = aim.x + cosA * (b * 24);
+      const by = aim.y + sinA * (b * 24);
+      ctx.fillStyle = 'rgba(42, 140, 255, 0.16)';
+      drawPixelDisc(ctx, bx, by, Math.round(blastR * 0.65));
+      ctx.fillStyle = b === 0 ? '#a8e6ff' : '#4fb4ff';
+      drawPixelRing(ctx, bx, by, Math.round(blastR * 0.72), 1, 5, dashPhase + b);
+    }
+
+    // Centerline & Steam sprRogueStrike overlay if available
+    const midX = aim.x + cosA * ((blastCount - 1) * 12);
+    const midY = aim.y + sinA * ((blastCount - 1) * 12);
+    const drewStrike = this.sprites.draw(ctx, strikeSpr, midX, midY, {
+      frame: Math.floor(state.tick * 0.35),
+      rotation: aim.angle,
+      alpha: 0.9,
+      pixelSnap,
+    });
+    if (!drewStrike) {
+      const endX = aim.x + cosA * ((blastCount - 1) * 24);
+      const endY = aim.y + sinA * ((blastCount - 1) * 24);
+      ctx.fillStyle = '#0c1c36';
+      drawPixelLine(ctx, aim.x, aim.y, endX, endY, 3);
+      ctx.fillStyle = '#70d4ff';
+      drawPixelLine(ctx, aim.x, aim.y, endX, endY, 1);
+      // Origin crosshair pin
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(Math.round(aim.x) - 3, Math.round(aim.y), 7, 1);
+      ctx.fillRect(Math.round(aim.x), Math.round(aim.y) - 3, 1, 7);
+    }
+    ctx.restore();
+  }
+
   private renderPickups(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     pickups: readonly PickupEntity[],
     tick: number,
     pixelSnap: boolean,
+    alpha: number = 1,
   ): void {
     for (let i = 0; i < pickups.length; i++) {
       const pk = pickups[i]!;
@@ -1527,8 +2113,9 @@ export class GameRenderer {
       if (pk.lifeTicks > 0 && pk.lifeTicks < 60 && Math.floor(pk.lifeTicks / 4) % 2 === 0) {
         continue;
       }
+      const pkPos = lerpPosSafe(pk.prevX ?? pk.x, pk.prevY ?? pk.y, pk.x, pk.y, alpha, 56);
       const bob = Math.sin((tick + pk.id * 7) * 0.22) * 1.4;
-      const py = pk.y + bob;
+      const py = pkPos.y + bob;
       let spr = 'sprRad';
       if (pk.kind === 'big_rad') spr = this.sprites.hasSprite('sprBigRad') ? 'sprBigRad' : 'sprRadBig';
       else if (pk.kind === 'ammo') spr = 'sprAmmo';
@@ -1544,13 +2131,13 @@ export class GameRenderer {
         spr = resolveWeaponSpriteName(pk.weaponId, this.data);
       }
 
-      const drew = this.sprites.draw(ctx, spr, pk.x, py, {
+      const drew = this.sprites.draw(ctx, spr, pkPos.x, py, {
         frame: Math.floor(pk.animFrame || tick * 0.2),
         pixelSnap,
       });
 
       if (!drew) {
-        const x = Math.round(pk.x);
+        const x = Math.round(pkPos.x);
         const y = Math.round(py);
         ctx.fillStyle = '#120e16';
         ctx.fillRect(x - 4, y - 4, 8, 8);
@@ -1574,7 +2161,7 @@ export class GameRenderer {
         ctx.globalAlpha = 0.65;
         const ox = Math.round(Math.cos(tick * 0.3 + pk.id) * 6);
         const oy = Math.round(Math.sin(tick * 0.3 + pk.id) * 4);
-        ctx.fillRect(Math.round(pk.x + ox), Math.round(py + oy), 2, 2);
+        ctx.fillRect(Math.round(pkPos.x + ox), Math.round(py + oy), 2, 2);
         ctx.restore();
       }
     }
@@ -1588,11 +2175,38 @@ export class GameRenderer {
     const portal = state.portal;
     const px = Math.round(portal.x);
     const py = Math.round(portal.y);
+    const target = portal.targetArea;
 
-    // Outer swirling vortex aura via cached radial glow stamps (zero per-frame gradients)
+    // Distinct secret portal visual identity:
+    // - '1-?' Oasis: Ocean Blue tint
+    // - 'vault' Crown Vault: Emerald Green (sprProtoPortal)
+    // - 'hq-1' IDPD HQ: Police Blue (sprPopoPortal / sprIDPDPortalStart)
+    // - Default: Classic Wasteland Purple (sprPortal)
+    const isVault = target === 'vault';
+    const isOasis = target === '1-?';
+    const isHq = target === 'hq-1';
+
+    const outerGlowCol = isVault
+      ? 'rgba(60, 235, 118, 0.48)'
+      : isOasis
+        ? 'rgba(46, 175, 255, 0.48)'
+        : isHq
+          ? 'rgba(65, 145, 255, 0.50)'
+          : 'rgba(170, 75, 245, 0.48)';
+    const coreGlowCol = isVault
+      ? 'rgba(210, 255, 225, 0.62)'
+      : isOasis || isHq
+        ? 'rgba(205, 242, 255, 0.62)'
+        : 'rgba(245, 220, 255, 0.62)';
+    const ringColA = isVault ? '#b8ffd0' : isOasis || isHq ? '#bae8ff' : '#ebd0ff';
+    const ringColB = isVault ? '#47f084' : isOasis ? '#38c8ff' : isHq ? '#4f9eff' : '#b86bff';
+    const shardColA = isVault ? '#9effbc' : isOasis || isHq ? '#9ee2ff' : '#e8b5ff';
+    const shardColB = isVault ? '#38d974' : isOasis ? '#30b8ff' : isHq ? '#4a88ff' : '#78d8ff';
+
+    // Outer swirling vortex aura via cached radial glow stamps (clamped, crisp!)
     ctx.save();
-    const outerR = Math.max(18, portal.radius + Math.sin(state.tick * 0.3) * 3);
-    const outerStamp = this.getGlowStamp('rgba(170, 75, 245, 0.72)', outerR);
+    const outerR = Math.max(16, Math.min(26, portal.radius + Math.sin(state.tick * 0.3) * 2.5));
+    const outerStamp = this.getGlowStamp(outerGlowCol, outerR);
     if (outerStamp) {
       ctx.drawImage(
         outerStamp,
@@ -1602,8 +2216,8 @@ export class GameRenderer {
         Math.ceil(outerR * 2),
       );
     }
-    const coreR = outerR * 0.45;
-    const coreStamp = this.getGlowStamp('rgba(245, 220, 255, 0.85)', coreR);
+    const coreR = outerR * 0.42;
+    const coreStamp = this.getGlowStamp(coreGlowCol, coreR);
     if (coreStamp) {
       ctx.drawImage(
         coreStamp,
@@ -1614,56 +2228,71 @@ export class GameRenderer {
       );
     }
 
-    // Animated suction rings + subtle chromatic radial distortion pulses
-    ctx.lineWidth = 1;
+    // Crisp pixel-stepped animated suction rings (zero smooth anti-aliased ctx.arc!)
     for (let r = 0; r < 3; r++) {
       const phase = (this.renderTimeSec * 1.45 + r / 3) % 1;
-      const ringR = outerR * 1.45 * (1 - phase);
-      ctx.strokeStyle =
-        r === 0
-          ? `rgba(235, 195, 255, ${(0.55 * phase).toFixed(3)})`
-          : r === 1
-            ? `rgba(120, 225, 255, ${(0.38 * phase).toFixed(3)})`
-            : `rgba(195, 115, 255, ${(0.48 * phase).toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(px, py, Math.max(2, ringR), 0, Math.PI * 2);
-      ctx.stroke();
+      const ringR = Math.max(3, Math.round(outerR * 1.4 * (1 - phase)));
+      ctx.globalAlpha = Math.min(0.65, 0.55 * phase);
+      ctx.fillStyle = r === 0 ? ringColA : ringColB;
+      drawPixelRing(ctx, px, py, ringR, 1, 4, (state.tick + r * 3) & 7);
     }
 
-    // Deterministic zero-GC spiraling suction debris & violet energy shards
+    // Deterministic zero-GC spiraling suction debris & energy shards
     const t = this.renderTimeSec;
     for (let d = 0; d < 12; d++) {
       const prog = (t * (0.95 + (d % 3) * 0.25) + d * 0.21) % 1;
-      const dist = (1 - prog * prog) * (outerR * 2.55);
+      const dist = (1 - prog * prog) * (outerR * 2.3);
       const ang = d * 1.618 * Math.PI + prog * 4.4;
       const dx = Math.round(px + Math.cos(ang) * dist);
       const dy = Math.round(py + Math.sin(ang) * dist);
       const sz = d % 3 === 0 ? 2 : 1;
-      ctx.fillStyle = d % 2 === 0 ? '#e8b5ff' : d % 3 === 0 ? '#78d8ff' : '#4a3d47';
+      ctx.fillStyle = d % 2 === 0 ? shardColA : d % 3 === 0 ? shardColB : '#4a3d47';
       ctx.globalAlpha = Math.min(1, prog * 1.6) * (1 - prog * 0.3);
       ctx.fillRect(dx, dy, sz, sz);
     }
     ctx.restore();
 
     const frame = Math.floor(state.tick * 0.35);
-    const drew = this.sprites.draw(ctx, 'sprPortal', px, py, {
+    let portalSpr = 'sprPortal';
+    let tintColor: string | undefined;
+    if (isVault) {
+      if (this.sprites.hasSprite('sprProtoPortal')) {
+        portalSpr = 'sprProtoPortal';
+      } else {
+        tintColor = '#48f085';
+      }
+    } else if (isHq) {
+      if (this.sprites.hasSprite('sprPopoPortal')) {
+        portalSpr = 'sprPopoPortal';
+      } else if (this.sprites.hasSprite('sprIDPDPortalStart')) {
+        portalSpr = 'sprIDPDPortalStart';
+      } else {
+        tintColor = '#52a8ff';
+      }
+    } else if (isOasis) {
+      // Oasis portal uses blue-tinted portal vortex
+      if (this.sprites.hasSprite('sprPopoPortal')) {
+        portalSpr = 'sprPopoPortal';
+      } else {
+        tintColor = '#45c8ff';
+      }
+    }
+
+    const drew = this.sprites.draw(ctx, portalSpr, px, py, {
       frame,
       rotation: state.tick * 0.08,
+      tintColor,
       pixelSnap,
     });
     if (!drew) {
-      ctx.fillStyle = '#5a1e8c';
-      ctx.beginPath();
-      ctx.arc(px, py, 14, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#c46bff';
-      ctx.beginPath();
-      ctx.arc(px, py, 9, 0, Math.PI * 2);
-      ctx.fill();
+      const darkCore = isVault ? '#145e32' : isOasis ? '#12548a' : isHq ? '#16358c' : '#5a1e8c';
+      const midCore = isVault ? '#48f085' : isOasis ? '#3ec4ff' : isHq ? '#4f9eff' : '#c46bff';
+      ctx.fillStyle = darkCore;
+      drawPixelDisc(ctx, px, py, 13);
+      ctx.fillStyle = midCore;
+      drawPixelDisc(ctx, px, py, 8);
       ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.fill();
+      drawPixelDisc(ctx, px, py, 4);
     }
   }
 
@@ -1672,13 +2301,51 @@ export class GameRenderer {
     prop: PropEntity,
     tick: number,
     pixelSnap: boolean,
+    map?: WorldMap,
   ): void {
     let sprName = prop.opened && prop.openSprite ? prop.openSprite : prop.sprite;
+    // Render authentic Cursed Chest sprite when prop.cursed is true
+    if (prop.cursed) {
+      if (prop.opened) {
+        if (prop.kind === 'big_weapon_chest' && this.sprites.hasSprite('sprCursedChestBigOpen')) {
+          sprName = 'sprCursedChestBigOpen';
+        } else if (this.sprites.hasSprite('sprCursedChestOpen')) {
+          sprName = 'sprCursedChestOpen';
+        }
+      } else {
+        if (prop.kind === 'big_weapon_chest' && this.sprites.hasSprite('sprCursedChestBig')) {
+          sprName = 'sprCursedChestBig';
+        } else if (this.sprites.hasSprite('sprCursedChest')) {
+          sprName = 'sprCursedChest';
+        }
+      }
+    }
+    // Use dedicated Steam hurt/charge sprites when present on generators & proto statues
+    if (prop.kind === 'throne_generator' && prop.hurtFlashTicks > 0 && this.sprites.hasSprite('sprBigGeneratorHurt')) {
+      sprName = 'sprBigGeneratorHurt';
+    } else if (prop.kind === 'proto_statue') {
+      if (prop.hurtFlashTicks > 0 && this.sprites.hasSprite('sprProtoStatueHurt')) {
+        sprName = 'sprProtoStatueHurt';
+      } else if ((prop.radsStored ?? 0) > 0 && this.sprites.hasSprite('sprProtoStatueCharge')) {
+        sprName = 'sprProtoStatueCharge';
+      }
+    }
     if (!this.sprites.hasSprite(sprName) && sprName === 'sprPalacePillar' && this.sprites.hasSprite('sprPillar')) {
       sprName = 'sprPillar';
     }
     const sprDef = this.sprites.getSprite(sprName);
+    const isSteam = this.bundle.sourceMode === 'steam';
+
+    // Honor prop.flipX (and default East 7-3 Throne Generators to face inward toward the Throne)
+    const flipX =
+      prop.flipX !== undefined
+        ? prop.flipX
+        : prop.kind === 'throne_generator' && map !== undefined
+          ? prop.x > (map.width * (map.tileSize || TILE_SIZE)) * 0.5
+          : false;
+
     // NT sprBigGenerator is 96x96 with origin (32, 32) at top-left of its 32x32 base (not center 48, 48).
+    // When flipped horizontally, base spans [-32, 0] instead of [0, +32], so mirror X offset to +16!
     const genAlignOffset =
       sprDef &&
       sprName.startsWith('sprBigGenerator') &&
@@ -1687,13 +2354,56 @@ export class GameRenderer {
       sprDef.originY === 32
         ? -16
         : 0;
-    const whiteFlash = prop.hurtFlashTicks >= 2;
+    const genAlignX = flipX ? -genAlignOffset : genAlignOffset;
+    const genAlignY = genAlignOffset;
+
+    // Chest & canister frame cadence fix (P0):
+    // Steam 7-frame chests use f0=idle, f1=100% PURE WHITE hurt flash, f2..f6=periodic diagonal glint.
+    // Hold idle on f0, play brief glint f2..f6 once every ~5s, reserve f1 STRICTLY for hurtFlashTicks > 0!
+    const isGlintChest =
+      !prop.opened &&
+      sprDef !== undefined &&
+      sprDef.frames.length >= 7 &&
+      sprName !== 'sprProtoChest' &&
+      (prop.kind === 'weapon_chest' ||
+        prop.kind === 'big_weapon_chest' ||
+        prop.kind === 'ammo_chest' ||
+        prop.kind === 'rad_canister' ||
+        prop.kind === 'idpd_canister' ||
+        sprName.includes('Chest'));
+
+    let propFrame = 0;
+    let useSyntheticFlash = prop.hurtFlashTicks >= 2;
+    if (isGlintChest) {
+      if (prop.hurtFlashTicks > 0) {
+        propFrame = 1; // Authentic pure-white flash frame
+        useSyntheticFlash = !isSteam;
+      } else {
+        const glintCycle = (tick + prop.id * 41) % 156; // 5.2s period at 30 Hz
+        if (glintCycle < 10) {
+          const maxGlintFrames = Math.max(1, sprDef.frames.length - 2);
+          propFrame = 2 + Math.min(maxGlintFrames - 1, Math.floor(glintCycle / 2));
+        } else {
+          propFrame = 0;
+        }
+        useSyntheticFlash = false;
+      }
+    } else if (sprDef && sprDef.frames.length > 1) {
+      if (sprName.endsWith('Hurt')) {
+        propFrame = prop.hurtFlashTicks >= 3 ? 0 : 1;
+        useSyntheticFlash = !isSteam;
+      } else {
+        propFrame = Math.floor(tick * 0.15);
+      }
+    }
+
     const joltX = prop.hurtFlashTicks > 0 ? ((prop.hurtFlashTicks & 1) === 0 ? 1 : -1) : 0;
-    const scaleX = whiteFlash ? 1.12 : prop.hurtFlashTicks > 0 ? 0.95 : 1;
-    const scaleY = whiteFlash ? 0.89 : prop.hurtFlashTicks > 0 ? 1.05 : 1;
-    const drew = this.sprites.draw(ctx, sprName, prop.x + joltX + genAlignOffset, prop.y + genAlignOffset, {
-      frame: Math.floor(tick * 0.15),
-      flashWhite: whiteFlash,
+    const scaleX = isSteam ? 1 : prop.hurtFlashTicks >= 2 ? 1.12 : prop.hurtFlashTicks > 0 ? 0.95 : 1;
+    const scaleY = isSteam ? 1 : prop.hurtFlashTicks >= 2 ? 0.89 : prop.hurtFlashTicks > 0 ? 1.05 : 1;
+    const drew = this.sprites.draw(ctx, sprName, prop.x + joltX + genAlignX, prop.y + genAlignY, {
+      frame: propFrame,
+      flipX,
+      flashWhite: useSyntheticFlash,
       scaleX,
       scaleY,
       pixelSnap,
@@ -1703,31 +2413,47 @@ export class GameRenderer {
       const x = Math.round(prop.x);
       const y = Math.round(prop.y);
       const r = Math.max(5, Math.round(prop.radius));
-      if (prop.kind === 'snare_trap') {
-        ctx.strokeStyle = '#4de85a';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.stroke();
-        return;
-      }
       ctx.fillStyle = '#141018';
       ctx.fillRect(x - r, y - r, r * 2, r * 2);
       ctx.fillStyle =
         prop.hurtFlashTicks > 0
           ? '#ffffff'
-          : prop.kind === 'rad_canister'
-            ? '#52e864'
-            : prop.kind === 'weapon_chest' || prop.kind === 'big_weapon_chest'
-              ? '#c43b3b'
-              : prop.kind === 'ammo_chest'
-                ? '#d9a432'
-                : prop.kind === 'throne_generator'
-                  ? '#47d970'
-                  : prop.kind === 'toxic_barrel'
-                    ? '#4ab347'
-                    : '#7d6e65';
+          : prop.cursed
+            ? '#a338e8'
+            : prop.kind === 'rad_canister'
+              ? '#52e864'
+              : prop.kind === 'weapon_chest' || prop.kind === 'big_weapon_chest'
+                ? '#c43b3b'
+                : prop.kind === 'ammo_chest'
+                  ? '#d9a432'
+                  : prop.kind === 'throne_generator'
+                    ? '#47d970'
+                    : prop.kind === 'toxic_barrel'
+                      ? '#4ab347'
+                      : '#7d6e65';
       ctx.fillRect(x - r + 1, y - r + 1, r * 2 - 2, r * 2 - 2);
+    }
+
+    // Subtle purple cursed aura sparkles around unopened cursed chests
+    if (prop.cursed && !prop.opened) {
+      ctx.save();
+      for (let s = 0; s < 3; s++) {
+        const ang = this.renderTimeSec * 2.8 + prop.id + s * 2.09;
+        const sx = Math.round(prop.x + Math.cos(ang) * 9);
+        const sy = Math.round(prop.y - 2 + Math.sin(ang * 1.3) * 6);
+        ctx.fillStyle = s === 0 ? '#f0a8ff' : '#b842ff';
+        ctx.fillRect(sx, sy, 2, 2);
+      }
+      ctx.restore();
+    }
+
+    // Proto Statue active charge ring when damaged or storing rads
+    if (prop.kind === 'proto_statue' && (prop.hp < prop.maxHp || (prop.radsStored ?? 0) > 0) && prop.hp < 99999) {
+      ctx.save();
+      const pulseR = Math.round(14 + Math.sin(this.renderTimeSec * 10) * 3);
+      ctx.fillStyle = 'rgba(85, 255, 130, 0.72)';
+      drawPixelRing(ctx, prop.x, prop.y, pulseR, 1, 4, tick & 7);
+      ctx.restore();
     }
 
     // Throne generator HP bar when damaged
@@ -1747,15 +2473,17 @@ export class GameRenderer {
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     corpse: CorpseEntity,
     pixelSnap: boolean,
+    alpha: number = 1,
   ): void {
-    const drew = this.sprites.draw(ctx, corpse.sprite, corpse.x, corpse.y, {
+    const cPos = lerpPosSafe(corpse.prevX ?? corpse.x, corpse.prevY ?? corpse.y, corpse.x, corpse.y, alpha, 56);
+    const drew = this.sprites.draw(ctx, corpse.sprite, cPos.x, cPos.y, {
       frame: corpse.frame,
       flipX: corpse.facing === -1,
       pixelSnap,
     });
     if (!drew) {
-      const x = Math.round(corpse.x);
-      const y = Math.round(corpse.y);
+      const x = Math.round(cPos.x);
+      const y = Math.round(cPos.y);
       ctx.fillStyle = '#241418';
       ctx.fillRect(x - 6, y - 3, 12, 6);
       ctx.fillStyle = '#8f292e';
@@ -1843,16 +2571,51 @@ export class GameRenderer {
           : mutantDef.sprites.idle;
     }
 
-    // Active Eyes Telekinesis ripple ring (drawn beneath player)
-    if (player.telekinesisActive && player.alive) {
-      ctx.save();
-      const pulseR = 16 + ((state.tick * 2) % 24);
-      ctx.strokeStyle = 'rgba(105, 195, 255, 0.55)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(Math.round(px), Math.round(py), pulseR, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
+    // Active Eyes Telekinesis full-radius inward psychic waves + Monster Style passive repel ring
+    if (player.alive && player.mutant === 'eyes') {
+      if (player.telekinesisActive) {
+        ctx.save();
+        const hasTB = player.mutations.includes('throne_butt');
+        const tkRadius = hasTB ? 200 : 155;
+        // Faint dashed perimeter marking true pull/push reach
+        ctx.fillStyle = 'rgba(95, 185, 255, 0.24)';
+        drawPixelRing(ctx, px, py, tkRadius, 1, 8, Math.floor(this.renderTimeSec * 12) & 7);
+        // 3 concentric inward-pulling pixel-stepped waves spanning the full telekinesis radius
+        for (let wIdx = 0; wIdx < 3; wIdx++) {
+          const phase = wrapMod(this.renderTimeSec * 1.45 + wIdx / 3, 1);
+          const waveR = Math.max(10, Math.round(tkRadius * (1 - phase)));
+          ctx.fillStyle = wIdx === 0 ? 'rgba(155, 225, 255, 0.44)' : 'rgba(95, 185, 255, 0.34)';
+          ctx.globalAlpha = Math.sin(phase * Math.PI) * 0.85;
+          drawPixelRing(ctx, px, py, waveR, 1, 5, (state.tick + wIdx * 2) & 7);
+        }
+        // Inward-streaming psychic distortion flecks
+        for (let f = 0; f < 10; f++) {
+          const prog = wrapMod(this.renderTimeSec * (1.2 + (f % 3) * 0.3) + f * 0.19, 1);
+          const dist = tkRadius * (1 - prog);
+          const ang = f * 0.628 + prog * 1.1;
+          ctx.globalAlpha = Math.sin(prog * Math.PI) * 0.7;
+          ctx.fillStyle = f % 2 === 0 ? '#a8e4ff' : '#8598ff';
+          ctx.fillRect(Math.round(px + Math.cos(ang) * dist), Math.round(py + Math.sin(ang) * dist), 2, 1);
+        }
+        // Projectile Style (Ultra A) hold aura
+        if (player.ultra === 'eyes_a') {
+          ctx.globalAlpha = 0.38;
+          ctx.fillStyle = '#c496ff';
+          drawPixelRing(ctx, px, py, 36, 1, 4, state.tick & 7);
+        }
+        ctx.restore();
+      } else if (player.ultra === 'eyes_b') {
+        // Monster Style (Ultra B): passive outward psychic enemy-repel rings
+        ctx.save();
+        for (let rIdx = 0; rIdx < 2; rIdx++) {
+          const phase = wrapMod(this.renderTimeSec * 0.95 + rIdx * 0.5, 1);
+          const repelR = Math.round(14 + phase * 62);
+          ctx.globalAlpha = (1 - phase) * 0.36;
+          ctx.fillStyle = rIdx === 0 ? '#b894ff' : '#7ac8ff';
+          drawPixelRing(ctx, px, py, repelR, 1, 6, state.tick & 7);
+        }
+        ctx.restore();
+      }
     }
 
     // Strong Spirit halo aura behind player
@@ -1864,42 +2627,46 @@ export class GameRenderer {
       });
       if (!drewHalo) {
         ctx.save();
-        ctx.strokeStyle = 'rgba(120, 235, 255, 0.7)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(Math.round(px), Math.round(py - 8), 5, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.fillStyle = 'rgba(120, 235, 255, 0.75)';
+        drawPixelRing(ctx, px, py - 8, 5, 1);
         ctx.restore();
       }
     }
 
     // Aiming direction: behind player when aiming UP (sin(aimAngle) < 0), in front when aiming DOWN
     const aimingUp = Math.sin(player.aimAngle) < 0;
-    const activeWeaponSlot = player.weapons[player.activeSlot];
-    const offhandSlot = player.mutant === 'steroids' ? player.weapons[player.activeSlot === 0 ? 1 : 0] : null;
+    const activeSlotIdx = player.activeSlot;
+    const offhandSlotIdx: 0 | 1 = activeSlotIdx === 0 ? 1 : 0;
+    const activeWeaponSlot = player.weapons[activeSlotIdx];
+    const offhandSlot = player.mutant === 'steroids' ? player.weapons[offhandSlotIdx] : null;
 
-    const drawHeldWeapon = (slot: PlayerState['weapons'][0] | null, isOffhand: boolean): void => {
+    const drawHeldWeapon = (
+      slot: PlayerState['weapons'][0] | null,
+      slotIdx: 0 | 1,
+      isOffhand: boolean,
+    ): void => {
       if (!slot || !player.alive) return;
       const wepDef = this.data.getWeapon(slot.weaponId);
       const isMelee = wepDef?.ammoType === 'melee' || wepDef?.projectileKind === 'melee_slash';
       const wepSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
       const kick = slot.kickOffset || 0;
-      const handSide = isOffhand ? -player.facing : player.facing;
       const flipY = Math.cos(player.aimAngle) < 0;
 
-      // Authentic Nuclear Throne weapon holding:
-      // - Melee weapons rest cocked at ±1.5 rad and snap across to the opposite side on each swing!
+      // Authentic Nuclear Throne weapon holding with separated Steroids dual-wield anchors:
+      // - Melee weapons rest cocked at ±1.48 rad and snap across independently per hand!
       // - Ranged weapons kick cleanly along recoil vector with upward barrel tilt.
+      const baseAnchor = this.computeHeldWeaponAnchor(player, px, py, isOffhand, isMelee ? 0 : kick);
       let drawAngle = player.aimAngle;
-      let anchorX = px + handSide * 3 - Math.cos(player.aimAngle) * kick;
-      let anchorY = py + 1 - Math.sin(player.aimAngle) * kick;
+      let anchorX = baseAnchor.x;
+      let anchorY = baseAnchor.y;
       let wepFlipY = flipY;
       if (isMelee) {
-        const side = isOffhand ? -this.meleeSwingSide : this.meleeSwingSide;
-        const swingSweep = (1 - this.meleeSwingAnim * 1.15) * 1.48 * side;
+        const side: 1 | -1 = slot.meleeSwingSide ?? this.meleeSwingSides[slotIdx];
+        const swingAnim = this.meleeSwingAnims[slotIdx];
+        const swingSweep = (1 - swingAnim * 1.15) * 1.48 * side;
         drawAngle = player.aimAngle + swingSweep;
-        anchorX = px + handSide * 2 + Math.cos(player.aimAngle) * (2 + this.meleeSwingAnim * 3);
-        anchorY = py + 1 + Math.sin(player.aimAngle) * (2 + this.meleeSwingAnim * 3);
+        anchorX = baseAnchor.x + Math.cos(player.aimAngle) * (2 + swingAnim * 3);
+        anchorY = baseAnchor.y + Math.sin(player.aimAngle) * (2 + swingAnim * 3);
         wepFlipY = side < 0;
       } else {
         // Snappy upward recoil flip on firing (classic Vlambeer gun feel!)
@@ -1946,8 +2713,8 @@ export class GameRenderer {
     };
 
     if (aimingUp) {
-      drawHeldWeapon(offhandSlot, true);
-      drawHeldWeapon(activeWeaponSlot, false);
+      drawHeldWeapon(offhandSlot, offhandSlotIdx, true);
+      drawHeldWeapon(activeWeaponSlot, activeSlotIdx, false);
     }
 
     // Floating Crown behind player
@@ -1961,18 +2728,28 @@ export class GameRenderer {
       });
     }
 
-    // Player body (with crisp 2-tick pure-white hurt flash, subtle impact squash, iframe blink & roll spin)
+    // Player body: on Steam pack, let native *Hurt sprites drive hurt presentation at crisp 1.0x integer scale!
+    const isSteam = this.bundle.sourceMode === 'steam';
+    const hasNativeHurtSprite = charSprite.endsWith('Hurt');
     const blinkAlpha =
       player.iframes > 0 && player.hurtFlashTicks === 0 && Math.floor(player.iframes / 2) % 2 === 0
         ? 0.55
         : 1;
     const rollRotation = player.rolling ? (state.tick * 0.65 * player.facing) : 0;
-    const playerWhiteFlash = player.hurtFlashTicks >= 3;
-    const playerScaleX = playerWhiteFlash ? 1.14 : player.hurtFlashTicks > 0 ? 0.94 : 1;
-    const playerScaleY = playerWhiteFlash ? 0.88 : player.hurtFlashTicks > 0 ? 1.06 : 1;
+    const playerWhiteFlash = player.hurtFlashTicks >= 3 && !(isSteam && hasNativeHurtSprite);
+    const playerScaleX = isSteam ? 1 : playerWhiteFlash ? 1.14 : player.hurtFlashTicks > 0 ? 0.94 : 1;
+    const playerScaleY = isSteam ? 1 : playerWhiteFlash ? 0.88 : player.hurtFlashTicks > 0 ? 1.06 : 1;
+    const playerFrame =
+      isSteam && hasNativeHurtSprite && player.hurtFlashTicks > 0
+        ? player.hurtFlashTicks >= 4
+          ? 0
+          : player.hurtFlashTicks >= 2
+            ? 1
+            : 2
+        : Math.floor(player.animFrame);
 
     const drewPlayer = this.sprites.draw(ctx, charSprite, px, py, {
-      frame: Math.floor(player.animFrame),
+      frame: playerFrame,
       flipX: player.facing === -1,
       scaleX: playerScaleX,
       scaleY: playerScaleY,
@@ -1992,11 +2769,11 @@ export class GameRenderer {
     }
 
     if (!aimingUp) {
-      drawHeldWeapon(offhandSlot, true);
-      drawHeldWeapon(activeWeaponSlot, false);
+      drawHeldWeapon(offhandSlot, offhandSlotIdx, true);
+      drawHeldWeapon(activeWeaponSlot, activeSlotIdx, false);
     }
 
-    // Crystal Shield dome overlay
+    // Crystal Shield dome overlay & sprShieldDisappear shatter animation on release
     if (player.shielding && player.alive) {
       const shieldSpr = player.skin === 'b' && this.sprites.hasSprite('sprShieldB') ? 'sprShieldB' : 'sprShield';
       const drewShield = this.sprites.draw(ctx, shieldSpr, px, py, {
@@ -2006,13 +2783,29 @@ export class GameRenderer {
       });
       if (!drewShield) {
         ctx.save();
-        ctx.fillStyle = 'rgba(190, 90, 255, 0.35)';
-        ctx.strokeStyle = '#f0b8ff';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(Math.round(px), Math.round(py), 12, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        ctx.fillStyle = 'rgba(190, 90, 255, 0.34)';
+        drawPixelDisc(ctx, px, py, 12);
+        ctx.fillStyle = '#f0b8ff';
+        drawPixelRing(ctx, px, py, 12, 1);
+        ctx.restore();
+      }
+    } else if (this.shieldDisappearTicks > 0 && player.alive && player.mutant === 'crystal') {
+      const disSpr =
+        player.skin === 'b' && this.sprites.hasSprite('sprShieldBDisappear')
+          ? 'sprShieldBDisappear'
+          : 'sprShieldDisappear';
+      const disFrac = 1 - Math.max(0, Math.min(1, this.shieldDisappearTicks / 8));
+      const disFrame = Math.min(5, Math.floor(disFrac * 6));
+      const drewDis = this.sprites.draw(ctx, disSpr, px, py, {
+        frame: disFrame,
+        alpha: Math.max(0.25, 1 - disFrac * 0.65),
+        pixelSnap,
+      });
+      if (!drewDis) {
+        ctx.save();
+        ctx.globalAlpha = 1 - disFrac;
+        ctx.fillStyle = '#f0b8ff';
+        drawPixelRing(ctx, px, py, Math.max(4, Math.round(13 * (1 - disFrac * 0.5))), 1, 4, state.tick & 7);
         ctx.restore();
       }
     }
@@ -2058,13 +2851,29 @@ export class GameRenderer {
     tick: number,
     pixelSnap: boolean,
     map: WorldMap,
+    alpha: number = 1,
   ): void {
     const def = this.data.getEnemy(enemy.defId);
     const moving = Math.hypot(enemy.vx, enemy.vy) > 0.25;
     const prefix = resolveEnemySpritePrefix(enemy.defId, enemy.bossId);
+    const isSteam = this.bundle.sourceMode === 'steam';
+    const isLilHunterSpiral = enemy.bossId === 'lil_hunter' && enemy.aiState === 'death_spiral';
 
     let sprName: string;
-    if (def) {
+    if (isLilHunterSpiral) {
+      sprName = this.sprites.hasSprite('sprLilHunterHurt')
+        ? 'sprLilHunterHurt'
+        : this.sprites.hasSprite('sprLilHunterDead')
+          ? 'sprLilHunterDead'
+          : 'sprLilHunter';
+    } else if (enemy.aiState === 'sleep' && enemy.bossId === 'nuclear_throne' && this.sprites.hasSprite('sprNothingOff')) {
+      sprName = 'sprNothingOff';
+    } else if (enemy.aiState === 'sleep' && enemy.bossId === 'big_dog' && this.sprites.hasSprite('sprScrapBossSleep')) {
+      sprName =
+        enemy.hurtFlashTicks > 0 && this.sprites.hasSprite('sprScrapBossSleepHurt')
+          ? 'sprScrapBossSleepHurt'
+          : 'sprScrapBossSleep';
+    } else if (def) {
       if (enemy.hurtFlashTicks > 0) sprName = def.sprites.hurt;
       else if (enemy.aiState === 'fire' && def.sprites.fire) sprName = def.sprites.fire;
       else if (enemy.aiState === 'tell' && def.sprites.tell) sprName = def.sprites.tell;
@@ -2088,32 +2897,115 @@ export class GameRenderer {
     const drawY = ey - elevOffset;
     const fx = this.enemyFx.get(enemy.id);
 
-    // Crisp 1-2 tick pure-white hit flash + Vlambeer impact squash/stretch jolt!
-    const pureWhiteFlash = enemy.hurtFlashTicks >= 3;
+    // On Steam pack, let native *Hurt sprites drive hurt presentation at crisp 1.0x integer scale!
+    const hasNativeHurt = sprName.endsWith('Hurt') || sprName.endsWith('SleepHurt');
+    const pureWhiteFlash = enemy.hurtFlashTicks >= 3 && !(isSteam && hasNativeHurt);
     const joltAmt = fx && fx.joltTicks > 0 ? fx.joltTicks / 5 : 0;
-    const impactScaleX = pureWhiteFlash
-      ? 1.16
-      : enemy.hurtFlashTicks > 0
-        ? 0.93
-        : 1 + joltAmt * 0.08;
-    const impactScaleY = pureWhiteFlash
-      ? 0.85
-      : enemy.hurtFlashTicks > 0
-        ? 1.07
-        : 1 - joltAmt * 0.07;
+    const impactScaleX = isSteam
+      ? 1
+      : pureWhiteFlash
+        ? 1.16
+        : enemy.hurtFlashTicks > 0
+          ? 0.93
+          : 1 + joltAmt * 0.08;
+    const impactScaleY = isSteam
+      ? 1
+      : pureWhiteFlash
+        ? 0.85
+        : enemy.hurtFlashTicks > 0
+          ? 1.07
+          : 1 - joltAmt * 0.07;
     const tremorX =
-      pureWhiteFlash
+      enemy.hurtFlashTicks >= 3
         ? ((tick + enemy.id) % 2 === 0 ? 1 : -1)
         : TELEGRAPH_AI_STATES.has(enemy.aiState) && enemy.aiTimer <= 8
           ? ((tick + enemy.id) % 2 === 0 ? 0.7 : -0.7)
           : 0;
 
+    // Composite Steam's sprNothingBack + animated sprNothingLeg + sprNothingPipes behind Nuclear Throne!
+    if (enemy.bossId === 'nuclear_throne') {
+      if (this.sprites.hasSprite('sprNothingBack')) {
+        this.sprites.draw(ctx, 'sprNothingBack', ex + tremorX, drawY, {
+          frame: 0,
+          flashWhite: pureWhiteFlash,
+          pixelSnap,
+        });
+      }
+      if (this.sprites.hasSprite('sprNothingLeg') && enemy.aiState !== 'sleep') {
+        const legSpeed = moving ? 0.35 : 0.12;
+        const legFrameR = Math.floor(tick * legSpeed);
+        const legFrameL = legFrameR + 5;
+        this.sprites.draw(ctx, 'sprNothingLeg', ex - 60 + tremorX, drawY + 6, {
+          frame: legFrameL,
+          flipX: true,
+          flashWhite: pureWhiteFlash,
+          pixelSnap,
+        });
+        this.sprites.draw(ctx, 'sprNothingLeg', ex + 60 + tremorX, drawY + 6, {
+          frame: legFrameR,
+          flipX: false,
+          flashWhite: pureWhiteFlash,
+          pixelSnap,
+        });
+      }
+      if (this.sprites.hasSprite('sprNothingPipes') && enemy.aiState !== 'sleep') {
+        this.sprites.draw(ctx, 'sprNothingPipes', ex + tremorX, drawY, {
+          frame: 0,
+          flashWhite: pureWhiteFlash,
+          pixelSnap,
+        });
+      }
+    }
+
+    // Lil' Hunter malfunctioning jetpack fiery exhaust plume behind spinning body during death_spiral!
+    let bodyRotation = 0;
+    if (isLilHunterSpiral) {
+      bodyRotation = (tick + alpha) * 0.78;
+      const spd = Math.hypot(enemy.vx, enemy.vy);
+      const backX = spd > 0.1 ? -enemy.vx / spd : Math.cos(bodyRotation + Math.PI);
+      const backY = spd > 0.1 ? -enemy.vy / spd : Math.sin(bodyRotation + Math.PI);
+      const jetX = ex + backX * 8;
+      const jetY = drawY + backY * 8;
+      if (this.sprites.hasSprite('sprFireLilHunter')) {
+        this.sprites.draw(ctx, 'sprFireLilHunter', jetX, jetY, {
+          frame: Math.floor(tick * 0.6),
+          rotation: Math.atan2(backY, backX),
+          pixelSnap,
+        });
+      }
+      ctx.save();
+      // Multi-layered fiery jetpack plume & crackling ember sparks
+      ctx.fillStyle = '#ff4d1a';
+      drawPixelDisc(ctx, jetX + backX * 4, jetY + backY * 4, 5);
+      ctx.fillStyle = '#ffae2b';
+      drawPixelDisc(ctx, jetX + backX * 2, jetY + backY * 2, 3);
+      ctx.fillStyle = '#fff5b8';
+      ctx.fillRect(Math.round(jetX) - 1, Math.round(jetY) - 1, 3, 3);
+      for (let s = 0; s < 4; s++) {
+        const ang = bodyRotation * 1.4 + s * 1.57;
+        const sd = 8 + ((tick + s * 3) % 6);
+        ctx.fillStyle = s % 2 === 0 ? '#ffe047' : '#ff6426';
+        ctx.fillRect(Math.round(ex + Math.cos(ang) * sd), Math.round(drawY + Math.sin(ang) * sd), 2, 2);
+      }
+      ctx.restore();
+    }
+
+    const enemyFrame =
+      isSteam && hasNativeHurt && enemy.hurtFlashTicks > 0
+        ? enemy.hurtFlashTicks >= 3
+          ? 0
+          : enemy.hurtFlashTicks >= 2
+            ? 1
+            : 2
+        : Math.floor(enemy.animFrame || tick * 0.2);
+
     const drew = this.sprites.draw(ctx, sprName, ex + tremorX, drawY, {
-      frame: Math.floor(enemy.animFrame || tick * 0.2),
-      flipX: enemy.facing === -1,
+      frame: enemyFrame,
+      flipX: !isLilHunterSpiral && enemy.facing === -1,
       scaleX: impactScaleX,
       scaleY: impactScaleY,
-      flashWhite: pureWhiteFlash,
+      rotation: bodyRotation,
+      flashWhite: pureWhiteFlash || (isLilHunterSpiral && (tick & 3) === 0),
       pixelSnap,
     });
 
@@ -2130,8 +3022,8 @@ export class GameRenderer {
       ctx.fillRect(x + 1, y - 3, 2, 2);
     }
 
-    // Enemy held weapon if defined
-    if (def?.sprites.gun && this.sprites.hasSprite(def.sprites.gun)) {
+    // Enemy held weapon if defined (hidden during Lil' Hunter out-of-control death spiral)
+    if (!isLilHunterSpiral && def?.sprites.gun && this.sprites.hasSprite(def.sprites.gun)) {
       this.sprites.draw(ctx, def.sprites.gun, ex + tremorX + enemy.facing * 4, drawY + 1, {
         rotation: enemy.aimAngle,
         flipY: Math.cos(enemy.aimAngle) < 0,
@@ -2165,14 +3057,18 @@ export class GameRenderer {
       ctx.restore();
     }
 
-    // Plant Snare vine overlay when rooted
+    // Plant Snare crisp pixel-stepped vine wrap when rooted
     if (enemy.snaredTicks > 0) {
       ctx.save();
-      ctx.strokeStyle = '#52e864';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(Math.round(ex), Math.round(ey + 2), Math.max(7, enemy.radius + 1), 0, Math.PI * 2);
-      ctx.stroke();
+      const wrapR = Math.max(7, Math.round(enemy.radius + 1));
+      ctx.fillStyle = '#143818';
+      drawPixelRing(ctx, ex, ey + 2, wrapR + 1, 1);
+      ctx.fillStyle = '#52e864';
+      drawPixelRing(ctx, ex, ey + 2, wrapR, 1);
+      // Small thorny pixel knots at left & right of rooted feet
+      ctx.fillStyle = '#9dff9e';
+      ctx.fillRect(Math.round(ex - wrapR), Math.round(ey + 1), 2, 2);
+      ctx.fillRect(Math.round(ex + wrapR - 1), Math.round(ey + 2), 2, 2);
       ctx.restore();
     }
 
@@ -2217,9 +3113,10 @@ export class GameRenderer {
         // Sightline muzzle & wall impact glint dots
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(Math.round(endX) - 1, Math.round(endY) - 1, 2, 2);
-        const glint = this.getGlowStamp('rgba(255, 42, 76, 0.72)', 8);
+        const glint = this.getGlowStamp('rgba(255, 42, 76, 0.9)', 8);
         if (glint) {
           ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.15;
           ctx.drawImage(glint, Math.floor(ex - 8), Math.floor(drawY - 8), 16, 16);
         }
         ctx.restore();
@@ -2248,13 +3145,15 @@ export class GameRenderer {
         const gy = Math.round(drawY + Math.sin(enemy.aimAngle) * muzzleDist);
         const isVenom = enemy.defId === 'scorpion' || enemy.defId === 'gold_scorpion';
         const glintCol = isVenom ? '#8cff52' : '#ffe047';
-        const glowCol = isVenom ? 'rgba(105, 255, 80, 0.65)' : 'rgba(255, 195, 65, 0.65)';
+        const glowCol = isVenom ? 'rgba(105, 255, 80, 0.9)' : 'rgba(255, 195, 65, 0.9)';
         const armLen = Math.round(3 + pulse * 3);
         ctx.save();
         const stamp = this.getGlowStamp(glowCol, 8);
         if (stamp) {
           ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.15;
           ctx.drawImage(stamp, gx - 8, gy - 8, 16, 16);
+          ctx.globalAlpha = 1;
         }
         ctx.globalCompositeOperation = 'source-over';
         ctx.fillStyle = '#0c0812';
@@ -2272,7 +3171,8 @@ export class GameRenderer {
 
   /**
    * Renders Steam pack's ornate `sprCarpet` (42x1000, ox=21, oy=-80) down the 7-3 Throne Hall
-   * when available (built-in art paints Palace carpet directly onto CARPET tiles in FloorBuffer).
+   * BEFORE walls, strictly clipped in Y to [minTy * ts, (maxTy + 1) * ts] so ZERO carpet bleeds
+   * over the south Palace wall into the black void!
    */
   private renderThroneHallCarpet(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -2285,6 +3185,7 @@ export class GameRenderer {
     let minTx = map.width;
     let maxTx = -1;
     let minTy = map.height;
+    let maxTy = -1;
     for (let ty = 0; ty < map.height; ty++) {
       const row = ty * map.width;
       for (let tx = 0; tx < map.width; tx++) {
@@ -2292,20 +3193,32 @@ export class GameRenderer {
           if (tx < minTx) minTx = tx;
           if (tx > maxTx) maxTx = tx;
           if (ty < minTy) minTy = ty;
+          if (ty > maxTy) maxTy = ty;
         }
       }
     }
-    if (maxTx < minTx) return;
+    if (maxTx < minTx || maxTy < minTy) return;
     const centerX = ((minTx + maxTx + 1) * 0.5) * ts;
-    // sprCarpet has oy = -80 in NT data.win, so drawing at minTy * ts - 80 aligns its top edge onto minTy
+    const clipTop = minTy * ts;
+    const clipBottom = (maxTy + 1) * ts;
+    const clipH = clipBottom - clipTop;
+    if (clipH <= 0) return;
+
+    // sprCarpet has oy = -80 in NT data.win, so drawing at minTy * ts + oy aligns its top edge onto minTy
     const sprDef = this.sprites.getSprite('sprCarpet');
-    const topY = minTy * ts + (sprDef && sprDef.originY < 0 ? sprDef.originY : 0);
+    const topY = clipTop + (sprDef && sprDef.originY < 0 ? sprDef.originY : 0);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(Math.floor(centerX - 32), clipTop, 64, clipH);
+    ctx.clip();
     this.sprites.draw(ctx, 'sprCarpet', centerX, topY, { frame: 0, pixelSnap });
+    ctx.restore();
   }
 
   /**
    * Renders the pulsing emerald warning column down the 7-3 Palace carpet during
-   * the Krunked Throne's Mega-Beam telegraph ('tell') and blazing beam wash ('fire').
+   * the Krunked Throne's Mega-Beam telegraph ('tell'). The active firing beam itself
+   * is rendered as ONE cohesive multi-layer column in Layer 5 (`renderThroneMegaBeamColumn`).
    */
   private renderThroneBeamTelegraph(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -2317,8 +3230,9 @@ export class GameRenderer {
       if (boss.bossId !== 'nuclear_throne' || boss.hp <= 0) continue;
       if (boss.aiState !== 'tell' && boss.aiState !== 'fire') continue;
 
-      const bx = lerp(boss.prevX, boss.x, alpha);
-      const by = lerp(boss.prevY, boss.y, alpha);
+      const bPos = lerpPosSafe(boss.prevX, boss.prevY, boss.x, boss.y, alpha, 56);
+      const bx = bPos.x;
+      const by = bPos.y;
       const halfW = 22;
       const startY = by + 20;
       const maxH = Math.min(340, Math.max(120, state.map.height * (state.map.tileSize || TILE_SIZE) - startY - 16));
@@ -2327,63 +3241,251 @@ export class GameRenderer {
       ctx.save();
       if (boss.aiState === 'tell') {
         // Pulsing emerald danger corridor across the 7-3 carpet
-        ctx.fillStyle = `rgba(56, 255, 118, ${(0.12 + 0.14 * pulse).toFixed(3)})`;
+        ctx.fillStyle = `rgba(56, 255, 118, ${(0.10 + 0.12 * pulse).toFixed(3)})`;
         ctx.fillRect(Math.round(bx - halfW), Math.round(startY), halfW * 2, Math.round(maxH));
 
         // Inner center lane warning band
-        ctx.fillStyle = `rgba(140, 255, 175, ${(0.10 + 0.12 * pulse).toFixed(3)})`;
+        ctx.fillStyle = `rgba(140, 255, 175, ${(0.08 + 0.10 * pulse).toFixed(3)})`;
         ctx.fillRect(Math.round(bx - 10), Math.round(startY), 20, Math.round(maxH));
 
-        // Twin glowing boundary rails
-        ctx.fillStyle = `rgba(92, 255, 145, ${(0.55 + 0.38 * pulse).toFixed(3)})`;
+        // Twin glowing boundary rails with crisp dark contrast edge
+        ctx.fillStyle = 'rgba(8, 28, 16, 0.72)';
+        ctx.fillRect(Math.round(bx - halfW - 1), Math.round(startY), 1, Math.round(maxH));
+        ctx.fillRect(Math.round(bx + halfW), Math.round(startY), 1, Math.round(maxH));
+        ctx.fillStyle = `rgba(92, 255, 145, ${(0.55 + 0.35 * pulse).toFixed(3)})`;
         ctx.fillRect(Math.round(bx - halfW), Math.round(startY), 2, Math.round(maxH));
         ctx.fillRect(Math.round(bx + halfW - 2), Math.round(startY), 2, Math.round(maxH));
 
-        // Animated scrolling emerald danger chevrons marching down the carpet
-        const scrollOffset = wrapMod(this.renderTimeSec * 120, 24);
-        ctx.strokeStyle = `rgba(175, 255, 195, ${(0.45 + 0.35 * pulse).toFixed(3)})`;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let dy = scrollOffset; dy < maxH - 10; dy += 24) {
-          const cy = startY + dy;
-          ctx.moveTo(Math.round(bx - halfW + 5), Math.round(cy));
-          ctx.lineTo(Math.round(bx), Math.round(cy + 8));
-          ctx.lineTo(Math.round(bx + halfW - 5), Math.round(cy));
+        // Crisp pixel-stepped scrolling emerald danger chevrons marching down the carpet
+        const scrollOffset = Math.floor(wrapMod(this.renderTimeSec * 120, 24));
+        for (let dy = scrollOffset; dy < maxH - 12; dy += 24) {
+          const cy = Math.round(startY + dy);
+          ctx.fillStyle = 'rgba(8, 32, 16, 0.65)';
+          drawPixelLine(ctx, bx - halfW + 5, cy + 1, bx, cy + 9, 2);
+          drawPixelLine(ctx, bx, cy + 9, bx + halfW - 5, cy + 1, 2);
+          ctx.fillStyle = `rgba(175, 255, 195, ${(0.55 + 0.35 * pulse).toFixed(3)})`;
+          drawPixelLine(ctx, bx - halfW + 5, cy, bx, cy + 8, 1);
+          drawPixelLine(ctx, bx, cy + 8, bx + halfW - 5, cy, 1);
         }
-        ctx.stroke();
 
-        // Charging emerald emitter core stamp
-        const chargeR = 26 + 10 * pulse;
-        const chargeStamp = this.getGlowStamp('rgba(85, 255, 130, 0.85)', chargeR);
+        // Clamped charging emerald emitter core + crisp pixel burst at Throne cannon
+        const chargeR = 16 + 6 * pulse;
+        const chargeStamp = this.getGlowStamp('rgba(85, 255, 130, 0.9)', chargeR);
         if (chargeStamp) {
           ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.16;
           ctx.drawImage(
             chargeStamp,
             Math.floor(bx - chargeR),
-            Math.floor(startY - chargeR * 0.5),
+            Math.floor(startY - chargeR),
             Math.ceil(chargeR * 2),
             Math.ceil(chargeR * 2),
           );
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = 1;
         }
+        ctx.fillStyle = '#38f572';
+        drawPixelDisc(ctx, bx, startY, Math.round(4 + pulse * 3));
+        ctx.fillStyle = '#ffffff';
+        drawPixelDisc(ctx, bx, startY, Math.round(2 + pulse * 1.5));
       } else {
-        // Firing phase: blazing emerald mega-beam carpet wash
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.fillStyle = `rgba(72, 255, 125, ${(0.24 + 0.1 * pulse).toFixed(3)})`;
-        ctx.fillRect(Math.round(bx - halfW), Math.round(startY), halfW * 2, Math.round(maxH));
-        ctx.fillStyle = `rgba(215, 255, 225, ${(0.34 + 0.12 * pulse).toFixed(3)})`;
-        ctx.fillRect(Math.round(bx - 10), Math.round(startY), 20, Math.round(maxH));
-
-        const fireStamp = this.getGlowStamp('rgba(110, 255, 145, 0.9)', 36);
-        if (fireStamp) {
-          ctx.drawImage(fireStamp, Math.floor(bx - 36), Math.floor(startY - 24), 72, 72);
-        }
+        // Firing phase: subtle carpet emerald under-wash beneath the cohesive Layer 5 beam column
+        ctx.fillStyle = `rgba(28, 180, 72, ${(0.16 + 0.06 * pulse).toFixed(3)})`;
+        ctx.fillRect(Math.round(bx - halfW - 3), Math.round(startY), (halfW + 3) * 2, Math.round(maxH));
       }
       ctx.restore();
     }
   }
 
+  /**
+   * Renders the Krunked Throne Mega-Beam as ONE cohesive continuous multi-layer energy column
+   * from the Throne muzzle down through all active `sprNothingBeam` projectiles:
+   * dark-emerald crackling sheath -> bright emerald -> pulsing white-hot core + animated energy rings
+   * + Throne emitter flare + carpet scorch decals + outward pixel sparks (ZERO striped lanes/rungs!).
+   */
+  private renderThroneMegaBeamColumn(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    pixelSnap: boolean,
+    alpha: number,
+  ): void {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let sumX = 0;
+    let count = 0;
+    let sampleAngle = Math.PI * 0.5;
+    let sampleX = 0;
+    let sampleY = 0;
+
+    for (let i = 0; i < state.projectiles.length; i++) {
+      const p = state.projectiles[i]!;
+      if (p.sprite !== 'sprNothingBeam') continue;
+      const pos = lerpPosSafe(p.prevX, p.prevY, p.x, p.y, alpha, 110);
+      if (pos.y < minY) minY = pos.y;
+      if (pos.y > maxY) maxY = pos.y;
+      sumX += pos.x;
+      sampleX = pos.x;
+      sampleY = pos.y;
+      sampleAngle = p.angle;
+      count += 1;
+    }
+
+    let throneBoss: EnemyEntity | null = null;
+    for (let i = 0; i < state.enemies.length; i++) {
+      const e = state.enemies[i]!;
+      if (e.bossId === 'nuclear_throne' && e.hp > 0) {
+        throneBoss = e;
+        break;
+      }
+    }
+
+    const throneFiring = throneBoss !== null && throneBoss.aiState === 'fire';
+    if (count === 0 && !throneFiring) return;
+
+    let beamX: number;
+    let topY: number;
+    let botY: number;
+    if (throneBoss) {
+      const bPos = lerpPosSafe(throneBoss.prevX, throneBoss.prevY, throneBoss.x, throneBoss.y, alpha, 56);
+      beamX = bPos.x;
+      topY = bPos.y + 22;
+      botY = count > 0 ? Math.max(topY + 40, maxY + 14) : topY + 160;
+    } else {
+      beamX = count > 0 ? sumX / count : sampleX;
+      topY = minY - 12;
+      botY = maxY + 12;
+    }
+
+    const ix = Math.round(beamX);
+    const iTop = Math.round(topY);
+    const iBot = Math.round(botY);
+    const beamH = Math.max(24, iBot - iTop);
+    const t = this.renderTimeSec;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 48);
+    const outerHalfW = Math.round(20 + pulse * 2);
+    const midHalfW = Math.round(14 + Math.sin(t * 36) * 1.5);
+    const innerHalfW = Math.round(8 + pulse * 1.5);
+    const coreHalfW = Math.round(4 + Math.sin(t * 62));
+
+    ctx.save();
+    // 1. Crisp 1px dark contrast sheath edge + dark-emerald outer plasma envelope
+    ctx.fillStyle = '#072413';
+    ctx.fillRect(ix - outerHalfW - 1, iTop, outerHalfW * 2 + 2, beamH);
+    ctx.fillStyle = '#0f5c2b';
+    ctx.fillRect(ix - outerHalfW, iTop, outerHalfW * 2, beamH);
+
+    // 2. Crackling jagged dark/bright emerald plasma flanks streaming down the edges
+    const edgeStep = 10;
+    const scrollFast = Math.floor(wrapMod(t * 260, edgeStep));
+    for (let dy = 0; dy < beamH; dy += edgeStep) {
+      const sy = iTop + ((dy + scrollFast) % beamH);
+      const zigL = ((Math.floor(dy / edgeStep) + state.tick) & 1) === 0 ? 3 : 1;
+      const zigR = ((Math.floor(dy / edgeStep) + state.tick + 1) & 1) === 0 ? 3 : 1;
+      ctx.fillStyle = '#18853e';
+      ctx.fillRect(ix - outerHalfW - zigL, sy, zigL + 2, 5);
+      ctx.fillRect(ix + outerHalfW - 2, sy, zigR + 2, 5);
+      ctx.fillStyle = '#6dff98';
+      ctx.fillRect(ix - outerHalfW - zigL + 1, sy + 1, 1, 3);
+      ctx.fillRect(ix + outerHalfW + zigR - 1, sy + 1, 1, 3);
+    }
+
+    // 3. Bright emerald main column
+    ctx.fillStyle = '#2de866';
+    ctx.fillRect(ix - midHalfW, iTop, midHalfW * 2, beamH);
+
+    // 4. Seamlessly blended authentic NT sprNothingBeam grain down the center axis (rot=0 when straight down!)
+    const beamRot = sampleAngle - Math.PI * 0.5;
+    if (this.sprites.hasSprite('sprNothingBeam')) {
+      const beamFrame = Math.floor(state.tick * 0.5);
+      const stampY = throneBoss ? iTop + Math.min(beamH - 12, 24) : Math.round(sampleY);
+      this.sprites.draw(ctx, 'sprNothingBeam', ix, stampY, {
+        frame: beamFrame,
+        rotation: beamRot,
+        alpha: 0.42,
+        pixelSnap,
+      });
+    }
+
+    // 5. Hot mint inner plasma + blazing white-hot central core
+    ctx.fillStyle = '#9dffb8';
+    ctx.fillRect(ix - innerHalfW, iTop, innerHalfW * 2, beamH);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ix - coreHalfW, iTop, coreHalfW * 2, beamH);
+
+    // 6. Animated downward-racing energy compression rings & streaming high-velocity streaks
+    const ringSpacing = 34;
+    const ringScroll = Math.floor(wrapMod(t * 280, ringSpacing));
+    for (let dy = ringScroll; dy < beamH - 6; dy += ringSpacing) {
+      const ry = iTop + dy;
+      ctx.fillStyle = '#b8ffcc';
+      ctx.fillRect(ix - outerHalfW + 2, ry, (outerHalfW - 2) * 2, 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(ix - midHalfW + 1, ry, (midHalfW - 1) * 2, 1);
+    }
+
+    // 7. Throne muzzle emitter flare at (ix, iTop) — dramatic crisp pixel crown + clamped bloom!
+    if (throneBoss) {
+      const flareR = Math.round(14 + pulse * 4);
+      ctx.fillStyle = '#146e33';
+      drawPixelDisc(ctx, ix, iTop, flareR);
+      ctx.fillStyle = '#47ff78';
+      drawPixelDisc(ctx, ix, iTop, Math.round(flareR * 0.75));
+      ctx.fillStyle = '#ffffff';
+      drawPixelDisc(ctx, ix, iTop, Math.round(flareR * 0.42));
+      // Horizontal muzzle crown spikes
+      ctx.fillStyle = '#c8ffd6';
+      ctx.fillRect(ix - outerHalfW - 6, iTop - 1, (outerHalfW + 6) * 2, 3);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(ix - outerHalfW - 2, iTop, (outerHalfW + 2) * 2, 1);
+
+      const emitterStamp = this.getGlowStamp('rgba(90, 255, 135, 0.9)', 24);
+      if (emitterStamp) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.16;
+        ctx.drawImage(emitterStamp, ix - 24, iTop - 24, 48, 48);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+      }
+
+      // Bake persistent carpet scorch decals along the beam path periodically during firing
+      if (state.tick - this.lastBeamScorchTick >= 6) {
+        this.lastBeamScorchTick = state.tick;
+        const scorchY = iTop + 20 + ((state.tick * 29) % Math.max(24, beamH - 24));
+        const scorchX = ix + (((state.tick * 13) % 19) - 9);
+        this.floorBuffer.bakeDecal({
+          kind: 'scorch',
+          x: scorchX,
+          y: scorchY,
+          angle: 0,
+          scale: 0.72,
+          color: '#112116',
+        });
+      }
+    }
+
+    // 8. Outward crackling pixel sparks flying off both beam edges & leading wavefront
+    for (let s = 0; s < 14; s++) {
+      const side = (s & 1) === 0 ? -1 : 1;
+      const prog = wrapMod(t * (2.6 + (s % 4) * 0.5) + s * 0.17, 1);
+      const sy = iTop + ((s * 37 + state.tick * 11) % Math.max(20, beamH));
+      const sx = ix + side * (outerHalfW + 2 + prog * 14);
+      ctx.globalAlpha = Math.max(0.2, 1 - prog);
+      ctx.fillStyle = s % 3 === 0 ? '#ffffff' : '#6bff92';
+      ctx.fillRect(Math.round(sx), Math.round(sy + prog * 6), s % 2 === 0 ? 2 : 1, 2);
+    }
+
+    // Leading-edge impact flare at bottom of beam
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#4eff7f';
+    drawPixelDisc(ctx, ix, iBot, Math.round(10 + pulse * 3));
+    ctx.fillStyle = '#ffffff';
+    drawPixelDisc(ctx, ix, iBot, Math.round(5 + pulse * 2));
+    ctx.restore();
+  }
+
   private renderProjectile(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
     proj: ProjectileEntity,
     px: number,
     py: number,
@@ -2391,7 +3493,7 @@ export class GameRenderer {
     pixelSnap: boolean,
     alpha: number,
   ): void {
-    // Special crisp rendering for Melee Slash arcs (handles both Steam 48x48 ox<=0 & Fallback centered slashes!)
+    // 1. Melee Slash arcs (compensate negative originX on sprEnergySlash/sprLightningSlash + honor slot.meleeSwingSide!)
     if (proj.kind === 'melee_slash') {
       const lifeFrac = proj.maxLifeTicks > 0 ? proj.lifeTicks / proj.maxLifeTicks : 1;
       const reach = proj.meleeReach ?? 24;
@@ -2400,21 +3502,47 @@ export class GameRenderer {
       const slashDef = this.sprites.getSprite(slashName);
       // Clamp frame strictly to 0..2 so sprLightningSlash's 4th blank frame never flashes empty
       const slashFrame = Math.min(2, Math.max(0, Math.floor((1 - lifeFrac) * 3)));
-      const flipSlashY = (proj.id & 1) === 1;
+
+      // Match swing flip side to the wielding slot's meleeSwingSide (NOT proj.id & 1!)
+      let swingSide: 1 | -1 = this.meleeSwingSide;
+      if (proj.team === 'player') {
+        const w0 = state.player.weapons[0];
+        const w1 = state.player.weapons[1];
+        const activeSlot = state.player.weapons[state.player.activeSlot];
+        const w0Match = Boolean(proj.weaponId && w0?.weaponId === proj.weaponId);
+        const w1Match = Boolean(proj.weaponId && w1?.weaponId === proj.weaponId);
+        if (w0Match && w1Match) {
+          const picked = (w1?.lastFiredTick ?? -1) > (w0?.lastFiredTick ?? -1) ? w1 : w0;
+          if (picked?.meleeSwingSide !== undefined) swingSide = picked.meleeSwingSide;
+        } else if (w0Match && w0?.meleeSwingSide !== undefined) {
+          swingSide = w0.meleeSwingSide;
+        } else if (w1Match && w1?.meleeSwingSide !== undefined) {
+          swingSide = w1.meleeSwingSide;
+        } else if (activeSlot?.meleeSwingSide !== undefined) {
+          swingSide = activeSlot.meleeSwingSide;
+        } else {
+          swingSide = this.meleeSwingSides[state.player.activeSlot];
+        }
+      } else {
+        swingSide = (proj.id & 1) === 1 ? -1 : 1;
+      }
+      const flipSlashY = swingSide < 0;
 
       ctx.save();
-      ctx.globalAlpha = Math.max(0.32, lifeFrac);
+      ctx.globalAlpha = Math.max(0.38, lifeFrac);
       let drawX = px;
       let drawY = py;
       let slashScale = reach / 18;
       if (slashDef && slashDef.originX <= 4 && slashDef.width >= 32) {
-        // Nuclear Throne Steam slash sprites (48x48, ox=0 or -8, oy=24) are anchored at the swing origin
-        // Keep near 1.0x NT scale with gentle Long Arms growth (never 2.4x oversized!)
-        drawX = px - Math.cos(proj.angle) * (reach * 0.45);
-        drawY = py - Math.sin(proj.angle) * (reach * 0.45);
-        slashScale = Math.max(0.9, Math.min(1.3, 0.92 + Math.max(0, reach - 24) * 0.015));
+        // Nuclear Throne Steam slash sprites (48x48, ox=0 or -8, oy=24):
+        // Compensate negative originX (e.g. sprEnergySlash/sprLightningSlash ox=-8) so arc hugs blade tip!
+        slashScale = Math.max(0.9, Math.min(1.25, 0.94 + Math.max(0, reach - 24) * 0.014));
+        const negOriginComp = slashDef.originX < 0 ? -slashDef.originX * slashScale : 0;
+        const pullback = reach * 0.52 + negOriginComp;
+        drawX = px - Math.cos(proj.angle) * pullback;
+        drawY = py - Math.sin(proj.angle) * pullback;
       } else if (slashDef && slashDef.width > 0) {
-        slashScale = Math.max(0.85, Math.min(1.7, reach / Math.max(18, slashDef.width * 0.85)));
+        slashScale = Math.max(0.85, Math.min(1.5, reach / Math.max(18, slashDef.width * 0.85)));
       }
 
       const drewSlash = this.sprites.draw(ctx, slashName, drawX, drawY, {
@@ -2442,109 +3570,200 @@ export class GameRenderer {
       return;
     }
 
-    // Special vertical beam segment orientation for Krunked Throne Mega-Beam (NT sprNothingBeam is 36x24 vertical!)
-    if (proj.sprite === 'sprNothingBeam') {
-      const beamRot = proj.angle - Math.PI * 0.5;
-      const beamFrame = Math.floor((tick + proj.id) * 0.5);
-      const glowStamp = this.getGlowStamp('rgba(78, 255, 130, 0.72)', 22);
-      if (glowStamp) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.drawImage(glowStamp, Math.floor(px - 22), Math.floor(py - 22), 44, 44);
-        ctx.restore();
-      }
-      const drewBeam = this.sprites.draw(ctx, 'sprNothingBeam', px, py, {
-        frame: beamFrame,
-        rotation: beamRot,
-        pixelSnap,
-      });
-      if (!drewBeam) {
-        ctx.save();
-        ctx.translate(Math.round(px), Math.round(py));
-        ctx.rotate(beamRot);
-        ctx.fillStyle = '#38e864';
-        ctx.fillRect(-14, -12, 28, 24);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(-6, -12, 12, 24);
-        ctx.restore();
-      }
-      return;
-    }
-
-    // Lasers, Rad Beams & Lightning: glowing beam segment + cached tip glow stamp
-    if (proj.kind === 'laser' || proj.kind === 'enemy_laser' || proj.kind === 'rad_beam' || proj.kind === 'lightning') {
-      const tailLen = proj.kind === 'rad_beam' ? 24 : 30;
+    // 2. Horror Rad Beam: dynamically scaled by proj.radius (uses Steam sprHorrorBullet / stepped emerald-cyan stream!)
+    if (proj.kind === 'rad_beam') {
+      const radiusScale = Math.max(0.75, Math.min(1.55, proj.radius / 5.5));
+      const beamSpr =
+        state.player.skin === 'b' && this.sprites.hasSprite('sprHorrorBBullet')
+          ? 'sprHorrorBBullet'
+          : 'sprHorrorBullet';
+      const tailLen = Math.round(12 + proj.radius * 2.2);
       const tx = px - Math.cos(proj.angle) * tailLen;
       const ty = py - Math.sin(proj.angle) * tailLen;
-      const outerColor =
-        proj.kind === 'rad_beam'
-          ? '#47ff66'
-          : proj.kind === 'lightning'
-            ? '#70e2ff'
-            : proj.team === 'enemy'
-              ? '#ff40e6'
-              : '#ff2b55';
 
       ctx.save();
-      ctx.lineCap = 'round';
-      if (proj.kind === 'lightning') {
-        const perpX = -Math.sin(proj.angle);
-        const perpY = Math.cos(proj.angle);
-        const j1 = Math.sin(tick * 1.7 + proj.id * 3.1) * 3.5;
-        const j2 = Math.cos(tick * 2.1 + proj.id * 1.9) * 3.5;
-        const m1x = lerp(tx, px, 0.35) + perpX * j1;
-        const m1y = lerp(ty, py, 0.35) + perpY * j1;
-        const m2x = lerp(tx, px, 0.7) + perpX * j2;
-        const m2y = lerp(ty, py, 0.7) + perpY * j2;
-        ctx.strokeStyle = outerColor;
-        ctx.lineWidth = 3.5;
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(m1x, m1y);
-        ctx.lineTo(m2x, m2y);
-        ctx.lineTo(px, py);
-        ctx.stroke();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      } else {
-        // Crisp dark outer casing so lasers pop cleanly over bright Snow & Desert sand
-        ctx.strokeStyle = 'rgba(14, 8, 20, 0.72)';
-        ctx.lineWidth = proj.kind === 'rad_beam' ? 8 : 6;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(tx), Math.round(ty));
-        ctx.lineTo(Math.round(px), Math.round(py));
-        ctx.stroke();
-        ctx.strokeStyle = outerColor;
-        ctx.lineWidth = proj.kind === 'rad_beam' ? 6 : 4;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(tx), Math.round(ty));
-        ctx.lineTo(Math.round(px), Math.round(py));
-        ctx.stroke();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = proj.kind === 'rad_beam' ? 2.5 : 1.5;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(tx), Math.round(ty));
-        ctx.lineTo(Math.round(px), Math.round(py));
-        ctx.stroke();
+      // Crisp stepped emerald-cyan wake behind the rad projectile
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = '#0e4d26';
+      ctx.lineWidth = Math.max(3, Math.round(proj.radius * 1.4));
+      ctx.beginPath();
+      ctx.moveTo(Math.round(tx), Math.round(ty));
+      ctx.lineTo(Math.round(px), Math.round(py));
+      ctx.stroke();
+
+      ctx.strokeStyle = '#47ff78';
+      ctx.lineWidth = Math.max(2, Math.round(proj.radius * 0.95));
+      ctx.beginPath();
+      ctx.moveTo(Math.round(tx), Math.round(ty));
+      ctx.lineTo(Math.round(px), Math.round(py));
+      ctx.stroke();
+
+      ctx.strokeStyle = '#d4ffea';
+      ctx.lineWidth = Math.max(1, Math.round(proj.radius * 0.42));
+      ctx.beginPath();
+      ctx.moveTo(Math.round(lerp(tx, px, 0.35)), Math.round(lerp(ty, py, 0.35)));
+      ctx.lineTo(Math.round(px), Math.round(py));
+      ctx.stroke();
+
+      const drewHorror = this.sprites.draw(ctx, beamSpr, px, py, {
+        frame: Math.floor((tick + proj.id) * 0.5),
+        rotation: proj.angle,
+        scaleX: radiusScale,
+        scaleY: radiusScale,
+        pixelSnap,
+      });
+      if (!drewHorror) {
+        const coreR = Math.max(3, Math.round(proj.radius * 0.85));
+        ctx.fillStyle = '#0d361d';
+        drawPixelDisc(ctx, px, py, coreR + 1);
+        ctx.fillStyle = '#48ff75';
+        drawPixelDisc(ctx, px, py, coreR);
+        ctx.fillStyle = '#d8fff0';
+        drawPixelDisc(ctx, px, py, Math.max(1, Math.round(coreR * 0.5)));
       }
 
-      const tipGlowColor =
-        proj.kind === 'rad_beam'
-          ? 'rgba(85, 255, 115, 0.65)'
-          : proj.kind === 'lightning'
-            ? 'rgba(115, 225, 255, 0.65)'
-            : 'rgba(255, 55, 95, 0.6)';
-      const tipStamp = this.getGlowStamp(tipGlowColor, 14);
+      const tipR = Math.round(7 + proj.radius * 1.1);
+      const tipStamp = this.getGlowStamp('rgba(85, 255, 130, 0.9)', tipR);
       if (tipStamp) {
         ctx.globalCompositeOperation = 'lighter';
-        ctx.drawImage(tipStamp, Math.floor(px - 14), Math.floor(py - 14), 28, 28);
+        ctx.globalAlpha = 0.14;
+        ctx.drawImage(tipStamp, Math.floor(px - tipR), Math.floor(py - tipR), tipR * 2, tipR * 2);
       }
       ctx.restore();
       return;
     }
 
-    // Sleek projectile motion trails & cached plasma halos (zero per-frame gradients!)
+    // 3. Hitscan Lasers & Lightning: ONE continuous razor-sharp NT beam (ZERO dark beaded sausages, ZERO backward-through-head tails!)
+    if (proj.kind === 'laser' || proj.kind === 'enemy_laser' || proj.kind === 'lightning') {
+      const lifeFrac = proj.maxLifeTicks > 0 ? Math.max(0.2, proj.lifeTicks / proj.maxLifeTicks) : 1;
+      let ox: number;
+      let oy: number;
+      if (proj.beamOriginX !== undefined && proj.beamOriginY !== undefined) {
+        ox = proj.beamOriginX;
+        oy = proj.beamOriginY;
+      } else {
+        // Safe fallback when sim emits segmented lasers without beamOrigin:
+        // Clamp tail so it NEVER pokes backward through the player's head near walls!
+        let tailLen = proj.kind === 'lightning' ? 24 : 26;
+        if (proj.team === 'player') {
+          const distFromPlayer = Math.hypot(px - state.player.x, py - state.player.y);
+          tailLen = Math.max(4, Math.min(tailLen, distFromPlayer - 6));
+        }
+        ox = px - Math.cos(proj.angle) * tailLen;
+        oy = py - Math.sin(proj.angle) * tailLen;
+      }
+
+      const isUltraLaser = Boolean(proj.isUltra || proj.weaponId === 'ultra_laser_pistol');
+      const isIonCannon = proj.weaponId === 'ion_cannon';
+      const isHeavyLaser = proj.weaponId === 'laser_cannon' || isIonCannon;
+
+      const edgeColor =
+        proj.kind === 'lightning'
+          ? '#1e6e9e'
+          : isUltraLaser
+            ? '#135c24'
+            : isIonCannon
+              ? '#11507a'
+              : proj.team === 'enemy'
+                ? '#6b105a'
+                : '#6e0d20';
+      const midColor =
+        proj.kind === 'lightning'
+          ? '#70e2ff'
+          : isUltraLaser
+            ? '#47ff66'
+            : isIonCannon
+              ? '#42e0ff'
+              : proj.team === 'enemy'
+                ? '#ff40e6'
+                : '#ff2b4a';
+      const coreColor =
+        isUltraLaser ? '#ebffed' : isIonCannon ? '#ebfcff' : '#ffffff';
+      const tipGlowColor =
+        proj.kind === 'lightning' || isIonCannon
+          ? 'rgba(95, 225, 255, 0.9)'
+          : isUltraLaser
+            ? 'rgba(75, 255, 115, 0.9)'
+            : proj.team === 'enemy'
+              ? 'rgba(255, 75, 225, 0.9)'
+              : 'rgba(255, 55, 85, 0.9)';
+
+      ctx.save();
+      if (proj.kind === 'lightning') {
+        ctx.lineCap = 'butt';
+        const perpX = -Math.sin(proj.angle);
+        const perpY = Math.cos(proj.angle);
+        const j1 = Math.sin(tick * 1.7 + proj.id * 3.1) * 3.5;
+        const j2 = Math.cos(tick * 2.1 + proj.id * 1.9) * 3.5;
+        const m1x = lerp(ox, px, 0.35) + perpX * j1;
+        const m1y = lerp(oy, py, 0.35) + perpY * j1;
+        const m2x = lerp(ox, px, 0.7) + perpX * j2;
+        const m2y = lerp(oy, py, 0.7) + perpY * j2;
+        ctx.strokeStyle = midColor;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(ox), Math.round(oy));
+        ctx.lineTo(Math.round(m1x), Math.round(m1y));
+        ctx.lineTo(Math.round(m2x), Math.round(m2y));
+        ctx.lineTo(Math.round(px), Math.round(py));
+        ctx.stroke();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
+      } else {
+        // Continuous razor-sharp beam with butt caps (ZERO dark rounded sausage joints!)
+        const baseW = isHeavyLaser ? 6 : 4;
+        const outerW = Math.max(2, Math.round((baseW + 2) * (0.45 + 0.55 * lifeFrac)));
+        const midW = Math.max(2, Math.round(baseW * (0.45 + 0.55 * lifeFrac)));
+        const coreW = Math.max(1, Math.round((baseW * 0.45) * (0.5 + 0.5 * lifeFrac)));
+
+        ctx.lineCap = 'butt';
+        ctx.strokeStyle = edgeColor;
+        ctx.lineWidth = outerW;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(ox), Math.round(oy));
+        ctx.lineTo(Math.round(px), Math.round(py));
+        ctx.stroke();
+
+        ctx.strokeStyle = midColor;
+        ctx.lineWidth = midW;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(ox), Math.round(oy));
+        ctx.lineTo(Math.round(px), Math.round(py));
+        ctx.stroke();
+
+        ctx.strokeStyle = coreColor;
+        ctx.lineWidth = coreW;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(ox), Math.round(oy));
+        ctx.lineTo(Math.round(px), Math.round(py));
+        ctx.stroke();
+
+        // Crisp muzzle origin & impact endpoint pixel stars (zero dark rings!)
+        if (proj.beamOriginX !== undefined && proj.beamOriginY !== undefined) {
+          const starR = Math.max(2, Math.round(3.5 * lifeFrac));
+          ctx.fillStyle = midColor;
+          ctx.fillRect(Math.round(ox) - starR, Math.round(oy) - 1, starR * 2 + 1, 3);
+          ctx.fillRect(Math.round(ox) - 1, Math.round(oy) - starR, 3, starR * 2 + 1);
+          ctx.fillRect(Math.round(px) - starR, Math.round(py) - 1, starR * 2 + 1, 3);
+          ctx.fillRect(Math.round(px) - 1, Math.round(py) - starR, 3, starR * 2 + 1);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(Math.round(ox) - 1, Math.round(oy) - 1, 2, 2);
+          ctx.fillRect(Math.round(px) - 1, Math.round(py) - 1, 2, 2);
+        }
+      }
+
+      const tipStamp = this.getGlowStamp(tipGlowColor, 9);
+      if (tipStamp) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.14 * lifeFrac;
+        ctx.drawImage(tipStamp, Math.floor(px - 9), Math.floor(py - 9), 18, 18);
+      }
+      ctx.restore();
+      return;
+    }
+
+    // 4. Sleek projectile motion trails & tightly clamped plasma halos (50% smaller, <= 0.14 alpha!)
     const spd = Math.hypot(proj.vx, proj.vy);
     if (spd > 1.2) {
       const ageTicks = Math.max(0.35, proj.maxLifeTicks - proj.lifeTicks + alpha);
@@ -2564,88 +3783,86 @@ export class GameRenderer {
         case 'shell':
         case 'slug':
         case 'flak':
-          desiredLen = Math.min(20, Math.max(7, spd * 1.05));
-          trailColor = 'rgba(255, 214, 96, 0.52)';
+          desiredLen = Math.min(18, Math.max(6, spd * 1.0));
+          trailColor = 'rgba(255, 214, 96, 0.50)';
           coreColor = 'rgba(255, 252, 225, 0.78)';
-          trailWidth = proj.kind === 'heavy_bullet' || proj.kind === 'slug' ? 2.4 : 1.5;
+          trailWidth = proj.kind === 'heavy_bullet' || proj.kind === 'slug' ? 2.2 : 1.4;
           break;
         case 'bolt':
         case 'splinter':
         case 'toxic_bolt':
         case 'seeking_bolt':
-          desiredLen = Math.min(26, Math.max(10, spd * 1.25));
-          trailColor = proj.kind === 'toxic_bolt' ? 'rgba(90, 255, 110, 0.58)' : 'rgba(130, 255, 155, 0.56)';
+          desiredLen = Math.min(24, Math.max(10, spd * 1.2));
+          trailColor = proj.kind === 'toxic_bolt' ? 'rgba(90, 255, 110, 0.55)' : 'rgba(130, 255, 155, 0.52)';
           coreColor = 'rgba(235, 255, 238, 0.8)';
-          trailWidth = 1.8;
+          trailWidth = 1.6;
           break;
         case 'idpd_bullet':
-          desiredLen = Math.min(20, Math.max(8, spd * 1.1));
-          trailColor = 'rgba(82, 185, 255, 0.6)';
-          coreColor = 'rgba(220, 245, 255, 0.85)';
-          trailWidth = 1.8;
+          desiredLen = Math.min(18, Math.max(8, spd * 1.05));
+          trailColor = 'rgba(82, 185, 255, 0.58)';
+          coreColor = 'rgba(220, 245, 255, 0.82)';
+          trailWidth = 1.6;
           break;
         case 'plasma':
         case 'enemy_plasma':
         case 'boss_orb':
-          desiredLen = Math.min(18, Math.max(7, spd * 1.4));
-          trailColor = 'rgba(72, 255, 118, 0.48)';
-          coreColor = 'rgba(215, 255, 222, 0.72)';
-          trailWidth = Math.max(2.5, proj.radius * 0.65);
-          haloColor = proj.kind === 'boss_orb' ? 'rgba(105, 255, 130, 0.46)' : 'rgba(75, 255, 120, 0.52)';
-          haloR = Math.max(10, proj.radius * 2.4);
+          desiredLen = Math.min(14, Math.max(6, spd * 1.2));
+          trailColor = 'rgba(72, 255, 118, 0.42)';
+          coreColor = 'rgba(215, 255, 222, 0.68)';
+          trailWidth = Math.max(2, proj.radius * 0.55);
+          haloColor = proj.kind === 'boss_orb' ? 'rgba(105, 255, 130, 0.9)' : 'rgba(75, 255, 120, 0.9)';
+          haloR = Math.min(14, Math.max(6, Math.round(proj.radius * 1.2)));
           break;
         case 'rocket':
         case 'nuke':
         case 'boss_missile':
-          desiredLen = Math.min(16, Math.max(7, spd * 1.3));
-          trailColor = 'rgba(255, 145, 48, 0.62)';
-          coreColor = 'rgba(255, 238, 175, 0.82)';
-          trailWidth = 2.4;
-          haloColor = 'rgba(255, 140, 48, 0.4)';
-          haloR = 12;
+          desiredLen = Math.min(15, Math.max(6, spd * 1.2));
+          trailColor = 'rgba(255, 145, 48, 0.58)';
+          coreColor = 'rgba(255, 238, 175, 0.80)';
+          trailWidth = 2.2;
+          haloColor = 'rgba(255, 140, 48, 0.9)';
+          haloR = 7;
           break;
         case 'enemy_bullet':
         case 'enemy_flame': {
-          // Match enemy projectile trail & cached radial glow halo to its ACTUAL visual type
-          // (fixes Scorpion venom green orbs, Salamander fire, Crystal magenta, IDPD blue, etc.)
           const spr = proj.sprite || '';
-          desiredLen = Math.min(14, Math.max(5, spd * 1.05));
-          trailWidth = 1.8;
+          desiredLen = Math.min(12, Math.max(5, spd * 0.95));
+          trailWidth = 1.6;
           if (spr === 'sprScorpionBullet') {
-            trailColor = 'rgba(105, 255, 78, 0.58)';
-            coreColor = 'rgba(232, 255, 200, 0.85)';
-            haloColor = 'rgba(92, 255, 72, 0.42)';
-            haloR = 10;
+            trailColor = 'rgba(105, 255, 78, 0.52)';
+            coreColor = 'rgba(232, 255, 200, 0.80)';
+            haloColor = 'rgba(92, 255, 72, 0.9)';
+            haloR = 6;
           } else if (spr === 'sprSalamanderBullet' || proj.kind === 'enemy_flame') {
-            trailColor = 'rgba(255, 138, 36, 0.62)';
-            coreColor = 'rgba(255, 245, 180, 0.86)';
-            haloColor = 'rgba(255, 130, 35, 0.46)';
-            haloR = 11;
+            trailColor = 'rgba(255, 138, 36, 0.55)';
+            coreColor = 'rgba(255, 245, 180, 0.82)';
+            haloColor = 'rgba(255, 130, 35, 0.9)';
+            haloR = 7;
           } else if (spr === 'sprEnemyBullet4') {
-            trailColor = 'rgba(255, 72, 215, 0.58)';
-            coreColor = 'rgba(255, 232, 255, 0.85)';
-            haloColor = 'rgba(255, 75, 210, 0.46)';
-            haloR = 11;
+            trailColor = 'rgba(255, 72, 215, 0.52)';
+            coreColor = 'rgba(255, 232, 255, 0.80)';
+            haloColor = 'rgba(255, 75, 210, 0.9)';
+            haloR = 7;
           } else if (spr === 'sprIDPDBullet' || spr === 'sprLHBouncer') {
-            trailColor = 'rgba(72, 195, 255, 0.6)';
-            coreColor = 'rgba(225, 248, 255, 0.86)';
-            haloColor = 'rgba(72, 195, 255, 0.45)';
-            haloR = 10;
+            trailColor = 'rgba(72, 195, 255, 0.55)';
+            coreColor = 'rgba(225, 248, 255, 0.82)';
+            haloColor = 'rgba(72, 195, 255, 0.9)';
+            haloR = 6;
           } else if (
             spr === 'sprGuardianBullet' ||
             spr === 'sprBigGuardianBullet' ||
             spr === 'sprExploGuardianBullet' ||
             spr === 'sprThrone2Bullet'
           ) {
-            trailColor = 'rgba(82, 255, 128, 0.55)';
-            coreColor = 'rgba(235, 255, 240, 0.85)';
-            haloColor = 'rgba(82, 255, 130, 0.48)';
-            haloR = Math.max(12, proj.radius * 2.3);
+            trailColor = 'rgba(82, 255, 128, 0.48)';
+            coreColor = 'rgba(235, 255, 240, 0.78)';
+            haloColor = 'rgba(82, 255, 130, 0.9)';
+            haloR = Math.min(12, Math.max(7, Math.round(proj.radius * 1.15)));
           } else {
-            trailColor = 'rgba(255, 62, 72, 0.58)';
-            coreColor = 'rgba(255, 235, 195, 0.85)';
-            haloColor = 'rgba(255, 68, 62, 0.42)';
-            haloR = 10;
+            trailColor = 'rgba(255, 62, 72, 0.52)';
+            coreColor = 'rgba(255, 235, 195, 0.80)';
+            haloColor = 'rgba(255, 68, 62, 0.9)';
+            haloR = 6;
           }
           break;
         }
@@ -2658,6 +3875,7 @@ export class GameRenderer {
         if (haloStamp) {
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.13;
           ctx.drawImage(
             haloStamp,
             Math.floor(px - haloR),
@@ -2674,7 +3892,7 @@ export class GameRenderer {
         const tailX = px - dirX * len;
         const tailY = py - dirY * len;
         ctx.save();
-        ctx.lineCap = 'round';
+        ctx.lineCap = 'butt';
         ctx.strokeStyle = trailColor;
         ctx.lineWidth = trailWidth;
         ctx.beginPath();
@@ -2693,10 +3911,22 @@ export class GameRenderer {
       }
     }
 
+    // 5. Spinning thrown Chicken weapons (fast tumbling rotation + crisp motion glint!)
+    let spriteRotation = proj.angle;
+    if (proj.kind === 'thrown_weapon') {
+      const spinDir = proj.vx >= 0 ? 1 : -1;
+      spriteRotation = proj.angle + (tick + alpha) * 0.72 * spinDir;
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = '#ffe896';
+      drawPixelRing(ctx, px, py, Math.max(5, Math.round(proj.radius + 1)), 1, 5, (tick * 2) & 7);
+      ctx.restore();
+    }
+
     const drew = proj.sprite
       ? this.sprites.draw(ctx, proj.sprite, px, py, {
           frame: Math.floor(tick * 0.4),
-          rotation: proj.angle,
+          rotation: spriteRotation,
           pixelSnap,
         })
       : false;
@@ -2705,11 +3935,9 @@ export class GameRenderer {
       const x = Math.round(px);
       const y = Math.round(py);
       const r = Math.max(2, Math.round(proj.radius));
-      // Crisp 1px dark outer contour so every projectile pops on bright & dark floors alike
+      // Crisp 1px dark outer pixel disc contour so every projectile pops on bright & dark floors alike
       ctx.fillStyle = '#0c0712';
-      ctx.beginPath();
-      ctx.arc(x, y, r + 1, 0, Math.PI * 2);
-      ctx.fill();
+      drawPixelDisc(ctx, x, y, r + 1);
       ctx.fillStyle =
         proj.team === 'enemy'
           ? '#ff3847'
@@ -2720,9 +3948,7 @@ export class GameRenderer {
               : proj.kind === 'bolt' || proj.kind === 'seeking_bolt'
                 ? '#78ff84'
                 : '#ffcf4d';
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
+      drawPixelDisc(ctx, x, y, r);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(x - 1, y - 1, 2, 2);
     }
@@ -2736,12 +3962,19 @@ export class GameRenderer {
     for (let i = 0; i < this.smokePuffs.length; i++) {
       const sp = this.smokePuffs[i]!;
       const t = 1 - Math.max(0, Math.min(1, sp.life / Math.max(1, sp.maxLife)));
-      const r = sp.startR + (sp.endR - sp.startR) * (1 - (1 - t) * (1 - t));
-      ctx.globalAlpha = Math.max(0, (1 - t) * 0.52);
+      const r = Math.max(2, Math.round(sp.startR + (sp.endR - sp.startR) * (1 - (1 - t) * (1 - t))));
+      const ix = Math.round(sp.x);
+      const iy = Math.round(sp.y);
+      // Crisp dark-outlined pixel-stepped smoke puff (zero blurry anti-aliased ctx.arc!)
+      ctx.globalAlpha = Math.max(0, (1 - t) * 0.68);
+      ctx.fillStyle = '#120e17';
+      drawPixelDisc(ctx, ix, iy, r + 1);
       ctx.fillStyle = sp.color;
-      ctx.beginPath();
-      ctx.arc(Math.round(sp.x), Math.round(sp.y), Math.max(1.5, r), 0, Math.PI * 2);
-      ctx.fill();
+      drawPixelDisc(ctx, ix, iy, r);
+      if (r >= 3) {
+        ctx.fillStyle = 'rgba(235, 225, 220, 0.25)';
+        ctx.fillRect(ix - Math.floor(r * 0.45), iy - Math.floor(r * 0.45), Math.max(1, Math.floor(r * 0.5)), 1);
+      }
     }
     ctx.restore();
   }
@@ -2760,10 +3993,11 @@ export class GameRenderer {
   ): void {
     const player = state.player;
 
-    // 1. Low-HP crimson heartbeat vignette pulse
+    // 1. Low-HP crimson heartbeat vignette pulse (NEVER trigger for full 2/2 HP Melting!)
     const lowHp =
       player.alive &&
       player.hp > 0 &&
+      player.hp < player.maxHp &&
       (player.hp <= 2 || player.hp / Math.max(1, player.maxHp) <= 0.28);
     if (lowHp) {
       // Double-beat "lub-dub" cardiac waveform (~1.35 Hz)
@@ -2821,18 +4055,31 @@ export class GameRenderer {
     if (this.screenBlastFlashTicks > 0) {
       const frac = Math.min(1, this.screenBlastFlashTicks / 3);
       ctx.save();
-      ctx.fillStyle = `rgba(255, 232, 175, ${(0.1 * frac).toFixed(3)})`;
+      ctx.fillStyle = `rgba(255, 232, 175, ${(0.08 * frac).toFixed(3)})`;
       ctx.fillRect(0, 0, w, h);
       ctx.restore();
     }
 
     // 4. Portal suction warp pull + NT-style Loading Tip card during portal transition
-    if (state.portal.active && state.portal.entered) {
+    // Suppress strictly during mutation/ultra select, game over, and victory so it NEVER ghosts behind menus!
+    const suppressPortalCard =
+      state.phase === 'mutation_select' ||
+      state.phase === 'ultra_select' ||
+      state.phase === 'game_over' ||
+      state.phase === 'victory_throne';
+    if (state.portal.active && state.portal.entered && !suppressPortalCard) {
       const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
       const warp = Math.min(1, Math.max(1, ticksIn) / 24);
       const border = Math.round(6 + warp * 18);
+      const target = state.portal.targetArea;
+      const borderRgb =
+        target === 'vault'
+          ? '24, 150, 72'
+          : target === '1-?' || target === 'hq-1'
+            ? '30, 102, 195'
+            : '110, 32, 185';
       ctx.save();
-      ctx.fillStyle = `rgba(110, 32, 185, ${(0.22 + warp * 0.38).toFixed(3)})`;
+      ctx.fillStyle = `rgba(${borderRgb}, ${(0.22 + warp * 0.38).toFixed(3)})`;
       ctx.fillRect(0, 0, w, border);
       ctx.fillRect(0, h - border, w, border);
       ctx.fillRect(0, border, border, h - border * 2);
@@ -2847,10 +4094,18 @@ export class GameRenderer {
           state.portal.nextLoop > 0
             ? `L${state.portal.nextLoop} ${state.portal.targetArea}`
             : state.portal.targetArea;
-        const areaTitle = `${targetCode}  ${(targetArea?.name ?? 'WASTELAND').toUpperCase()}`;
+        // Strip duplicate trailing area code (e.g. "DESERT 1-2" -> "DESERT" so title is "1-2  DESERT")
+        const rawName = (targetArea?.name ?? 'WASTELAND').toUpperCase().trim();
+        const codeUpper = state.portal.targetArea.toUpperCase();
+        const cleanName = rawName.endsWith(` ${codeUpper}`)
+          ? rawName.slice(0, -(codeUpper.length + 1)).trim()
+          : rawName === codeUpper
+            ? 'WASTELAND'
+            : rawName;
+        const areaTitle = `${targetCode}  ${cleanName}`;
         const tip = selectLoadingTip(targetBiome, state.portal.targetArea, state.portal.nextLoop, state.seed);
 
-        ctx.globalAlpha = cardAlpha * 0.84;
+        ctx.globalAlpha = cardAlpha * 0.95;
         ctx.fillStyle = '#0a0712';
         ctx.fillRect(0, 0, w, h);
 
@@ -2858,28 +4113,37 @@ export class GameRenderer {
         const cx = Math.round(w * 0.5);
         const cy = Math.round(h * 0.5);
 
-        // Swirling purple emblem glow behind mutant silhouette
-        const glow = this.getGlowStamp('rgba(175, 78, 255, 0.72)', 36);
+        // Swirling portal emblem glow behind mutant silhouette
+        const emblemGlowColor =
+          target === 'vault'
+            ? 'rgba(72, 235, 130, 0.48)'
+            : target === '1-?' || target === 'hq-1'
+              ? 'rgba(72, 175, 255, 0.48)'
+              : 'rgba(175, 78, 255, 0.48)';
+        const glow = this.getGlowStamp(emblemGlowColor, 32);
         if (glow) {
-          ctx.drawImage(glow, cx - 36, cy - 42, 72, 72);
+          ctx.drawImage(glow, cx - 32, cy - 40, 64, 64);
         }
         const mutantDef = this.data.getMutant(state.player.mutant);
         const walkSpr =
           state.player.skin === 'b' && mutantDef.sprites.bWalk && this.sprites.hasSprite(mutantDef.sprites.bWalk)
             ? mutantDef.sprites.bWalk
             : mutantDef.sprites.walk;
+        const walkDef = this.sprites.getSprite(walkSpr);
+        // Crisp integer scale ONLY (2x for 24x24 mutants, 1x for oversized 48x48 Horror — ZERO 1.5x mixels!)
+        const intScale = walkDef && walkDef.height >= 40 ? 1 : 2;
         this.sprites.draw(ctx, walkSpr, cx, cy - 8, {
           frame: Math.floor(state.tick * 0.4),
-          scaleX: 1.5,
-          scaleY: 1.5,
+          scaleX: intScale,
+          scaleY: intScale,
           pixelSnap: true,
         });
 
-        this.fonts.draw(ctx, `@pWARPING TO @w${areaTitle}`, cx, cy + 16, 'fntM1', {
+        this.fonts.draw(ctx, `@pWARPING TO @w${areaTitle}`, cx, cy + 18, 'fntM1', {
           align: 'center',
           outline: true,
         });
-        this.fonts.draw(ctx, `@d${tip}`, cx, cy + 32, 'fntSmall', {
+        this.fonts.draw(ctx, `@d${tip}`, cx, cy + 34, 'fntSmall', {
           align: 'center',
           maxWidth: w - 36,
           outline: true,
@@ -2894,14 +4158,15 @@ export class GameRenderer {
   ): void {
     if (this.muzzleFlashes.length === 0) return;
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
     for (let i = 0; i < this.muzzleFlashes.length; i++) {
       const mf = this.muzzleFlashes[i]!;
       const frac = Math.max(0, Math.min(1, mf.life / Math.max(0.1, mf.maxLife)));
-      const r = mf.radius * (0.45 + 0.55 * frac);
+      const r = Math.min(14, mf.radius * (0.5 + 0.5 * frac));
       const stamp = this.getGlowStamp(mf.color, r);
       if (stamp) {
-        ctx.globalAlpha = frac;
+        // Clamped additive bloom (<= 0.16) so rapid dual-wielding Steroids never whites out pixel art!
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = Math.min(0.16, frac * 0.16);
         ctx.drawImage(
           stamp,
           Math.floor(mf.x - r),
@@ -2911,15 +4176,25 @@ export class GameRenderer {
         );
       }
 
-      // Crisp directional bright muzzle star core
-      ctx.globalAlpha = Math.min(1, frac * 1.2);
+      // Crisp pixel-art directional muzzle star core (zero blurry airbrush circle!)
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = Math.min(1, frac * 1.15);
+      const cosA = Math.cos(mf.angle);
+      const sinA = Math.sin(mf.angle);
+      const tipX = Math.round(mf.x + cosA * (3 * frac));
+      const tipY = Math.round(mf.y + sinA * (3 * frac));
+      const arm = Math.max(2, Math.round(4 * frac));
+      const tongueLen = Math.max(3, Math.round(6 * frac));
+
+      ctx.fillStyle = mf.color;
+      ctx.fillRect(tipX - arm, tipY, arm * 2 + 1, 1);
+      ctx.fillRect(tipX, tipY - arm, 1, arm * 2 + 1);
+      drawPixelLine(ctx, tipX, tipY, tipX + cosA * tongueLen, tipY + sinA * tongueLen, 2);
+
       ctx.fillStyle = mf.coreColor;
-      const tipX = mf.x + Math.cos(mf.angle) * (4 * frac);
-      const tipY = mf.y + Math.sin(mf.angle) * (4 * frac);
-      const coreR = Math.max(1.5, 3.5 * frac);
-      ctx.beginPath();
-      ctx.arc(Math.round(tipX), Math.round(tipY), coreR, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(tipX - 1, tipY - 1, 3, 3);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(tipX, tipY, 1, 1);
     }
     ctx.restore();
   }
@@ -2933,44 +4208,38 @@ export class GameRenderer {
       const sw = this.shockwaves[i]!;
       const t = 1 - Math.max(0, Math.min(1, sw.life / Math.max(0.1, sw.maxLife)));
       const ease = 1 - (1 - t) * (1 - t);
-      const r = sw.startR + (sw.endR - sw.startR) * ease;
+      const r = Math.max(2, Math.round(sw.startR + (sw.endR - sw.startR) * ease));
       const alpha = Math.max(0, (1 - t) * 0.85);
+      const ix = Math.round(sw.x);
+      const iy = Math.round(sw.y);
 
-      // Initial bright blast glow stamp during first 35% of expansion
+      // Tightly clamped initial blast bloom (<= 0.16 alpha, 40% radius) — NEVER washes out pixel art!
       if (t < 0.35) {
-        const flashR = sw.endR * 0.65;
+        const flashR = Math.min(28, Math.max(8, Math.round(sw.endR * 0.42)));
         const stamp = this.getGlowStamp(sw.glowColor, flashR);
         if (stamp) {
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
-          ctx.globalAlpha = (1 - t / 0.35) * 0.75;
-          ctx.drawImage(
-            stamp,
-            Math.floor(sw.x - flashR),
-            Math.floor(sw.y - flashR),
-            Math.ceil(flashR * 2),
-            Math.ceil(flashR * 2),
-          );
+          ctx.globalAlpha = Math.min(0.16, (1 - t / 0.35) * 0.16);
+          ctx.drawImage(stamp, ix - flashR, iy - flashR, flashR * 2, flashR * 2);
           ctx.restore();
         }
       }
 
-      // Expanding colored shockwave ring
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = sw.color;
-      ctx.lineWidth = Math.max(1, 2.6 * (1 - t));
-      ctx.beginPath();
-      ctx.arc(Math.round(sw.x), Math.round(sw.y), Math.max(2, r), 0, Math.PI * 2);
-      ctx.stroke();
+      // Crisp pixel-stepped outer shockwave ring with dark contrast edge (ZERO anti-aliased ctx.arc!)
+      ctx.globalAlpha = alpha * 0.6;
+      ctx.fillStyle = '#120c18';
+      drawPixelRing(ctx, ix, iy, r + 1, 1);
 
-      // Inner white heat-wave shimmer ring
-      if (r > 6) {
-        ctx.globalAlpha = alpha * 0.65;
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(Math.round(sw.x), Math.round(sw.y), Math.max(2, r * 0.86), 0, Math.PI * 2);
-        ctx.stroke();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = sw.color;
+      drawPixelRing(ctx, ix, iy, r, t < 0.35 ? 2 : 1, t > 0.55 ? 4 : 0, Math.floor(t * 10));
+
+      // Crisp inner white heat-wave pixel ring on early expansion
+      if (r > 6 && t < 0.65) {
+        ctx.globalAlpha = alpha * 0.62;
+        ctx.fillStyle = '#ffffff';
+        drawPixelRing(ctx, ix, iy, Math.max(3, Math.round(r * 0.82)), 1, 5, Math.floor(t * 12));
       }
     }
     ctx.restore();
@@ -3110,6 +4379,30 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  private drawBeamWarnParticle(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    x: number,
+    y: number,
+    lifeFrac: number,
+  ): void {
+    // Upgraded from crude 5x5 lime squares to crisp emerald warning chevrons & sparks!
+    const ix = Math.round(x);
+    const iy = Math.round(y);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.25, lifeFrac);
+    // Dark outline shadow chevron
+    ctx.fillStyle = '#082413';
+    drawPixelLine(ctx, ix - 4, iy - 1, ix, iy + 3, 2);
+    drawPixelLine(ctx, ix, iy + 3, ix + 4, iy - 1, 2);
+    // Bright emerald chevron + hot white apex spark
+    ctx.fillStyle = '#5eff88';
+    drawPixelLine(ctx, ix - 4, iy - 2, ix, iy + 2, 1);
+    drawPixelLine(ctx, ix, iy + 2, ix + 4, iy - 2, 1);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ix, iy + 1, 1, 2);
+    ctx.restore();
+  }
+
   private renderParticles(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     state: SimState,
@@ -3120,6 +4413,10 @@ export class GameRenderer {
       const p = state.particles[i]!;
       const lifeFrac = p.maxLifeTicks > 0 ? Math.max(0, p.lifeTicks / p.maxLifeTicks) : 1;
       const alpha = Math.max(0, Math.min(1, p.alpha * lifeFrac));
+      if (p.kind === 'beam_warn') {
+        this.drawBeamWarnParticle(ctx, p.x, p.y, lifeFrac);
+        continue;
+      }
       if (p.sprite && this.sprites.hasSprite(p.sprite)) {
         const sp = this.sprites.getSprite(p.sprite)!;
         const frame = Math.floor((1 - lifeFrac) * sp.frames.length);
@@ -3138,6 +4435,10 @@ export class GameRenderer {
     for (let i = 0; i < this.transientParticles.length; i++) {
       const p = this.transientParticles[i]!;
       const lifeFrac = p.maxLife > 0 ? Math.max(0, p.life / p.maxLife) : 1;
+      if (p.kind === 'beam_warn') {
+        this.drawBeamWarnParticle(ctx, p.x, p.y, lifeFrac);
+        continue;
+      }
       if (p.sprite && this.sprites.hasSprite(p.sprite)) {
         const sp = this.sprites.getSprite(p.sprite)!;
         const frame = Math.floor((1 - lifeFrac) * sp.frames.length);
@@ -3155,11 +4456,50 @@ export class GameRenderer {
 
   private renderFloatingTexts(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    viewLeft: number,
+    viewTop: number,
+    viewW: number,
   ): void {
+    // Never bleed stale combat numbers onto menu/loading screens
+    if (
+      state.phase === 'mutation_select' ||
+      state.phase === 'ultra_select' ||
+      state.phase === 'game_over' ||
+      state.phase === 'victory_throne' ||
+      (state.portal.active && state.portal.entered && Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0) >= 7)
+    ) {
+      return;
+    }
+
+    // Strictly clamp below top HUD boxes (screen y >= 42) and separate colliding labels cleanly!
+    const minWorldY = viewTop + 42;
+    const minWorldX = viewLeft + 24;
+    const maxWorldX = viewLeft + viewW - 24;
+    const placed: Array<{ x: number; y: number; halfW: number }> = [];
+
     for (let i = 0; i < this.floatingTexts.length; i++) {
       const ft = this.floatingTexts[i]!;
       const alpha = Math.min(1, (ft.life / Math.max(1, ft.maxLife)) * 1.4);
-      this.fonts.draw(ctx, ft.text, ft.x, ft.y, ft.font, {
+      const halfW = Math.max(10, ft.text.length * (ft.font === 'fntM1' ? 3 : 2.3));
+      const drawX = Math.max(minWorldX, Math.min(maxWorldX, ft.x));
+      let drawY = Math.max(minWorldY, ft.y);
+
+      // Push downward if two rising labels both clamp onto the top HUD ceiling simultaneously
+      for (let guard = 0; guard < 5; guard++) {
+        let collided = false;
+        for (let j = 0; j < placed.length; j++) {
+          const prev = placed[j]!;
+          if (Math.abs(prev.x - drawX) < prev.halfW + halfW + 4 && Math.abs(prev.y - drawY) < 9) {
+            drawY = prev.y + 9;
+            collided = true;
+          }
+        }
+        if (!collided) break;
+      }
+      placed.push({ x: drawX, y: drawY, halfW });
+
+      this.fonts.draw(ctx, ft.text, drawX, drawY, ft.font, {
         align: 'center',
         baseline: 'bottom',
         color: ft.color,
@@ -3175,8 +4515,9 @@ export class GameRenderer {
     playerX: number,
     playerY: number,
     inputMode: RenderInputDeviceMode = 'kbm',
+    viewTop: number = 0,
   ): void {
-    if (!state.player.alive) return;
+    if (!state.player.alive || state.phase !== 'playing') return;
     let nearest: PickupEntity | null = null;
     let bestDistSq = 28 * 28;
     for (let i = 0; i < state.pickups.length; i++) {
@@ -3204,14 +4545,82 @@ export class GameRenderer {
     const pillH = 9;
     // Positioned neatly BELOW the dropped weapon so it never stacks over player head / floating callouts
     const px = Math.round(nearest.x - pillW * 0.5);
-    const py = Math.round(nearest.y + 8);
+    const py = Math.max(Math.round(viewTop + 42), Math.round(nearest.y + 8));
     ctx.save();
-    ctx.fillStyle = 'rgba(10, 8, 16, 0.76)';
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.82)';
     ctx.fillRect(px, py, pillW, pillH);
-    ctx.strokeStyle = nearest.cursed ? 'rgba(201, 74, 255, 0.7)' : 'rgba(180, 172, 200, 0.42)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(px + 0.5, py + 0.5, pillW - 1, pillH - 1);
+    const borderCol = nearest.cursed ? '#c94aff' : '#78708a';
+    ctx.fillStyle = borderCol;
+    ctx.fillRect(px, py, pillW, 1);
+    ctx.fillRect(px, py + pillH - 1, pillW, 1);
+    ctx.fillRect(px, py, 1, pillH);
+    ctx.fillRect(px + pillW - 1, py, 1, pillH);
     ctx.restore();
+    this.fonts.draw(ctx, fullText, nearest.x, py + 2, 'fntSmall', {
+      align: 'center',
+      baseline: 'top',
+      outline: false,
+      shadow: true,
+    });
+  }
+
+  /**
+   * Renders a crisp persistent `[E]` world prompt pill above any nearby interactable prop
+   * exposing `prop.interactPrompt` (Fixed Golden Car, Ice Flower, Crown Pedestal, Open IDPD Van, Broken Throne).
+   */
+  private renderNearbyPropPrompt(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    playerX: number,
+    playerY: number,
+    inputMode: RenderInputDeviceMode = 'kbm',
+    viewTop: number = 0,
+  ): void {
+    if (!state.player.alive || state.phase !== 'playing') return;
+    let nearest: PropEntity | null = null;
+    let bestDistSq = 48 * 48;
+    for (let i = 0; i < state.props.length; i++) {
+      const prop = state.props[i]!;
+      if (!prop.interactPrompt || prop.hp <= 0) continue;
+      const dx = prop.x - playerX;
+      const dy = prop.y - playerY;
+      const dSq = dx * dx + dy * dy;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        nearest = prop;
+      }
+    }
+    if (!nearest || !nearest.interactPrompt) return;
+
+    const raw = nearest.interactPrompt.trim();
+    const cleaned = raw.replace(/^\[E\]\s*/i, '');
+    const prefix =
+      inputMode === 'gamepad'
+        ? '@b[X]@w '
+        : inputMode === 'touch'
+          ? '@yUSE@w '
+          : '@y[E]@w ';
+    const fullText = cleaned.length > 0 ? `${prefix}${cleaned}` : `${prefix}INTERACT`;
+    const measured = this.fonts.measure(fullText, 'fntSmall');
+    const pillW = measured.width + 8;
+    const pillH = 10;
+    const bob = Math.round(Math.sin(this.renderTimeSec * 5.5) * 1.2);
+    const px = Math.round(nearest.x - pillW * 0.5);
+    const py = Math.max(
+      Math.round(viewTop + 42),
+      Math.round(nearest.y - Math.max(16, nearest.radius + 8) - pillH + bob),
+    );
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.86)';
+    ctx.fillRect(px, py, pillW, pillH);
+    ctx.fillStyle = '#ffe047';
+    ctx.fillRect(px, py, pillW, 1);
+    ctx.fillRect(px, py + pillH - 1, pillW, 1);
+    ctx.fillRect(px, py, 1, pillH);
+    ctx.fillRect(px + pillW - 1, py, 1, pillH);
+    ctx.restore();
+
     this.fonts.draw(ctx, fullText, nearest.x, py + 2, 'fntSmall', {
       align: 'center',
       baseline: 'top',

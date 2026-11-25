@@ -34,9 +34,29 @@ function isWalkable(tile: number): boolean {
   return tile === TileType.Floor || tile === TileType.FloorCracked || tile === TileType.Carpet;
 }
 
+function tileHash(tx: number, ty: number, salt: number = 0): number {
+  let h = Math.imul(tx + 37, 374761393) ^ Math.imul(ty + 91, 668265263) ^ Math.imul(salt + 17, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+function isIntactSlab2x2(map: WorldMap, slabTx: number, slabTy: number): boolean {
+  if (slabTx < 0 || slabTy < 0 || slabTx + 1 >= map.width || slabTy + 1 >= map.height) {
+    return false;
+  }
+  const w = map.width;
+  return (
+    map.tiles[slabTy * w + slabTx] === TileType.Floor &&
+    map.tiles[slabTy * w + slabTx + 1] === TileType.Floor &&
+    map.tiles[(slabTy + 1) * w + slabTx] === TileType.Floor &&
+    map.tiles[(slabTy + 1) * w + slabTx + 1] === TileType.Floor
+  );
+}
+
 /**
  * Persistent offscreen level floor canvas (map.width * 16 x map.height * 16).
- * - Renders biome floor tiles (sprFloor*, sprFloor*Explo, Carpet red rug for 7-3/Vault)
+ * - Renders biome floor tiles (sprFloor*, sprFloor*B & sprDetail* intact variety,
+ *   sprFloor*Explo strictly for wall blasts, Carpet red rug when Steam sprCarpet absent)
  * - Permanently bakes all FloorDecals (blood, scorch, rubble, acid, settled corpses, brass casings)
  * - Incrementally refreshes newly carved floor tiles when walls are destroyed mid-level
  */
@@ -82,19 +102,19 @@ export class FloorBuffer {
 
   private resolveBiomeSprites(map: WorldMap, areaDef?: AreaDef): {
     floorSprite: string;
+    floorAltSprite: string;
     floorExploSprite: string;
+    detailSprite: string;
   } {
-    const area = areaDef ?? this.data.getArea(map.areaCode) ?? this.data.getAreaByBiome(map.biome);
-    if (area) {
-      return {
-        floorSprite: area.floorSprite,
-        floorExploSprite: area.floorExploSprite,
-      };
-    }
     const num = BIOME_SPRITE_NUMBER[map.biome] ?? 1;
+    const area = areaDef ?? this.data.getArea(map.areaCode) ?? this.data.getAreaByBiome(map.biome);
+    const floorSprite = area?.floorSprite ?? `sprFloor${num}`;
+    const floorExploSprite = area?.floorExploSprite ?? `sprFloor${num}Explo`;
     return {
-      floorSprite: `sprFloor${num}`,
-      floorExploSprite: `sprFloor${num}Explo`,
+      floorSprite,
+      floorAltSprite: `${floorSprite}B`,
+      floorExploSprite,
+      detailSprite: `sprDetail${num}`,
     };
   }
 
@@ -221,7 +241,7 @@ export class FloorBuffer {
     }
 
     const variant = map.floorVariants[idx] ?? ((tx * 7 + ty * 13) & 3);
-    const { floorSprite, floorExploSprite } = this.resolveBiomeSprites(map, areaDef);
+    const { floorSprite, floorAltSprite, floorExploSprite, detailSprite } = this.resolveBiomeSprites(map, areaDef);
 
     // Draw base biome floor tile first (handles both 32x32 Steam tiles and 16x16 fallback tiles seamlessly)
     const floorDef = this.sprites.getSprite(floorSprite);
@@ -230,11 +250,37 @@ export class FloorBuffer {
       const f0 = floorDef.frames[0]!;
       if (f0.srcW >= ts * 2 && f0.srcH >= ts * 2) {
         // 32x32 Steam floor slab: sample aligned 16x16 quadrant so adjacent tiles form cohesive slabs
-        const slabVariant =
-          map.floorVariants[Math.floor(ty / 2) * 2 * map.width + Math.floor(tx / 2) * 2] ?? variant;
+        const slabTx = tx & ~1;
+        const slabTy = ty & ~1;
+        const slabVariant = map.floorVariants[slabTy * map.width + slabTx] ?? variant;
         const subX = (tx & 1) * ts;
         const subY = (ty & 1) * ts;
         drewBase = this.sprites.drawSubRect(ctx, floorSprite, slabVariant, subX, subY, ts, ts, px, py, ts, ts);
+
+        // Subtle intact-floor variety using authentic Steam sprFloor*B slabs (~14% of intact 2x2 floor blocks)
+        if (
+          drewBase &&
+          tile === TileType.Floor &&
+          this.sprites.hasSprite(floorAltSprite) &&
+          isIntactSlab2x2(map, slabTx, slabTy)
+        ) {
+          const sh = tileHash(slabTx >> 1, slabTy >> 1, 7);
+          if (sh % 7 === 0) {
+            const altDef = this.sprites.getSprite(floorAltSprite);
+            if (altDef && altDef.width >= ts * 2 && altDef.height >= ts * 2) {
+              const altFrame = (sh >>> 4) % Math.max(1, altDef.frames.length);
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(px, py, ts, ts);
+              ctx.clip();
+              this.sprites.draw(ctx, floorAltSprite, slabTx * ts, slabTy * ts, {
+                frame: altFrame,
+                pixelSnap: true,
+              });
+              ctx.restore();
+            }
+          }
+        }
       } else {
         drewBase = this.sprites.draw(ctx, floorSprite, px, py, { frame: variant, pixelSnap: true });
       }
@@ -249,7 +295,21 @@ export class FloorBuffer {
       ctx.fillRect(px + sx + 1, py + sy + 1, 2, 1);
     }
 
-    // Cracked / carved floor overlay
+    // Sparse authentic Steam floor micro-details (sprDetail*) on intact non-carpet tiles
+    if (tile === TileType.Floor && this.sprites.hasSprite(detailSprite)) {
+      const dh = tileHash(tx, ty, 31);
+      if (dh % 11 === 0) {
+        const ox = 4 + ((dh >>> 4) % 9);
+        const oy = 4 + ((dh >>> 8) % 9);
+        const dFrame = (dh >>> 12) & 15;
+        this.sprites.draw(ctx, detailSprite, px + ox, py + oy, {
+          frame: dFrame,
+          pixelSnap: true,
+        });
+      }
+    }
+
+    // Cracked / blasted floor overlay (strictly for FloorCracked tiles from wall blasts)
     if (tile === TileType.FloorCracked) {
       const drewExplo = this.sprites.draw(ctx, floorExploSprite, px, py, {
         frame: variant,
@@ -264,9 +324,13 @@ export class FloorBuffer {
       }
     }
 
-    // Palace / Vault Red Carpet
+    // Palace / Vault Red Carpet: skip procedural carpet on 7-3 when Steam sprCarpet is available
+    // so sprCarpet renders cleanly with zero mismatched double gold borders
     if (tile === TileType.Carpet) {
-      this.drawCarpetTile(ctx, map, tx, ty, px, py, ts);
+      const useSteamThroneCarpet = map.areaCode === '7-3' && this.sprites.hasSprite('sprCarpet');
+      if (!useSteamThroneCarpet) {
+        this.drawCarpetTile(ctx, map, tx, ty, px, py, ts);
+      }
     }
   }
 

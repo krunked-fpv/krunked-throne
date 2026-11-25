@@ -200,7 +200,8 @@ export class CameraController {
   }
 
   /**
-   * Computes the top-left world coordinate of the logical viewport.
+   * Computes the top-left world coordinate of the rendered viewport
+   * (includes recoil kick and screenshake offsets for visual punch).
    */
   getViewOrigin(): { left: number; top: number } {
     const rawLeft = this.x + this.kickX + this.shakeOffsetX - this.viewportWidth * 0.5;
@@ -212,10 +213,25 @@ export class CameraController {
   }
 
   /**
-   * Converts world coordinates into logical canvas screen coordinates.
+   * Computes the unshaken top-left world coordinate (excluding transient kick & shake)
+   * so stationary cursor aim never drifts during heavy gunfire while preserving
+   * exact worldToScreen <-> screenToWorld mathematical invertibility.
+   */
+  getStableViewOrigin(): { left: number; top: number } {
+    const rawLeft = this.x - this.viewportWidth * 0.5;
+    const rawTop = this.y - this.viewportHeight * 0.5;
+    if (this.pixelSnap) {
+      return { left: Math.round(rawLeft), top: Math.round(rawTop) };
+    }
+    return { left: rawLeft, top: rawTop };
+  }
+
+  /**
+   * Converts world coordinates into logical canvas screen coordinates
+   * (uses stable unshaken origin for exact invertibility with screenToWorld).
    */
   worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
-    const { left, top } = this.getViewOrigin();
+    const { left, top } = this.getStableViewOrigin();
     return {
       x: worldX - left,
       y: worldY - top,
@@ -224,10 +240,11 @@ export class CameraController {
 
   /**
    * Converts logical canvas screen coordinates into world coordinates.
-   * Exact mathematical inverse of worldToScreen().
+   * Excludes recoil kick and screenshake so stationary aim stays rock-solid
+   * while remaining the exact mathematical inverse of worldToScreen().
    */
   screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
-    const { left, top } = this.getViewOrigin();
+    const { left, top } = this.getStableViewOrigin();
     return {
       x: screenX + left,
       y: screenY + top,
