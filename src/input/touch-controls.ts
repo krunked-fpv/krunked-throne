@@ -597,8 +597,8 @@ export class TouchControlsManager {
     nearbyInteractable: boolean,
     timeSec: number,
   ): void {
-    let baseAlpha = pressed ? 0.72 : 0.24;
-    let accent = '#d8dce8';
+    let baseAlpha = pressed ? 0.84 : 0.42;
+    let accent = '#e4e8f4';
 
     if (r.id === 'active') {
       accent = '#52e864';
@@ -608,19 +608,23 @@ export class TouchControlsManager {
       accent = '#ffe047';
       if (!pressed) {
         baseAlpha = nearbyInteractable
-          ? 0.48 + 0.1 * Math.sin(timeSec * 6.5)
-          : 0.15;
+          ? 0.64 + 0.12 * Math.sin(timeSec * 6.5)
+          : 0.3;
       }
     } else if (r.id === 'pause') {
-      accent = '#d8dce8';
-      if (!pressed) baseAlpha = 0.24;
+      accent = '#e4e8f4';
+      if (!pressed) baseAlpha = 0.38;
     }
 
     ctx.save();
-    ctx.globalAlpha = clamp(baseAlpha, 0.1, 0.85);
+    ctx.globalAlpha = clamp(baseAlpha, 0.2, 0.9);
 
-    // Ultra-clean translucent dark backing + 1px pixel hairline border (no ugly heavy circles)
-    ctx.fillStyle = pressed ? 'rgba(32, 28, 44, 0.75)' : 'rgba(10, 8, 16, 0.45)';
+    // Subtle dark pixel outer halo + translucent dark backing so triggers stay legible on bright Desert sand & snow
+    ctx.fillStyle = 'rgba(6, 4, 12, 0.52)';
+    ctx.fillRect(r.x - 1, r.y, r.w + 2, r.h);
+    ctx.fillRect(r.x, r.y - 1, r.w, r.h + 2);
+
+    ctx.fillStyle = pressed ? 'rgba(28, 24, 42, 0.88)' : 'rgba(10, 8, 18, 0.72)';
     ctx.fillRect(r.x + 1, r.y, r.w - 2, r.h);
     ctx.fillRect(r.x, r.y + 1, r.w, r.h - 2);
 
@@ -628,24 +632,34 @@ export class TouchControlsManager {
     ctx.lineWidth = 1;
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
 
-    // Minimal crisp pixel icon + tiny micro-label per trigger
+    // Minimal crisp pixel icon + tiny micro-label per trigger (with 1px dark drop shadow for sand contrast)
     const mx = Math.round(r.x + r.w * 0.5);
     const my = Math.round(r.y + r.h * 0.5);
-    ctx.fillStyle = pressed ? '#ffffff' : accent;
+    const fg = pressed ? '#ffffff' : accent;
 
     if (r.id === 'pause') {
+      ctx.fillStyle = '#08060e';
+      ctx.fillRect(mx - 2, my - 2, 2, 7);
+      ctx.fillRect(mx + 2, my - 2, 2, 7);
+      ctx.fillStyle = fg;
       ctx.fillRect(mx - 3, my - 3, 2, 7);
       ctx.fillRect(mx + 1, my - 3, 2, 7);
     } else if (r.id === 'active') {
       const iy = r.y + 6;
+      ctx.fillStyle = '#08060e';
+      drawMicroLabel(ctx, 'ACT', mx + 1, r.y + 13);
+      ctx.fillStyle = fg;
       ctx.fillRect(mx - 1, iy - 3, 2, 7);
       ctx.fillRect(mx - 3, iy - 1, 6, 3);
       ctx.fillStyle = '#0c0912';
       ctx.fillRect(mx - 1, iy, 2, 1);
-      ctx.fillStyle = pressed ? '#ffffff' : accent;
+      ctx.fillStyle = fg;
       drawMicroLabel(ctx, 'ACT', mx, r.y + 12);
     } else if (r.id === 'swap') {
       const iy = r.y + 6;
+      ctx.fillStyle = '#08060e';
+      drawMicroLabel(ctx, 'SWP', mx + 1, r.y + 13);
+      ctx.fillStyle = fg;
       ctx.fillRect(mx - 4, iy - 2, 7, 1);
       ctx.fillRect(mx + 2, iy - 3, 1, 3);
       ctx.fillRect(mx - 3, iy + 1, 7, 1);
@@ -653,6 +667,9 @@ export class TouchControlsManager {
       drawMicroLabel(ctx, 'SWP', mx, r.y + 12);
     } else if (r.id === 'pickup') {
       const iy = r.y + 6;
+      ctx.fillStyle = '#08060e';
+      drawMicroLabel(ctx, 'USE', mx + 1, r.y + 13);
+      ctx.fillStyle = fg;
       ctx.fillRect(mx - 4, iy - 3, 2, 1);
       ctx.fillRect(mx - 4, iy - 3, 1, 2);
       ctx.fillRect(mx + 2, iy - 3, 2, 1);

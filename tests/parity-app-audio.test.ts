@@ -12,7 +12,10 @@ import {
   DEFAULT_COOLDOWN_MS,
   PAUSE_DUCKING_FACTOR,
   RAD_COOLDOWN_MS,
+  SYNTH_SOFT_CLIP_CEILING,
+  buildSoftLimitCurve,
   classifySound,
+  playSynthSound,
   resolveMusicRoute,
   resolveSynthAmbienceKind,
   resolveSynthMusicTheme,
@@ -71,6 +74,7 @@ function makeSteamLikeManifest(): AssetManifest {
     },
     ambience: {
       'amb/0': 'audio/amb/0.ogg',
+      'amb/0b': 'audio/amb/0b.ogg',
       'amb/1': 'audio/amb/1.ogg',
       'amb/2': 'audio/amb/2.ogg',
       'amb/3': 'audio/amb/3.ogg',
@@ -86,6 +90,10 @@ function makeSteamLikeManifest(): AssetManifest {
       'amb/105': 'audio/amb/105.ogg',
       'amb/106': 'audio/amb/106.ogg',
     },
+    looseSounds: {
+      'snd/FishUltraA': 'audio/snd/FishUltraA.ogg',
+      'snd/CrystalUltraB': 'audio/snd/CrystalUltraB.ogg',
+    },
     sounds: {
       sndPortalOpen: { id: 1, name: 'sndPortalOpen', flags: 0, file: 'sndPortalOpen', volume: 0.9, pitch: 1, groupId: 0, audioId: 1, sourceType: 'audo-wav', path: 'audio/audo/1.wav' },
       sndPortalClose: { id: 2, name: 'sndPortalClose', flags: 0, file: 'sndPortalClose', volume: 1.0, pitch: 1, groupId: 0, audioId: 2, sourceType: 'audo-wav', path: 'audio/audo/2.wav' },
@@ -94,6 +102,8 @@ function makeSteamLikeManifest(): AssetManifest {
       sndMeleeFlip: { id: 5, name: 'sndMeleeFlip', flags: 0, file: 'sndMeleeFlip', volume: 1.0, pitch: 1, groupId: 0, audioId: 5, sourceType: 'audo-wav', path: 'audio/audo/5.wav' },
       sndImpWristHit: { id: 6, name: 'sndImpWristHit', flags: 0, file: 'sndImpWristHit', volume: 1.0, pitch: 1, groupId: 0, audioId: 6, sourceType: 'audo-wav', path: 'audio/audo/6.wav' },
       sndHitFlesh: { id: 7, name: 'sndHitFlesh', flags: 0, file: 'sndHitFlesh', volume: 0.65, pitch: 1, groupId: 0, audioId: 7, sourceType: 'audo-wav', path: 'audio/audo/7.wav' },
+      sndSniperTarget: { id: 8, name: 'sndSniperTarget', flags: 0, file: 'sndSniperTarget', volume: 1.0, pitch: 1, groupId: 0, audioId: 8, sourceType: 'audo-wav', path: 'audio/audo/1004.wav' },
+      sndMutant1Slct: { id: 9, name: 'sndMutant1Slct', flags: 0, file: 'sndMutant1Slct', volume: 1.0, pitch: 1, groupId: 0, audioId: 9, sourceType: 'audo-wav', path: 'audio/audo/9.wav' },
     },
   };
 }
@@ -804,7 +814,7 @@ describe('parity-app-audio: GameApp Loop Integration, Sleeping Boss Music, Curso
       }
     }
 
-    // 4. Sleeping Big Dog on 3-3 keeps Scrapyard mus/3 until awake
+    // 4. Sleeping Big Dog on 3-3 plays silent Scrapyard ambience (no music) until awake, then mus/Boss2
     bridge.warpArea('3-3', 0);
     const st33 = internal.simState!;
     if (st33.boss) {
@@ -812,7 +822,8 @@ describe('parity-app-audio: GameApp Loop Integration, Sleeping Boss Music, Curso
       if (dogEnt) {
         dogEnt.aiState = 'sleep';
         internal.syncMusicRouting();
-        expect(internal.audio.getStats().currentMusic).toBe('mus/3');
+        expect(internal.audio.getStats().currentMusic).toBeNull();
+        expect(internal.audio.getStats().currentAmbience).toBe('amb/3');
         dogEnt.aiState = 'idle';
         internal.syncMusicRouting();
         expect(internal.audio.getStats().currentMusic).toBe('mus/Boss2');
@@ -824,9 +835,373 @@ describe('parity-app-audio: GameApp Loop Integration, Sleeping Boss Music, Curso
     expect(['playing', 'mutation_select']).toContain(bridge.getScreen());
     if (internal.simState!.phase === 'mutation_select') {
       expect(bridge.getScreen()).toBe('mutation_select');
+      expect(internal.audio.getStats().currentMusic).toBeNull();
+      expect(internal.audio.getStats().currentAmbience).toBe('amb/0b');
     }
 
     app.destroy();
+  });
+
+  it('fixes Wave 2 P0/P1 audio, music, looseSounds, headroom, keybind swap, asset probe, and touch interactPrompt bugs', async () => {
+    // 1. Newly wired NT SFX classifications
+    expect(classifySound('sndSwapShotgun')).toBe('ui_click');
+    expect(classifySound('sndSwapHammer')).toBe('ui_click');
+    expect(classifySound('sndSwapEnergy')).toBe('ui_click');
+    expect(classifySound('sndShotReload')).toBe('ui_click');
+    expect(classifySound('sndCrossReload')).toBe('ui_click');
+    expect(classifySound('sndNadeReload')).toBe('ui_click');
+    expect(classifySound('sndPlasmaReload')).toBe('ui_click');
+    expect(classifySound('sndLightningReload')).toBe('ui_click');
+    expect(classifySound('sndClickBack')).toBe('ui_click');
+    expect(classifySound('sndMutHover')).toBe('ui_click');
+    expect(classifySound('sndFootSand')).toBe('footstep');
+    expect(classifySound('sndFootMetal')).toBe('footstep');
+    expect(classifySound('sndFootSnow')).toBe('footstep');
+    expect(classifySound('sndFootWater')).toBe('footstep');
+    expect(classifySound('sndNothingFootstep')).toBe('boss_intro'); // Throne stomp preserved!
+    expect(classifySound('sndMutRhinoSkin')).toBe('level_up');
+    expect(classifySound('sndMutTriggerFingers')).toBe('level_up');
+    expect(classifySound('snd/FishUltraA')).toBe('level_up');
+    expect(classifySound('snd/CrystalUltraB')).toBe('level_up');
+    expect(classifySound('sndPortalLoop')).toBe('portal');
+    expect(classifySound('sndPortalStrikeLoop')).toBe('portal');
+    expect(classifySound('sndRogueAim')).toBe('ability');
+    expect(classifySound('sndChickenHeadlessLoop')).toBe('ability');
+
+    // 2. Synth soft-clip limiter guarantees peak < 0.92 (< 0.95) and zero DC offset across all hot sounds
+    const curve = buildSoftLimitCurve(513);
+    let maxCurveAbs = 0;
+    for (let i = 0; i < curve.length; i++) {
+      maxCurveAbs = Math.max(maxCurveAbs, Math.abs(curve[i]!));
+    }
+    expect(maxCurveAbs).toBeLessThan(0.92);
+    expect(maxCurveAbs).toBeLessThanOrEqual(SYNTH_SOFT_CLIP_CEILING);
+    expect(curve[256]).toBe(0); // exact zero DC offset
+
+    // Verify hot synth presets route through the soft-limiter and keep Boss Intro balanced relative to Pistol
+    const measureSynthVoice = (soundName: string) => {
+      let limiterConnected = false;
+      let limiterPeak = 0;
+      let preScaleGain = 1;
+      const layerPeakGains: number[] = [];
+      const makeParam = (init = 0) => {
+        let maxV = init;
+        const p = {
+          value: init,
+          setValueAtTime: (v: number) => {
+            p.value = v;
+            maxV = Math.max(maxV, Math.abs(v));
+          },
+          linearRampToValueAtTime: (v: number) => {
+            p.value = v;
+            maxV = Math.max(maxV, Math.abs(v));
+          },
+          exponentialRampToValueAtTime: (v: number) => {
+            p.value = v;
+            maxV = Math.max(maxV, Math.abs(v));
+          },
+          cancelScheduledValues: () => {},
+          getMax: () => maxV,
+        };
+        return p;
+      };
+      const gains: Array<{ tag: string; gain: ReturnType<typeof makeParam>; to: string }> = [];
+      const mockCtx = {
+        state: 'running',
+        currentTime: 0,
+        sampleRate: 44100,
+        destination: { tag: 'destination' },
+        createGain: () => {
+          const g = makeParam(1);
+          const rec = { tag: `g${gains.length}`, gain: g, to: '' };
+          gains.push(rec);
+          return {
+            tag: rec.tag,
+            gain: g,
+            connect: (dest: { tag?: string }) => {
+              rec.to = dest.tag ?? 'unknown';
+            },
+            disconnect: () => {},
+          };
+        },
+        createWaveShaper: () => {
+          const ws = {
+            tag: 'shaper',
+            curve: null as Float32Array | null,
+            oversample: 'none',
+            connect: (dest: { tag?: string }) => {
+              if (dest.tag === 'destination' && ws.curve) {
+                limiterConnected = true;
+                for (let i = 0; i < ws.curve.length; i++) {
+                  limiterPeak = Math.max(limiterPeak, Math.abs(ws.curve[i]!));
+                }
+              }
+            },
+            disconnect: () => {},
+          };
+          return ws;
+        },
+        createOscillator: () => ({
+          type: 'sine',
+          frequency: makeParam(440),
+          connect: () => {},
+          disconnect: () => {},
+          start: () => {},
+          stop: () => {},
+        }),
+        createBiquadFilter: () => ({
+          type: 'lowpass',
+          frequency: makeParam(1000),
+          Q: makeParam(1),
+          connect: () => {},
+          disconnect: () => {},
+        }),
+        createBuffer: (_c: number, len: number) => ({
+          duration: len / 44100,
+          getChannelData: () => new Float32Array(len),
+        }),
+        createBufferSource: () => ({
+          buffer: null,
+          connect: () => {},
+          disconnect: () => {},
+          start: () => {},
+          stop: () => {},
+        }),
+      } as unknown as AudioContext;
+
+      const voice = playSynthSound(mockCtx, soundName, mockCtx.destination, { volume: 1.0 });
+      voice.stop();
+      // preScale is g0 (connects to shaper -> destination); all voice layer gains feed into g0
+      preScaleGain = gains[0]?.gain.value ?? 1;
+      for (let i = 1; i < gains.length; i++) {
+        if (gains[i]!.to === 'g0') {
+          layerPeakGains.push(gains[i]!.gain.getMax());
+        }
+      }
+      const rawSum = layerPeakGains.reduce((a, b) => a + b, 0);
+      // Evaluate exact post-soft-clip peak for worst-case constructive layer sum
+      const softPeak = SYNTH_SOFT_CLIP_CEILING * Math.tanh(rawSum / SYNTH_SOFT_CLIP_CEILING);
+      return { limiterConnected, limiterPeak, preScaleGain, rawSum, softPeak };
+    };
+
+    for (const hotSound of [
+      'sndExplosion',
+      'sndShotgun',
+      'sndDoubleFlameShotgun',
+      'sndHeavyMachinegun',
+      'sndBanditDie',
+      'sndBossIntroIn',
+      'sndPistol',
+    ]) {
+      const m = measureSynthVoice(hotSound);
+      expect(m.limiterConnected).toBe(true);
+      expect(m.preScaleGain).toBeCloseTo(0.5, 4);
+      expect(m.limiterPeak).toBeLessThan(0.92);
+      expect(m.softPeak).toBeLessThan(0.92);
+    }
+    const pistolM = measureSynthVoice('sndPistol');
+    const bossM = measureSynthVoice('sndBossIntroIn');
+    // Boss intro sum should stay balanced near gunfire (never 7x pistol!)
+    expect(bossM.rawSum).toBeLessThan(pistolM.rawSum * 1.5);
+
+    // 3. Steam Audio: NO sndEnemyAlert -> sndSniperTarget alias, looseSounds lazy-load, & NO double death SFX
+    const steam = makeSteamLikeManifest();
+    const { ctx, startedBuffers } = makeMockAudioContext('running');
+    const fetchedUrls: string[] = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrls.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        arrayBuffer: async () => new ArrayBuffer(16),
+      };
+    }) as unknown as typeof fetch;
+
+    try {
+      const engine = new AudioEngine({ context: ctx, manifest: steam });
+      // sndEnemyAlert must NEVER alias to sndSniperTarget!
+      expect(engine.resolveManifestSoundKey('sndEnemyAlert')).toBe('sndEnemyAlert');
+      expect(engine.hasManifestSound('sndEnemyAlert')).toBe(false);
+
+      // Desert Bandit enemy_alert in Steam mode must NOT play sndSniperTarget or emit a synth beep
+      engine.consumeEvents(
+        [{ type: 'enemy_alert', entityId: 9, x: 20, y: 0, defId: 'bandit' } as unknown as SimEvent],
+        0,
+        0,
+      );
+      expect(engine.getStats().activeVoices).toBe(0);
+      expect(fetchedUrls.some((u) => u.includes('1004.wav'))).toBe(false);
+
+      // looseSounds (`snd/FishUltraA` and bare `FishUltraA`) resolve, lazy-load, and play decoded AudioBuffer!
+      expect(engine.resolveManifestSoundKey('snd/FishUltraA')).toBe('snd/FishUltraA');
+      expect(engine.resolveManifestSoundKey('FishUltraA')).toBe('snd/FishUltraA');
+      expect(engine.hasManifestSound('snd/FishUltraA')).toBe(true);
+      expect(engine.playSfx('snd/FishUltraA', 0, 0)).toBe(true);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchedUrls.some((u) => u.includes('audio/snd/FishUltraA.ogg'))).toBe(true);
+      expect(startedBuffers.length).toBeGreaterThanOrEqual(1);
+
+      // Player death with companion mutant death SFX must NOT double-fire sndPlayerDeath!
+      const voicesBeforeDeath = engine.getStats().activeVoices;
+      engine.consumeEvents(
+        [
+          { type: 'sfx', sound: 'sndMutant1Dead', x: 0, y: 0 },
+          { type: 'player_died', cause: 'BANDIT', killerSprite: 'sprBanditIdle', areaCode: '1-1', loop: 0, kills: 3 },
+        ],
+        0,
+        0,
+        { handleMusic: false },
+      );
+      expect(engine.getStats().activeVoices).toBe(voicesBeforeDeath + 1);
+
+      // Music routing for 3-3 sleeping Big Dog & mutation_select / ultra_select
+      expect(resolveMusicRoute({ areaCode: '3-3', biome: 'scrapyard', bossId: null }, steam)).toMatchObject({
+        musicTrack: null,
+        ambienceTrack: 'amb/3',
+      });
+      expect(resolveMusicRoute({ areaCode: '3-3', biome: 'scrapyard', bossId: 'big_dog' }, steam)).toMatchObject({
+        musicTrack: 'mus/Boss2',
+        ambienceTrack: 'amb/3',
+      });
+      expect(resolveMusicRoute({ screen: 'mutation_select', areaCode: '1-1', biome: 'desert' }, steam)).toMatchObject({
+        musicTrack: null,
+        ambienceTrack: 'amb/0b',
+      });
+      expect(resolveMusicRoute({ screen: 'ultra_select', areaCode: '5-1', biome: 'frozen_city' }, steam)).toMatchObject({
+        musicTrack: null,
+        ambienceTrack: 'amb/0b',
+      });
+
+      // setAssetSource with reestablishTracks: false does NOT fetch stale pre-swap 'musThemeA'
+      const beforeSwapFetches = fetchedUrls.length;
+      engine.playMusic('mus/ThemeA');
+      await Promise.resolve();
+      const afterInitMusic = fetchedUrls.length;
+      expect(afterInitMusic).toBeGreaterThan(beforeSwapFetches);
+      engine.setAssetSource(steam, { reestablishTracks: false });
+      expect(fetchedUrls.length).toBe(afterInitMusic);
+
+      engine.dispose();
+
+      // 4. GameApp: Built-In preference still probes /nt-assets/manifest.json -> hasServerSteam = true,
+      //    Keybind conflict cleanly swaps, interactPrompt detected for touch, & zero double music calls on 7-3 / Loop 1!
+      const { canvas } = makeFakeCanvas();
+      const app = new GameApp(canvas);
+      const internal = app as unknown as {
+        hasServerSteam: boolean;
+        simState: SimState | null;
+        audio: AudioEngine;
+        input: InputManager;
+        saveManager: { getData: () => ReturnType<typeof createDefaultSaveData> };
+        screen: string;
+        probeServerSteamManifest: (base?: string) => Promise<boolean>;
+        swapAssetBundle: (b: ReturnType<typeof createFallbackBundle>) => void;
+        hasNearbyInteractable: (st: SimState) => boolean;
+        shouldRenderWorldBehindScreen: (sc: string) => boolean;
+        handleMenuAction: (action: unknown) => void;
+        syncScreenWithSimPhase: () => void;
+        createDebugBridge: () => {
+          startRun: (m?: 'fish', seed?: number, crown?: 'none') => void;
+          warpArea: (area: '7-3' | '3-3' | '1-1', loop?: number) => void;
+        };
+      };
+      // Mock fetch returning 200 JSON on HEAD (and fallback-triggering response on GET) to verify init() sets hasServerSteam = true even when bundle is fallback!
+      globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'HEAD') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json; charset=utf-8' }),
+          };
+        }
+        return {
+          ok: false,
+          status: 404,
+          headers: new Headers(),
+          text: async () => '',
+        };
+      }) as unknown as typeof fetch;
+
+      await app.init();
+      expect(internal.hasServerSteam).toBe(true);
+
+      // Verify 204 No Content (missing `.nt-assets/manifest.json` on Vite dev server) returns false cleanly
+      globalThis.fetch = vi.fn(async () => ({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+      })) as unknown as typeof fetch;
+      expect(await internal.probeServerSteamManifest('/nt-assets')).toBe(false);
+
+      // Live Built-In <-> Steam bundle swap calls playMusic ONCE (zero stale musThemeA double-fetch!)
+      const swapPlayMusicSpy = vi.spyOn(internal.audio, 'playMusic');
+      const steamBundle = { ...createFallbackBundle(), manifest: steam, sourceMode: 'steam' as const };
+      internal.swapAssetBundle(steamBundle);
+      expect(swapPlayMusicSpy).toHaveBeenCalledTimes(1);
+      expect(swapPlayMusicSpy).toHaveBeenLastCalledWith('mus/ThemeA');
+      swapPlayMusicSpy.mockRestore();
+
+      // Keybind conflict swap: rebinding `up` to `KeyS` swaps `down` to `KeyW` (zero duplicate lock!)
+      expect(internal.saveManager.getData().keybinds.up).toBe('KeyW');
+      expect(internal.saveManager.getData().keybinds.down).toBe('KeyS');
+      internal.handleMenuAction({ type: 'rebind_key', field: 'up', code: 'KeyS' });
+      expect(internal.saveManager.getData().keybinds.up).toBe('KeyS');
+      expect(internal.saveManager.getData().keybinds.down).toBe('KeyW');
+      expect(internal.input.getKeybinds().up).toBe('KeyS');
+      expect(internal.input.getKeybinds().down).toBe('KeyW');
+
+      // Zero double playMusic calls on 7-3 sleeping Throne or Loop 1 1-1!
+      const bridge = internal.createDebugBridge();
+      bridge.startRun('fish', 1337, 'none');
+      const playMusicSpy = vi.spyOn(internal.audio, 'playMusic');
+
+      bridge.warpArea('7-3', 0);
+      expect(playMusicSpy).toHaveBeenCalledTimes(1);
+      expect(playMusicSpy).toHaveBeenLastCalledWith('mus/Boss4Silence');
+
+      playMusicSpy.mockClear();
+      bridge.warpArea('1-1', 1);
+      expect(playMusicSpy).toHaveBeenCalledTimes(1);
+      expect(playMusicSpy).toHaveBeenLastCalledWith('mus/1b');
+
+      // Mutation Select / Ultra Select route to amb/0b + silence music + suppress world bleed-through
+      const st = internal.simState!;
+      st.phase = 'mutation_select';
+      internal.syncScreenWithSimPhase();
+      expect(internal.screen).toBe('mutation_select');
+      expect(internal.audio.getStats().currentMusic).toBeNull();
+      expect(internal.audio.getStats().currentAmbience).toBe('amb/0b');
+      expect(internal.shouldRenderWorldBehindScreen('mutation_select')).toBe(false);
+      expect(internal.shouldRenderWorldBehindScreen('ultra_select')).toBe(false);
+
+      // Touch interactable check detects any nearby prop with `interactPrompt` (Fixed Golden Car, Ice Flower, Pedestal, Van, Throne)
+      st.pickups = [];
+      st.props = [
+        {
+          id: 999,
+          kind: 'car',
+          x: st.player.x + 28,
+          y: st.player.y,
+          radius: 14,
+          hp: 30,
+          maxHp: 30,
+          solid: true,
+          opened: true,
+          hurtFlashTicks: 0,
+          sprite: 'sprVenusCarFixed',
+          interactPrompt: '[E] ENTER MANSION',
+        },
+      ];
+      expect(internal.hasNearbyInteractable(st)).toBe(true);
+      st.props[0]!.x = st.player.x + 120;
+      expect(internal.hasNearbyInteractable(st)).toBe(false);
+
+      app.destroy();
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 
   it('parses nested NTT-Objects.html and NTT-Scripting.html cleanly via tools/oracle-dump', () => {

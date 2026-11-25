@@ -63,9 +63,56 @@ declare global {
 }
 
 const CORE_PRELOAD_SFX = [
+  // Menu, Campfire & UI SFX (warmed on boot so first hover/select/confirm NEVER falls back to synth)
   'sndClick',
   'sndClickBack',
   'sndHover',
+  'sndMutHover',
+  'sndMenuASkin',
+  'sndMenuBSkin',
+  'sndMenuCrown',
+  'sndMenuGoldwep',
+  // All 12 Campfire mutant select & confirm voices
+  'sndMutant1Slct', 'sndMutant2Slct', 'sndMutant3Slct', 'sndMutant4Slct',
+  'sndMutant5Slct', 'sndMutant6Slct', 'sndMutant7Slct', 'sndMutant8Slct',
+  'sndMutant9Slct', 'sndMutant10Slct', 'sndMutant11Slct', 'sndMutant12Slct',
+  'sndMutant1Cnfm', 'sndMutant2Cnfm', 'sndMutant3Cnfm', 'sndMutant4Cnfm',
+  'sndMutant5Cnfm', 'sndMutant6Cnfm', 'sndMutant7Cnfm', 'sndMutant8Cnfm',
+  'sndMutant9Cnfm', 'sndMutant10Cnfm', 'sndMutant11Cnfm', 'sndMutant12Cnfm',
+  // Common chests & pickups
+  'sndWeaponChest',
+  'sndAmmoChest',
+  'sndBigWeaponChest',
+  'sndCursedChest',
+  'sndRadChest',
+  'sndHealthChest',
+  'sndChestOpen',
+  'sndPickupDisappear',
+  'sndRadPickup',
+  'sndAmmoPickup',
+  'sndHPPickup',
+  'sndHPPickupBig',
+  'sndWeaponPickup',
+  'sndCursedPickup',
+  // Common weapon swaps & reload completion clicks
+  'sndSwapPistol',
+  'sndSwapShotgun',
+  'sndSwapMachinegun',
+  'sndSwapSword',
+  'sndSwapBow',
+  'sndSwapExplosive',
+  'sndSwapEnergy',
+  'sndSwapFlame',
+  'sndSwapHammer',
+  'sndSwapGold',
+  'sndSwapMotorized',
+  'sndSwapCursed',
+  'sndShotReload',
+  'sndCrossReload',
+  'sndNadeReload',
+  'sndPlasmaReload',
+  'sndLightningReload',
+  // Core combat, portal, boss, mutation & loop SFX
   'sndPistol',
   'sndShotgun',
   'sndMachinegun',
@@ -76,15 +123,9 @@ const CORE_PRELOAD_SFX = [
   'sndHitWall',
   'sndEmpty',
   'sndMeleeFlip',
-  'sndSwapPistol',
-  'sndPickupDisappear',
-  'sndRadPickup',
-  'sndAmmoPickup',
-  'sndHPPickup',
-  'sndHPPickupBig',
-  'sndWeaponPickup',
   'sndPortalOpen',
   'sndPortalClose',
+  'sndPortalLoop',
   'sndBossIntroIn',
   'sndMutAppear',
   'sndLevelUp',
@@ -92,6 +133,9 @@ const CORE_PRELOAD_SFX = [
   'sndMutant1Hurt',
   'sndBanditHit',
   'sndBanditDie',
+  'sndRogueAim',
+  'sndPortalStrikeLoop',
+  'sndChickenHeadlessLoop',
 ];
 
 const DEFAULT_IDLE_INPUT: InputFrame = {
@@ -202,6 +246,10 @@ export class GameApp {
     this.bundle = await loadAssets('/nt-assets', { modePreference });
     if (this.bundle.origin === 'steam-server') {
       this.hasServerSteam = true;
+    } else {
+      // Quietly probe `/nt-assets/manifest.json` even under `'builtin'` modePreference
+      // so Title Screen keeps `USE CUSTOM PACK` clickable across page reloads whenever `.nt-assets/` exists!
+      this.hasServerSteam = await this.probeServerSteamManifest('/nt-assets');
     }
 
     const save = this.saveManager.getData();
@@ -212,6 +260,8 @@ export class GameApp {
       settings: save.audio,
       resolveAudioUrl: (relPath) => this.bundle.getAudioUrl(relPath),
     });
+    // Pre-decode core Campfire voices, menu/chest/swap/reload SFX right on boot in Steam mode
+    this.preloadCoreSteamAudio();
 
     this.input = new InputManager(save.keybinds, {
       controls: save.controls,
@@ -351,6 +401,39 @@ export class GameApp {
     this.input.setLogicalSize(sz.width, sz.height);
   }
 
+  private async probeServerSteamManifest(baseUrl = '/nt-assets'): Promise<boolean> {
+    if (typeof fetch !== 'function') return false;
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    const url = `${cleanBase}/manifest.json`;
+    try {
+      const headRes = await fetch(url, { method: 'HEAD', cache: 'no-cache' });
+      if (headRes.status === 405) {
+        const getRes = await fetch(url, { method: 'GET', cache: 'no-cache' });
+        if (getRes.status === 204 || !getRes.ok) return false;
+        const ct = getRes.headers?.get?.('content-type')?.toLowerCase() ?? '';
+        if (ct && ct.includes('text/html')) return false;
+        const text = await getRes.text();
+        if (!text || !text.trim()) return false;
+        const parsed = JSON.parse(text) as { available?: boolean; sprites?: unknown };
+        return Boolean(parsed && typeof parsed === 'object' && parsed.available !== false && parsed.sprites);
+      }
+      if (headRes.status === 204 || !headRes.ok) return false;
+      const ct = headRes.headers?.get?.('content-type')?.toLowerCase() ?? '';
+      if (ct && ct.includes('text/html')) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private preloadCoreSteamAudio(): void {
+    if (!this.audio || this.bundle?.sourceMode !== 'steam') return;
+    const validCore = CORE_PRELOAD_SFX.filter((k) => this.audio.hasManifestSound(k));
+    if (validCore.length > 0) {
+      void this.audio.preloadSounds(validCore);
+    }
+  }
+
   private tryUnlockAudio(): void {
     if (this.audioUnlockDone || this.audioUnlockInFlight || !this.audio) return;
     if (this.audio.getStats().unlocked) {
@@ -367,8 +450,7 @@ export class GameApp {
           this.audioUnlockDone = true;
           this.removeAudioUnlockListeners();
           if (this.bundle.sourceMode === 'steam') {
-            const validCore = CORE_PRELOAD_SFX.filter((k) => Boolean(this.bundle.manifest.sounds[k]));
-            void this.audio.preloadSounds(validCore);
+            this.preloadCoreSteamAudio();
             this.lastMusicSignature = '';
             this.syncMusicRouting();
           }
@@ -639,6 +721,10 @@ export class GameApp {
             curInputMode,
           );
         }
+      } else if (this.screen === 'mutation_select' || this.screen === 'ultra_select') {
+        // Solid NT void backdrop so stale portal loading cards or LEVEL UP text never bleed behind selection cards
+        this.ctx.fillStyle = '#0a090e';
+        this.ctx.fillRect(0, 0, curSize.width, curSize.height);
       }
       this.menus.render(this.ctx, {
         screen: this.screen,
@@ -712,18 +798,20 @@ export class GameApp {
     }
     for (let i = 0; i < state.props.length; i++) {
       const pr = state.props[i]!;
-      if (
-        pr.opened ||
-        (pr.kind !== 'weapon_chest' &&
-          pr.kind !== 'big_weapon_chest' &&
-          pr.kind !== 'ammo_chest' &&
-          pr.kind !== 'proto_statue')
-      ) {
+      const hasPrompt = Boolean(pr.interactPrompt);
+      const isStandardInteractable =
+        !pr.opened &&
+        (pr.kind === 'weapon_chest' ||
+          pr.kind === 'big_weapon_chest' ||
+          pr.kind === 'ammo_chest' ||
+          pr.kind === 'proto_statue');
+      if (!hasPrompt && !isStandardInteractable) {
         continue;
       }
+      const reach = hasPrompt ? Math.max(34, (pr.radius || 0) + 26) : 34;
       const dx = pr.x - p.x;
       const dy = pr.y - p.y;
-      if (dx * dx + dy * dy <= maxDistSq) return true;
+      if (dx * dx + dy * dy <= reach * reach) return true;
     }
     return false;
   }
@@ -755,7 +843,8 @@ export class GameApp {
   }
 
   private shouldRenderWorldBehindScreen(screen: GameScreen): boolean {
-    if (screen === 'paused' || screen === 'mutation_select' || screen === 'ultra_select') {
+    // Suppress world / portal loading card behind Mutation & Ultra Select so zero world text bleeds through
+    if (screen === 'paused') {
       return true;
     }
     if (screen === 'game_over' || screen === 'victory') {
@@ -851,6 +940,8 @@ export class GameApp {
   private runSingleSimTick(inputFrame: InputFrame): void {
     if (!this.simState) return;
     stepSimulation(this.simState, inputFrame);
+    // Sync phase -> screen first so flushSimEvents / syncMusicRouting never double-route stale playing music
+    this.syncScreenWithSimPhase();
     this.flushSimEvents();
     this.checkLowHpAudioCue(this.simState);
 
@@ -860,8 +951,6 @@ export class GameApp {
       this.lastBossMusicState = bossSig;
       this.syncMusicRouting();
     }
-
-    this.syncScreenWithSimPhase();
   }
 
   private flushSimEvents(): void {
@@ -875,7 +964,8 @@ export class GameApp {
     const cam = this.renderer.getCamera();
     const listenX = Number.isFinite(cam.x) && (cam.x !== 0 || cam.y !== 0) ? cam.x : this.simState.player.x;
     const listenY = Number.isFinite(cam.y) && (cam.x !== 0 || cam.y !== 0) ? cam.y : this.simState.player.y;
-    this.audio.consumeEvents(events, listenX, listenY);
+    // GameApp.syncMusicRouting() is the single source of truth for music & ambience (eliminates area/boss double-fetches)
+    this.audio.consumeEvents(events, listenX, listenY, { handleMusic: false });
     this.triggerRumbleForEvents(events);
 
     let areaChanged = false;
@@ -939,14 +1029,10 @@ export class GameApp {
 
   private warmSteamAudioForEvents(events: readonly SimEvent[]): void {
     if (this.bundle.sourceMode !== 'steam') return;
-    const sounds = this.bundle.manifest.sounds;
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
-      if (ev.type === 'sfx') {
-        const resolved = this.audio.resolveManifestSoundKey(ev.sound);
-        if (sounds[resolved]?.path) {
-          void this.audio.loadSound(ev.sound);
-        }
+      if (ev.type === 'sfx' && this.audio.hasManifestSound(ev.sound)) {
+        void this.audio.loadSound(ev.sound);
       }
     }
   }
@@ -963,8 +1049,15 @@ export class GameApp {
       keys.add(mutantDef.sounds.hurt);
       keys.add(mutantDef.sounds.dead);
       keys.add(mutantDef.sounds.confirm);
+      keys.add(`sndMutant${mutantDef.raceIndex}Slct`);
       if (mutantDef.sounds.active) keys.add(mutantDef.sounds.active);
       keys.add(`sndMutant${mutantDef.raceIndex}LowH`);
+      // Warm Ultra speech looseSounds (e.g. snd/FishUltraA, snd/FishUltraB) if present
+      const cleanName = mutantDef.name.replace(/[^A-Za-z]/g, '');
+      if (cleanName) {
+        keys.add(`snd/${cleanName}UltraA`);
+        keys.add(`snd/${cleanName}UltraB`);
+      }
     }
     for (const slot of state.player.weapons) {
       if (!slot) continue;
@@ -980,11 +1073,7 @@ export class GameApp {
       if (def.sounds.fire) keys.add(def.sounds.fire);
     }
 
-    const sounds = this.bundle.manifest.sounds;
-    const valid = Array.from(keys).filter((k) => {
-      const resolved = this.audio.resolveManifestSoundKey(k);
-      return Boolean(sounds[resolved]?.path);
-    });
+    const valid = Array.from(keys).filter((k) => this.audio.hasManifestSound(k));
     if (valid.length > 0) {
       void this.audio.preloadSounds(valid);
     }
@@ -998,6 +1087,7 @@ export class GameApp {
           this.screen = 'mutation_select';
           this.input.setGameplayActive(false);
           this.input.clearAllLatches();
+          this.syncMusicRouting();
         }
         break;
       case 'ultra_select':
@@ -1005,6 +1095,7 @@ export class GameApp {
           this.screen = 'ultra_select';
           this.input.setGameplayActive(false);
           this.input.clearAllLatches();
+          this.syncMusicRouting();
         }
         break;
       case 'game_over':
@@ -1062,6 +1153,8 @@ export class GameApp {
     const inRunMusicContext =
       effectiveScreen !== 'title' &&
       effectiveScreen !== 'campfire' &&
+      effectiveScreen !== 'mutation_select' &&
+      effectiveScreen !== 'ultra_select' &&
       effectiveScreen !== 'game_over' &&
       effectiveScreen !== 'victory';
 
@@ -1119,6 +1212,10 @@ export class GameApp {
     this.lastPlayerHp = this.simState.player.hp;
 
     this.saveManager.recordRunStart(opts.mutant);
+    // Respect frame-0 phase transitions (e.g. Crown of Destiny opening mutation_select immediately)
+    // BEFORE flushing frame-0 events so music routes cleanly in a single pass with zero Campfire/combat bounce.
+    this.screen = 'playing';
+    this.syncScreenWithSimPhase();
     this.resetInterpolationSnapshot();
     this.preloadAreaSteamAudio(this.simState);
     this.flushSimEvents();
@@ -1130,9 +1227,6 @@ export class GameApp {
       }
     }
 
-    // Respect frame-0 phase transitions (e.g. Crown of Destiny opening mutation_select immediately)
-    this.screen = 'playing';
-    this.syncScreenWithSimPhase();
     this.input.setGameplayActive(this.screen === 'playing');
     this.input.clearAllLatches();
     this.audio.setPaused(false);
@@ -1157,6 +1251,7 @@ export class GameApp {
         }
         this.rebindingField = null;
         this.input.cancelKeyCapture();
+        this.input.clearMenuLatches();
         this.screen = action.screen;
         const pauseAudio =
           this.screen === 'paused' ||
@@ -1324,7 +1419,20 @@ export class GameApp {
       }
 
       case 'rebind_key': {
-        const updated = this.saveManager.updateKeybinds({ [action.field]: action.code });
+        // Cleanly swap bindings if the chosen key is already bound to another action (prevents duplicate-key softlocks!)
+        const current = this.saveManager.getData().keybinds;
+        const prevCode = current[action.field];
+        const patch: Partial<KeyBindings> = { [action.field]: action.code };
+        if (prevCode !== action.code) {
+          const fields = Object.keys(current) as Array<keyof KeyBindings>;
+          for (let i = 0; i < fields.length; i++) {
+            const otherField = fields[i]!;
+            if (otherField !== action.field && current[otherField] === action.code) {
+              patch[otherField] = prevCode;
+            }
+          }
+        }
+        const updated = this.saveManager.updateKeybinds(patch);
         this.input.setKeybinds(updated);
         this.rebindingField = null;
         this.input.cancelKeyCapture();
@@ -1434,10 +1542,18 @@ export class GameApp {
     this.renderer.setBundle(nextBundle);
     this.hud.setBundle(nextBundle);
     this.menus.setBundle(nextBundle);
+    // Defer track start to syncMusicRouting() below so live Built-In <-> Steam toggles never double-fetch mus/ThemeA
     this.audio.setAssetSource(nextBundle.manifest, {
       baseUrl: nextBundle.baseUrl || '/nt-assets',
       resolveAudioUrl: (relPath) => nextBundle.getAudioUrl(relPath),
+      reestablishTracks: false,
     });
+    if (nextBundle.sourceMode === 'steam') {
+      this.preloadCoreSteamAudio();
+      if (this.simState) {
+        this.preloadAreaSteamAudio(this.simState);
+      }
+    }
     this.lastMusicSignature = '';
     this.syncMusicRouting();
   }
