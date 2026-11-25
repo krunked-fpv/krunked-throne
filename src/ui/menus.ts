@@ -5,11 +5,13 @@ import type {
   GameScreen,
   InputDeviceMode,
   KeyBindings,
+  MutantDef,
   MutantId,
   MutationId,
   RenderSettings,
   SaveData,
   SimState,
+  SpriteDef,
   TargetFps,
   UltraId,
 } from '@/contracts';
@@ -19,7 +21,7 @@ import {
   MIN_GAMEPAD_DEADZONE,
   type MenuInputSnapshot,
 } from '@/input';
-import { BitmapFontRenderer } from '@/render/bitmap-font';
+import { BitmapFontRenderer, wrapMarkupText } from '@/render/bitmap-font';
 import { SpriteRenderer } from '@/render/sprites';
 import {
   ALL_CROWN_IDS,
@@ -31,6 +33,8 @@ import {
 } from './data-provider';
 import { computeUltraIconFrame } from './hud';
 
+export const OPAQUE_MENU_BACKDROP = 'rgba(10, 9, 14, 0.96)';
+
 const MAIN_PATH_AREAS = [
   '1-1', '1-2', '1-3',
   '2-1',
@@ -41,7 +45,12 @@ const MAIN_PATH_AREAS = [
   '7-1', '7-2', '7-3',
 ] as const;
 
-function resolveRunProgressIndex(areaCode: string): number {
+/**
+ * Maps any area code (main path, secrets, Crown Vault, Campfire 0-1, IDPD HQ)
+ * onto the 0..14 Game Over progression road map.
+ * Crown Vault maps to mid-run index 7 (matching AREA_RANK alongside 4-1), never 1-1!
+ */
+export function resolveRunProgressIndex(areaCode: string): number {
   const direct = (MAIN_PATH_AREAS as readonly string[]).indexOf(areaCode);
   if (direct >= 0) return direct;
   if (areaCode === '0-1') return MAIN_PATH_AREAS.length - 1;
@@ -49,6 +58,7 @@ function resolveRunProgressIndex(areaCode: string): number {
   if (areaCode === '2-?') return 3;
   if (areaCode === '3-?') return 5;
   if (areaCode === '4-?') return 7;
+  if (areaCode === 'vault') return 7;
   if (areaCode === '5-?') return 10;
   if (areaCode === 'hq-1') return 13;
   return 0;
@@ -63,6 +73,8 @@ export interface HitRegion {
   onActivate: () => MenuAction | null;
   onDrag?: (normX: number) => MenuAction | null;
 }
+
+export type UiSfxName = 'sndHover' | 'sndClick' | 'sndClickBack' | 'sndMutHover';
 
 export type MenuAction =
   | { type: 'open_screen'; screen: GameScreen }
@@ -86,7 +98,7 @@ export type MenuAction =
   | { type: 'use_builtin_art' }
   | { type: 'use_local_art' }
   | { type: 'clear_local_cache' }
-  | { type: 'ui_sfx'; sound: 'sndHover' | 'sndClick' };
+  | { type: 'ui_sfx'; sound: UiSfxName };
 
 export interface MenuRenderContext {
   screen: GameScreen;
@@ -126,6 +138,22 @@ const KEYBIND_LABELS: ReadonlyArray<{ field: keyof KeyBindings; label: string }>
   { field: 'pause', label: 'PAUSE / MENU' },
 ];
 
+/**
+ * Actions that already emit their own dedicated NT SFX in GameApp / Sim,
+ * so MenuSystem must NOT double-stack a generic sndClick alongside them.
+ */
+const SELF_SOUNDING_ACTIONS = new Set<MenuAction['type']>([
+  'ui_sfx',
+  'select_mutant',
+  'toggle_bskin',
+  'cycle_crown',
+  'toggle_golden',
+  'start_run',
+  'restart',
+  'pick_mutation',
+  'pick_ultra',
+]);
+
 function formatKeyCode(code: string): string {
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
@@ -136,6 +164,59 @@ function formatKeyCode(code: string): string {
 
 function pointInRegion(x: number, y: number, r: HitRegion): boolean {
   return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+
+function drawPixelBorder(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: string,
+  thickness = 1,
+): void {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  const iw = Math.round(w);
+  const ih = Math.round(h);
+  ctx.fillStyle = color;
+  ctx.fillRect(ix, iy, iw, thickness);
+  ctx.fillRect(ix, iy + ih - thickness, iw, thickness);
+  ctx.fillRect(ix, iy, thickness, ih);
+  ctx.fillRect(ix + iw - thickness, iy, thickness, ih);
+}
+
+/**
+ * Computes evenly spaced arc-length angles around an ellipse so wide 4:3
+ * ellipses do not bunch mutants together at the left/right tips.
+ */
+function computeBalancedEllipseAngles(count: number, rx: number, ry: number, startOffset: number): number[] {
+  const samples = 240;
+  const cumLen: number[] = [0];
+  let prevX = Math.cos(startOffset) * rx;
+  let prevY = Math.sin(startOffset) * ry;
+  for (let s = 1; s <= samples; s++) {
+    const t = startOffset + (s / samples) * Math.PI * 2;
+    const x = Math.cos(t) * rx;
+    const y = Math.sin(t) * ry;
+    cumLen.push(cumLen[s - 1]! + Math.hypot(x - prevX, y - prevY));
+    prevX = x;
+    prevY = y;
+  }
+  const totalLen = cumLen[samples]!;
+  const angles: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const target = (i / count) * totalLen;
+    let lo = 0;
+    let hi = samples;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cumLen[mid]! < target) lo = mid + 1;
+      else hi = mid;
+    }
+    angles.push(startOffset + (lo / samples) * Math.PI * 2);
+  }
+  return angles;
 }
 
 /**
@@ -174,6 +255,114 @@ export function resolveCorpseFrame(frameCount: number): number {
 }
 
 /**
+ * Resolves a visible, non-blank, non-white-flash frame index for Game Over killer/corpse portraits:
+ * - Explosion sprites (`sprExplosion`, `sprSmallExplosion`, `sprGreenExplosion`, `sprPlasmaImpact`):
+ *   skips solid-white flash frame 0 and selects fiery mid-frame `3` (or closest non-blank mid-frame).
+ * - Death/corpse sprites (`sprMutant*Dead`, `spr*Dead`):
+ *   scans backwards from last frame skipping `srcW <= 2 || srcH <= 2` dissolve frames
+ *   (fixes Horror `sprMutant11Dead` frame 5/6 & Y.V. `sprMutant6Dead` frame 18 empty black box!).
+ * - All other sprites: picks first frame with `srcW > 2 && srcH > 2`.
+ */
+export function resolveDisplaySpriteFrame(
+  sprite: SpriteDef | undefined,
+  spriteName: string = '',
+): number {
+  if (!sprite || sprite.frames.length <= 1) return 0;
+  const frames = sprite.frames;
+  const isVisible = (idx: number): boolean => {
+    const f = frames[idx];
+    return Boolean(f && f.srcW > 2 && f.srcH > 2);
+  };
+
+  if (/explo|impact|blast/i.test(spriteName)) {
+    const preferred = Math.min(3, frames.length - 1);
+    if (isVisible(preferred)) return preferred;
+    for (let i = Math.min(2, frames.length - 1); i < frames.length; i++) {
+      if (isVisible(i)) return i;
+    }
+    return preferred;
+  }
+
+  if (/dead/i.test(spriteName)) {
+    for (let i = frames.length - 1; i >= 1; i--) {
+      if (isVisible(i)) return i;
+    }
+    return isVisible(0) ? 0 : Math.max(0, frames.length - 1);
+  }
+
+  for (let i = 0; i < frames.length; i++) {
+    if (isVisible(i)) return i;
+  }
+  return 0;
+}
+
+export interface CampfireDetailsLayout {
+  passiveY: number;
+  passiveH: number;
+  activeY: number;
+  activeH: number;
+  tbY: number;
+  tbH: number;
+  bestY: number;
+  totalHeight: number;
+  lineSpacing: number;
+}
+
+/**
+ * Pure dynamic Y layout calculator for Campfire mutant details (PASSIVE, ACTIVE, TB, BEST).
+ * Guarantees zero pixel overlap across all 12 mutants (including Rogue, Horror, Melting, Y.V., Robot)
+ * in both Steam Pack and Built-In Art bitmap fonts.
+ */
+export function computeCampfireDetailsLayout(
+  fonts: BitmapFontRenderer,
+  mutant: Pick<MutantDef, 'passiveDesc' | 'activeDesc' | 'throneButtDesc'>,
+  maxWidth: number,
+  startY: number,
+  maxBottomY: number,
+  hasBestLine: boolean,
+): CampfireDetailsLayout {
+  const font = fonts.getFont('fntSmall');
+  const lineH = Math.round((font ? Math.max(1, font.lineHeight) : 8) * (font?.scaleY || 1));
+
+  const measureBlock = (text: string, lineSpacing: number): number => {
+    const lines = wrapMarkupText(font, text, maxWidth, 1);
+    if (lines.length === 0) return lineH;
+    return lineH + Math.max(0, lines.length - 1) * (lineH + lineSpacing);
+  };
+
+  const passiveText = `@wPASSIVE: @s${mutant.passiveDesc}`;
+  const activeText = `@gACTIVE: @s${mutant.activeDesc}`;
+  const tbText = `@pTB: @s${mutant.throneButtDesc}`;
+
+  const tryFit = (lineSpacing: number, gap: number): CampfireDetailsLayout => {
+    const passiveH = measureBlock(passiveText, lineSpacing);
+    const activeY = startY + passiveH + gap;
+    const activeH = measureBlock(activeText, lineSpacing);
+    const tbY = activeY + activeH + gap;
+    const tbH = measureBlock(tbText, lineSpacing);
+    const bestY = tbY + tbH + gap;
+    const endY = hasBestLine ? bestY + lineH : tbY + tbH;
+    return {
+      passiveY: startY,
+      passiveH,
+      activeY,
+      activeH,
+      tbY,
+      tbH,
+      bestY,
+      totalHeight: endY - startY,
+      lineSpacing,
+    };
+  };
+
+  const roomy = tryFit(1, 4);
+  if (startY + roomy.totalHeight <= maxBottomY) return roomy;
+  const compactGap = tryFit(1, 3);
+  if (startY + compactGap.totalHeight <= maxBottomY) return compactGap;
+  return tryFit(0, 3);
+}
+
+/**
  * Cycles target render framerate through 30 -> 60 -> 120 -> 30.
  */
 export function cycleTargetFps(current: TargetFps): TargetFps {
@@ -193,7 +382,7 @@ export function formatTargetFpsLabel(targetFps: TargetFps): string {
 
 /**
  * Complete Interactive Canvas UI Screen Controller with hit-tested clickable regions,
- * hover feedback, slider dragging, and keyboard navigation across all screens:
+ * hover feedback, slider dragging, and keyboard/gamepad navigation across all screens:
  * Title, Campfire Mutant Select, Mutation/Ultra Select, Pause, Options, Game Over, Victory.
  */
 export class MenuSystem {
@@ -208,6 +397,7 @@ export class MenuSystem {
   private titleSubCol = 0;
   private campfireRow: 'roster' | 'actions' = 'roster';
   private campfireActionIndex = 3; // 0=skin, 1=crown, 2=gold, 3=go, 4=back
+  private pauseInspectIdx = -1; // -1 = mutant summary, 0..muts-1 = mutation, muts = ultra
   private optionsTab: OptionsTab = 'general';
   private activeDragRegionId: string | null = null;
   private lastScreen: GameScreen | null = null;
@@ -228,6 +418,10 @@ export class MenuSystem {
 
   setDataProvider(data: UiDataProvider): void {
     this.data = data;
+  }
+
+  private get isSteamMode(): boolean {
+    return this.bundle.sourceMode === 'steam';
   }
 
   getHitRegions(): readonly HitRegion[] {
@@ -255,6 +449,59 @@ export class MenuSystem {
     return { row: this.campfireRow, actionIndex: this.campfireActionIndex };
   }
 
+  getPauseInspectIndex(): number {
+    return this.pauseInspectIdx;
+  }
+
+  /**
+   * Draws a sprite at crisp integer scale (1x or optional integer scale) centered inside a box
+   * whenever it fits, avoiding non-integer mixels.
+   */
+  private drawSpriteIntegerCentered(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    spriteName: string,
+    frame: number,
+    boxX: number,
+    boxY: number,
+    boxW: number,
+    boxH: number,
+    opts: { alpha?: number; flipX?: boolean; tintColor?: string; allow2x?: boolean } = {},
+  ): boolean {
+    const spr = this.sprites.getSprite(spriteName);
+    if (!spr || spr.frames.length === 0 || !this.sprites.hasSprite(spriteName)) return false;
+    const fIdx = Math.max(0, Math.min(spr.frames.length - 1, Math.floor(frame)));
+    const rect = spr.frames[fIdx];
+    if (!rect || rect.srcW <= 0 || rect.srcH <= 0) return false;
+
+    const scale =
+      opts.allow2x && rect.targetW * 2 <= boxW && rect.targetH * 2 <= boxH ? 2 : 1;
+    const drawW = rect.targetW * scale;
+    const drawH = rect.targetH * scale;
+
+    if (drawW <= boxW && drawH <= boxH) {
+      const left = Math.round(boxX + (boxW - drawW) * 0.5);
+      const top = Math.round(boxY + (boxH - drawH) * 0.5);
+      const drawX = left - (rect.targetX - spr.originX) * scale;
+      const drawY = top - (rect.targetY - spr.originY) * scale;
+      return this.sprites.draw(ctx, spriteName, drawX, drawY, {
+        frame: fIdx,
+        scaleX: scale,
+        scaleY: scale,
+        flipX: opts.flipX,
+        alpha: opts.alpha,
+        tintColor: opts.tintColor,
+        pixelSnap: true,
+      });
+    }
+
+    return this.sprites.drawInBox(ctx, spriteName, fIdx, boxX, boxY, boxW, boxH, {
+      alpha: opts.alpha,
+      flipX: opts.flipX,
+      tintColor: opts.tintColor,
+      maxScale: 1,
+    });
+  }
+
   /**
    * Processes pointer hover/click/drag, touch taps, and full keyboard/gamepad navigation.
    */
@@ -267,6 +514,7 @@ export class MenuSystem {
       this.titleSubCol = 0;
       this.campfireRow = 'roster';
       this.campfireActionIndex = 3;
+      this.pauseInspectIdx = -1;
       this.activeDragRegionId = null;
       this.hoveredId = null;
     }
@@ -285,7 +533,7 @@ export class MenuSystem {
     // Cancel pending key rebind cleanly on Back/B/Escape without leaving Options
     if (ctx.rebindingField && input.back) {
       actions.push({ type: 'cancel_rebind' });
-      actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
       return actions;
     }
 
@@ -301,8 +549,7 @@ export class MenuSystem {
       this.hoveredId = null;
     }
 
-    // Pointer hover detection (update only when pointer actually moved, clicked, or is dragging,
-    // or when moved is omitted by legacy headless test callers)
+    // Pointer hover detection
     const px = input.pointer.logicalX;
     const py = input.pointer.logicalY;
     const pointerShouldHitTest =
@@ -326,7 +573,12 @@ export class MenuSystem {
       if (nextHover !== this.hoveredId && !hadDirectionalNav) {
         this.hoveredId = nextHover;
         if (nextHover) {
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          const isMutationCard =
+            nextHover.startsWith('mut_card_') || nextHover.startsWith('ultra_card_');
+          actions.push({
+            type: 'ui_sfx',
+            sound: isMutationCard ? 'sndMutHover' : 'sndHover',
+          });
         }
       }
     }
@@ -349,8 +601,9 @@ export class MenuSystem {
       const act = hoveredRegion.onActivate();
       if (act) {
         actions.push(act);
-        if (act.type !== 'ui_sfx') {
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        if (!SELF_SOUNDING_ACTIONS.has(act.type)) {
+          const isBackBtn = hoveredRegion.id === 'camp_back' || hoveredRegion.id === 'opt_back';
+          actions.push({ type: 'ui_sfx', sound: isBackBtn ? 'sndClickBack' : 'sndClick' });
         }
       }
     }
@@ -414,18 +667,15 @@ export class MenuSystem {
         const selectedId = ctx.save.selectedMutant;
         const hasGold = Boolean(ctx.save.mutants[selectedId]?.goldenWeapon) || selectedId === 'yv';
 
-        // Instant shoulder/face shortcuts work cleanly from either focus row
+        // Instant shoulder/face shortcuts — do NOT double-emit sndClick alongside sndMenu* SFX!
         if (input.prevTab) {
           actions.push({ type: 'toggle_bskin', mutant: selectedId });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
         if (input.nextTab) {
           actions.push({ type: 'cycle_crown', crown: this.cycleCrownFrom(ctx.save.selectedCrown, 1) });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
         if (input.secondary) {
           actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
 
         // Up/Down switches between 12-Mutant Roster and Loadout Action Bar
@@ -436,14 +686,13 @@ export class MenuSystem {
           this.campfireRow = 'roster';
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (this.campfireRow === 'roster') {
+          // Do NOT double-emit sndHover alongside select_mutant (which plays sndMutant*Slct!)
           if (input.navLeft) {
             const next = mutants[(curIdx - 1 + mutants.length) % mutants.length]!;
             actions.push({ type: 'select_mutant', mutant: next.id });
-            actions.push({ type: 'ui_sfx', sound: 'sndHover' });
           } else if (input.navRight) {
             const next = mutants[(curIdx + 1) % mutants.length]!;
             actions.push({ type: 'select_mutant', mutant: next.id });
-            actions.push({ type: 'ui_sfx', sound: 'sndHover' });
           }
         } else {
           if (input.navLeft) {
@@ -484,6 +733,7 @@ export class MenuSystem {
                 break;
               case 4:
                 actions.push({ type: 'open_screen', screen: 'title' });
+                actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
                 break;
             }
           } else {
@@ -495,10 +745,9 @@ export class MenuSystem {
               useGoldenWeapon: hasGold && ctx.save.useGoldenWeapon,
             });
           }
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (input.back) {
           actions.push({ type: 'open_screen', screen: 'title' });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+          actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
         }
         break;
       }
@@ -512,19 +761,17 @@ export class MenuSystem {
             index: input.selectIndex,
             mutationId: list[input.selectIndex]!,
           });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
           break;
         }
         if (input.navLeft) {
           this.focusedIndex = (this.focusedIndex - 1 + list.length) % list.length;
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          actions.push({ type: 'ui_sfx', sound: 'sndMutHover' });
         } else if (input.navRight) {
           this.focusedIndex = (this.focusedIndex + 1) % list.length;
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          actions.push({ type: 'ui_sfx', sound: 'sndMutHover' });
         } else if (input.confirm) {
           const idx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
           actions.push({ type: 'pick_mutation', index: idx, mutationId: list[idx]! });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
         break;
       }
@@ -538,32 +785,43 @@ export class MenuSystem {
             index: input.selectIndex,
             ultraId: list[input.selectIndex]!,
           });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
           break;
         }
         if (input.navLeft || input.navRight) {
           this.focusedIndex = (this.focusedIndex + 1) % list.length;
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+          actions.push({ type: 'ui_sfx', sound: 'sndMutHover' });
         } else if (input.confirm) {
           const idx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
           actions.push({ type: 'pick_ultra', index: idx, ultraId: list[idx]! });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
         break;
       }
 
       case 'paused': {
+        const ownedCount =
+          (ctx.simState?.player.mutations.length ?? 0) + (ctx.simState?.player.ultra ? 1 : 0);
+
         if (input.back) {
           actions.push({ type: 'resume' });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+          actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
         } else if (input.retry) {
           actions.push({ type: 'restart' });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (input.navUp) {
           this.focusedIndex = (this.focusedIndex - 1 + 4) % 4;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (input.navDown) {
           this.focusedIndex = (this.focusedIndex + 1) % 4;
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if ((input.navLeft || input.navRight) && ownedCount > 0) {
+          // Keyboard/gamepad inspection across owned mutations + Ultra!
+          if (this.pauseInspectIdx < 0) {
+            this.pauseInspectIdx = input.navRight ? 0 : ownedCount - 1;
+          } else {
+            const delta = input.navRight ? 1 : -1;
+            const next = this.pauseInspectIdx + delta;
+            this.pauseInspectIdx =
+              next < 0 ? ownedCount - 1 : next >= ownedCount ? 0 : next;
+          }
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (input.confirm) {
           const map: MenuAction[] = [
@@ -572,8 +830,11 @@ export class MenuSystem {
             { type: 'restart' },
             { type: 'open_screen', screen: 'campfire' },
           ];
-          actions.push(map[this.focusedIndex] ?? { type: 'resume' });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+          const chosen = map[this.focusedIndex] ?? { type: 'resume' };
+          actions.push(chosen);
+          if (!SELF_SOUNDING_ACTIONS.has(chosen.type)) {
+            actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+          }
         }
         break;
       }
@@ -590,17 +851,16 @@ export class MenuSystem {
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (input.retry) {
           actions.push({ type: 'restart' });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (input.confirm) {
           if (this.focusedIndex === 1) {
             actions.push({ type: 'open_screen', screen: 'campfire' });
+            actions.push({ type: 'ui_sfx', sound: 'sndClick' });
           } else {
             actions.push({ type: 'restart' });
           }
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (input.back) {
           actions.push({ type: 'open_screen', screen: 'campfire' });
-          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+          actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
         }
         break;
       }
@@ -619,7 +879,7 @@ export class MenuSystem {
 
     if (input.back) {
       actions.push({ type: 'open_screen', screen: ctx.returnScreenFromOptions });
-      actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+      actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
       return;
     }
 
@@ -865,7 +1125,7 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // Reusable UI Primitives
+  // Reusable Crisp Integer Pixel UI Primitives
   // --------------------------------------------------------------------------
 
   private drawButton(
@@ -879,40 +1139,46 @@ export class MenuSystem {
     onActivate: () => MenuAction | null,
     opts: { accent?: string; focused?: boolean; font?: string; labelOffsetX?: number } = {},
   ): void {
+    const ix = Math.round(x);
+    const iy = Math.round(y);
+    const iw = Math.round(w);
+    const ih = Math.round(h);
     const isFocused = Boolean(opts.focused);
     const hovered = this.hoveredId === id || isFocused;
     const accent = opts.accent ?? '#ffe047';
 
-    // Crisp pulsing outer pixel glow when focused via gamepad/keyboard or hovered
+    // Crisp outer pixel focus frame (no half-pixel anti-aliased stroke!)
     if (hovered) {
-      const pulse = 0.24 + 0.14 * Math.sin(this.renderTimeSec * 7.5);
+      const pulse = 0.28 + 0.14 * Math.sin(this.renderTimeSec * 7.5);
       ctx.save();
       ctx.globalAlpha = pulse;
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x - 1.5, y - 1.5, w + 3, h + 3);
+      drawPixelBorder(ctx, ix - 1, iy - 1, iw + 2, ih + 2, accent, 1);
       ctx.restore();
     }
 
-    ctx.fillStyle = hovered ? 'rgba(46, 36, 62, 0.96)' : 'rgba(18, 15, 24, 0.88)';
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = hovered ? accent : '#5a5268';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    ctx.fillStyle = hovered ? 'rgba(42, 33, 56, 0.96)' : 'rgba(18, 14, 24, 0.90)';
+    ctx.fillRect(ix, iy, iw, ih);
+    // Subtle top bevel & bottom depth rail for chunky pixel feel
+    ctx.fillStyle = hovered ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.03)';
+    ctx.fillRect(ix + 1, iy + 1, iw - 2, 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillRect(ix + 1, iy + ih - 2, iw - 2, 1);
+
+    drawPixelBorder(ctx, ix, iy, iw, ih, hovered ? accent : '#564e66', 1);
 
     if (hovered) {
       ctx.fillStyle = accent;
-      ctx.fillRect(x + 2, y + 2, 2, h - 4);
+      ctx.fillRect(ix + 2, iy + 2, 2, ih - 4);
       if (isFocused) {
-        ctx.fillRect(x + w - 4, y + 2, 2, h - 4);
+        ctx.fillRect(ix + iw - 4, iy + 2, 2, ih - 4);
       }
     }
 
     this.fonts.draw(
       ctx,
       label,
-      x + w * 0.5 + (opts.labelOffsetX ?? 0),
-      y + h * 0.5,
+      ix + Math.floor(iw * 0.5) + (opts.labelOffsetX ?? 0),
+      iy + Math.floor(ih * 0.5),
       opts.font ?? 'fntM1',
       {
         align: 'center',
@@ -922,7 +1188,85 @@ export class MenuSystem {
       },
     );
 
-    this.regions.push({ id, x, y, w, h, onActivate });
+    this.regions.push({ id, x: ix, y: iy, w: iw, h: ih, onActivate });
+  }
+
+  /**
+   * Bold Nuclear Throne wasteland menu entry for the Title Screen (replaces generic SaaS boxes!):
+   * renders Steam sprMainMenuSplat or crisp jagged pixel accent splat + chevron pointers on hover/focus.
+   */
+  private drawTitleMenuItem(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    id: string,
+    cx: number,
+    y: number,
+    w: number,
+    h: number,
+    label: string,
+    onActivate: () => MenuAction | null,
+    opts: { accent: string; focused: boolean },
+  ): void {
+    const ix = Math.round(cx - w * 0.5);
+    const iy = Math.round(y);
+    const hovered = this.hoveredId === id || opts.focused;
+
+    if (hovered) {
+      const hasSplat = this.isSteamMode && this.sprites.hasSprite('sprMainMenuSplat');
+      if (hasSplat) {
+        // sprMainMenuSplat frame 3 (151x48, orig=(60,34)) -> center around (cx, iy + h/2)
+        this.sprites.draw(ctx, 'sprMainMenuSplat', cx - 16, iy + Math.floor(h * 0.5) + 7, {
+          frame: 3,
+          alpha: 0.92,
+          pixelSnap: true,
+        });
+      } else {
+        // Jagged wasteland pixel splat banner (pure integer fillRect — zero SaaS rectangle!)
+        ctx.fillStyle = '#09060d';
+        ctx.fillRect(ix - 8, iy + 3, w + 16, h - 6);
+        ctx.fillRect(ix - 2, iy, w + 4, h);
+        ctx.fillRect(ix + 6, iy - 2, w - 12, h + 4);
+        ctx.fillStyle = opts.accent;
+        ctx.fillRect(ix - 4, iy + 2, 4, h - 4);
+        ctx.fillRect(ix + w, iy + 2, 4, h - 4);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.fillRect(ix + 2, iy + 1, w - 4, 2);
+      }
+
+      // Animated pixel pointer chevron on left
+      const nudge = Math.round(Math.sin(this.renderTimeSec * 9) * 1.5);
+      const ptrX = ix - 11 + nudge;
+      const ptrY = iy + Math.floor(h * 0.5) - 2;
+      if (this.isSteamMode && this.sprites.hasSprite('sprMenuPointer')) {
+        this.sprites.draw(ctx, 'sprMenuPointer', ptrX, ptrY, { frame: 0, pixelSnap: true });
+      } else {
+        ctx.fillStyle = '#09060d';
+        ctx.fillRect(ptrX - 1, ptrY - 1, 5, 7);
+        ctx.fillStyle = opts.accent;
+        ctx.fillRect(ptrX, ptrY, 2, 5);
+        ctx.fillRect(ptrX + 2, ptrY + 1, 2, 3);
+        ctx.fillRect(ptrX + 4, ptrY + 2, 1, 1);
+      }
+    } else {
+      // Clean dark translucent wasteland underline strip (unfocused contrast without boxy clutter)
+      ctx.fillStyle = 'rgba(10, 7, 15, 0.56)';
+      ctx.fillRect(ix + 6, iy + 2, w - 12, h - 4);
+    }
+
+    this.fonts.draw(
+      ctx,
+      label,
+      cx + (hovered ? 2 : 0),
+      iy + Math.floor(h * 0.5),
+      hovered ? 'fntL' : 'fntM1',
+      {
+        align: 'center',
+        baseline: 'middle',
+        color: hovered ? opts.accent : '#d8d4e3',
+        outline: true,
+      },
+    );
+
+    this.regions.push({ id, x: ix - 6, y: iy, w: w + 12, h, onActivate });
   }
 
   private drawSliderRow(
@@ -938,10 +1282,11 @@ export class MenuSystem {
   ): void {
     const isFocused = Boolean(opts.focused);
     const hovered = this.hoveredId === id || this.activeDragRegionId === id || isFocused;
+    const clamped = Math.max(0, Math.min(1, value));
     const barW = 86;
     const barH = 8;
-    const barX = x + w - barW - 30;
-    const barY = y + 3;
+    const barX = Math.round(x + w - barW - 30);
+    const barY = Math.round(y + 3);
 
     if (isFocused) {
       ctx.fillStyle = 'rgba(255, 224, 71, 0.12)';
@@ -955,20 +1300,33 @@ export class MenuSystem {
       outline: true,
     });
 
-    ctx.fillStyle = '#120e18';
+    // Track
+    ctx.fillStyle = '#100c16';
     ctx.fillRect(barX, barY, barW, barH);
-    ctx.fillStyle = hovered ? '#ffe047' : '#52e864';
-    ctx.fillRect(
-      barX + 1,
-      barY + 1,
-      Math.round((barW - 2) * Math.max(0, Math.min(1, value))),
-      barH - 2,
-    );
-    ctx.strokeStyle = hovered ? '#ffffff' : '#6b637a';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+    const fillW = Math.round((barW - 2) * clamped);
+    if (fillW > 0) {
+      ctx.fillStyle = hovered ? '#ffe047' : '#52e864';
+      ctx.fillRect(barX + 1, barY + 1, fillW, barH - 2);
+      ctx.fillStyle = hovered ? '#fff6a6' : '#96ff9e';
+      ctx.fillRect(barX + 1, barY + 1, fillW, 2);
+    }
+    drawPixelBorder(ctx, barX, barY, barW, barH, hovered ? '#ffffff' : '#6b637a', 1);
 
-    const pct = opts.valueText ?? `${Math.round(value * 100)}%`;
+    // Crisp visible pixel thumb knob!
+    const knobW = 5;
+    const knobH = 12;
+    const knobX = Math.max(barX, Math.min(barX + barW - knobW, barX + 1 + fillW - Math.floor(knobW / 2)));
+    const knobY = barY - 2;
+    ctx.fillStyle = '#09070e';
+    ctx.fillRect(knobX - 1, knobY - 1, knobW + 2, knobH + 2);
+    ctx.fillStyle = hovered ? '#ffe047' : '#d4d8e6';
+    ctx.fillRect(knobX, knobY, knobW, knobH);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(knobX + 1, knobY + 1, knobW - 2, 2);
+    ctx.fillStyle = hovered ? '#b88212' : '#7a8094';
+    ctx.fillRect(knobX, knobY + knobH - 2, knobW, 2);
+
+    const pct = opts.valueText ?? `${Math.round(clamped * 100)}%`;
     this.fonts.draw(ctx, pct, x + w, y + 2, 'fntSmall', {
       align: 'right',
       color: hovered ? '#ffe047' : '#ffffff',
@@ -978,10 +1336,10 @@ export class MenuSystem {
     this.regions.push({
       id,
       x: barX - 4,
-      y: y,
+      y,
       w: barW + 8,
-      h: 13,
-      onActivate: () => onChange(value),
+      h: 14,
+      onActivate: () => onChange(clamped),
       onDrag: (normX: number) => onChange(Math.round(normX * 20) / 20),
     });
   }
@@ -990,6 +1348,137 @@ export class MenuSystem {
   // 1. TITLE SCREEN
   // --------------------------------------------------------------------------
 
+  private renderTitleWastelandBackdrop(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    width: number,
+    height: number,
+    timeSec: number,
+  ): void {
+    // Steam bakMenu (320x240) when Steam Pack is active!
+    if (this.isSteamMode && this.sprites.hasSprite('bakMenu')) {
+      // Warm dusk wasteland side extension behind centered 320x240 bakMenu for 16:9 widescreen
+      ctx.fillStyle = '#181018';
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = '#24151c';
+      ctx.fillRect(0, Math.round(height * 0.42), width, Math.round(height * 0.30));
+      ctx.fillStyle = '#1b1115';
+      ctx.fillRect(0, Math.round(height * 0.72), width, height);
+
+      const bx = Math.round((width - 320) * 0.5);
+      this.sprites.draw(ctx, 'bakMenu', bx, 0, { frame: 0, pixelSnap: true });
+      // Subtle atmospheric dim vignette so title logo and buttons read crisply
+      ctx.fillStyle = 'rgba(10, 7, 14, 0.24)';
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+
+    // Built-In Art: Rich multi-layer pixel dusk wasteland horizon!
+    const skyBands: ReadonlyArray<[number, string]> = [
+      [0, '#0f0a18'],
+      [28, '#170e22'],
+      [56, '#241328'],
+      [82, '#3a1a28'],
+      [106, '#592425'],
+      [126, '#823424'],
+      [142, '#b84f28'],
+      [154, '#e07a32'],
+      [162, '#ffd06b'],
+    ];
+    for (let i = 0; i < skyBands.length; i++) {
+      const [sy, col] = skyBands[i]!;
+      const nextY = i + 1 < skyBands.length ? skyBands[i + 1]![0] : 168;
+      ctx.fillStyle = col;
+      ctx.fillRect(0, sy, width, nextY - sy);
+      // Crisp 2px pixel dither transition row between adjacent sky bands
+      if (i > 0 && sy < 156) {
+        ctx.fillStyle = skyBands[i - 1]![1];
+        for (let dx = (i % 2) * 2; dx < width; dx += 4) {
+          ctx.fillRect(dx, sy, 2, 1);
+        }
+      }
+    }
+
+    // Twinkling pixel stars in upper twilight sky
+    for (let s = 0; s < 22; s++) {
+      const sx = (s * 67 + 19) % width;
+      const sy = 6 + ((s * 29) % 72);
+      const twinkle = Math.sin(timeSec * 2.5 + s * 1.7) > 0.35;
+      ctx.fillStyle = twinkle ? '#fff3cc' : '#8577a6';
+      ctx.fillRect(sx, sy, 1, 1);
+    }
+
+    // Low wasteland sunset disc behind far mesas (stepped pixel circle!)
+    const sunX = Math.round(width * 0.5);
+    const sunY = 158;
+    const sunR = 26;
+    for (let dy = -sunR; dy <= 10; dy++) {
+      const span = Math.floor(Math.sqrt(Math.max(0, sunR * sunR - dy * dy)));
+      ctx.fillStyle = dy < -10 ? '#ffad42' : '#ffe478';
+      ctx.fillRect(sunX - span, sunY + dy, span * 2, 1);
+    }
+
+    // Layer 1: Far silhouetted desert mesas & flat-topped buttes
+    const farBaseY = 166;
+    ctx.fillStyle = '#361a24';
+    ctx.fillRect(0, farBaseY, width, height - farBaseY);
+    const farMesas: ReadonlyArray<[number, number, number]> = [
+      [0.02, 0.16, 18],
+      [0.14, 0.24, 11],
+      [0.29, 0.40, 14],
+      [0.62, 0.76, 16],
+      [0.74, 0.84, 9],
+      [0.85, 0.99, 20],
+    ];
+    for (const [f0, f1, mh] of farMesas) {
+      const mx = Math.round(f0 * width);
+      const mw = Math.round((f1 - f0) * width);
+      ctx.fillStyle = '#361a24';
+      ctx.fillRect(mx, farBaseY - mh, mw, mh);
+      ctx.fillRect(mx + 4, farBaseY - mh - 4, Math.max(4, mw - 8), 4);
+      // Warm rim highlight on sun-facing mesa ridge
+      ctx.fillStyle = '#6e2e2a';
+      ctx.fillRect(mx + 4, farBaseY - mh - 4, Math.max(4, mw - 8), 1);
+    }
+
+    // Layer 2: Mid-ground canyon ridge + ruined wasteland overpass pylons
+    const midBaseY = 180;
+    ctx.fillStyle = '#24121c';
+    ctx.fillRect(0, midBaseY, width, height - midBaseY);
+    for (let x = 0; x < width; x += 6) {
+      const bump = Math.round(Math.sin(x * 0.045) * 4 + Math.cos(x * 0.11) * 2);
+      ctx.fillRect(x, midBaseY - 4 - Math.max(0, bump), 6, 8);
+    }
+    // Ruined overpass girder pillars on left & right horizon
+    const ruinX1 = Math.round(width * 0.12);
+    const ruinX2 = Math.round(width * 0.84);
+    ctx.fillStyle = '#1b0e17';
+    ctx.fillRect(ruinX1, midBaseY - 22, 4, 24);
+    ctx.fillRect(ruinX1 + 16, midBaseY - 19, 4, 21);
+    ctx.fillRect(ruinX1 - 6, midBaseY - 23, 30, 3);
+    ctx.fillRect(ruinX2, midBaseY - 18, 4, 20);
+    ctx.fillRect(ruinX2 + 12, midBaseY - 24, 4, 26);
+    ctx.fillRect(ruinX2 - 4, midBaseY - 21, 24, 3);
+
+    // Layer 3: Foreground wasteland desert floor with rocky outcrops, scrub & cactus silhouettes
+    const fgBaseY = 198;
+    ctx.fillStyle = '#140c14';
+    ctx.fillRect(0, fgBaseY, width, height - fgBaseY);
+    ctx.fillStyle = '#29171e';
+    ctx.fillRect(0, fgBaseY, width, 2);
+
+    // Cactus & desert rock silhouettes framing the lower corners
+    const drawCactusSilhouette = (cx: number, baseY: number, h: number): void => {
+      ctx.fillStyle = '#140c14';
+      ctx.fillRect(cx - 2, baseY - h, 4, h);
+      ctx.fillRect(cx - 7, baseY - Math.round(h * 0.65), 5, 3);
+      ctx.fillRect(cx - 7, baseY - Math.round(h * 0.85), 3, Math.round(h * 0.25));
+      ctx.fillRect(cx + 2, baseY - Math.round(h * 0.5), 5, 3);
+      ctx.fillRect(cx + 4, baseY - Math.round(h * 0.72), 3, Math.round(h * 0.25));
+    };
+    drawCactusSilhouette(Math.round(width * 0.08), fgBaseY + 2, 22);
+    drawCactusSilhouette(Math.round(width * 0.91), fgBaseY + 2, 18);
+  }
+
   private renderTitleScreen(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
@@ -997,19 +1486,7 @@ export class MenuSystem {
     const { width, height, timeSec, save } = mctx;
     const cx = Math.round(width * 0.5);
 
-    // Wasteland night gradient backdrop
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0, '#130e1c');
-    grad.addColorStop(0.58, '#291722');
-    grad.addColorStop(1, '#3d2219');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height);
-
-    // Horizon dunes silhouette
-    ctx.fillStyle = '#1d1216';
-    ctx.fillRect(0, height - 42, width, 42);
-    ctx.fillStyle = '#29191c';
-    ctx.fillRect(0, height - 34, width, 34);
+    this.renderTitleWastelandBackdrop(ctx, width, height, timeSec);
 
     // Animated floating ash embers
     for (let i = 0; i < 18; i++) {
@@ -1020,7 +1497,7 @@ export class MenuSystem {
     }
 
     // Logo (sprLogoGlow softly pulsing behind sprLogo; intro clamps permanently at frame 7)
-    const logoY = 60;
+    const logoY = 56;
     const hasLogo = this.sprites.hasSprite('sprLogo');
     if (hasLogo) {
       if (this.sprites.hasSprite('sprLogoGlow')) {
@@ -1039,63 +1516,52 @@ export class MenuSystem {
         pixelSnap: true,
       });
     } else {
-      // Crisp pixel-art clean-room title emblem
       ctx.fillStyle = 'rgba(255, 110, 40, 0.22)';
-      ctx.fillRect(cx - 118, 22, 236, 62);
+      ctx.fillRect(cx - 118, 20, 236, 60);
       ctx.fillStyle = '#160f1c';
-      ctx.fillRect(cx - 114, 26, 228, 54);
-      ctx.strokeStyle = '#ff9838';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(cx - 114, 26, 228, 54);
+      ctx.fillRect(cx - 114, 24, 228, 52);
+      drawPixelBorder(ctx, cx - 114, 24, 228, 52, '#ff9838', 2);
 
-      this.fonts.draw(ctx, 'KRUNKED', cx, 35, 'fntL', {
+      this.fonts.draw(ctx, 'KRUNKED', cx, 33, 'fntL', {
         align: 'center',
         color: '#ffe047',
         outline: true,
       });
-      this.fonts.draw(ctx, 'THRONE', cx, 55, 'fntL', {
+      this.fonts.draw(ctx, 'THRONE', cx, 53, 'fntL', {
         align: 'center',
         color: '#ff5238',
         outline: true,
       });
     }
 
-    // Subtitle
-    this.fonts.draw(ctx, '@dORIGINAL 16-BIT WASTELAND ACTION', cx, 108, 'fntSmall', {
-      align: 'center',
-      outline: true,
-    });
-
-    // Primary buttons
-    const btnW = 116;
-    const btnH = 20;
-    this.drawButton(
+    // Bold NT Wasteland Primary Menu Items (PLAY & OPTIONS)
+    this.drawTitleMenuItem(
       ctx,
       'title_play',
-      cx - Math.floor(btnW / 2),
-      121,
-      btnW,
-      btnH,
+      cx,
+      112,
+      124,
+      24,
       'PLAY',
       () => ({ type: 'open_screen', screen: 'campfire' }),
       { accent: '#52e864', focused: this.focusedIndex === 0 },
     );
 
-    this.drawButton(
+    this.drawTitleMenuItem(
       ctx,
       'title_options',
-      cx - Math.floor(btnW / 2),
-      145,
-      btnW,
-      btnH,
+      cx,
+      141,
+      124,
+      22,
       'OPTIONS',
       () => ({ type: 'open_screen', screen: 'options' }),
       { accent: '#ffe047', focused: this.focusedIndex === 1 },
     );
 
-    // Custom Pack / Built-In Krunked Art Pack Toggle Row
+    // Custom Pack / Built-In Art Pack Toggle Row
     const isCustomPack = this.bundle.sourceMode === 'steam';
-    const toggleY = 170;
+    const toggleY = 171;
     const toggleH = 16;
     if (mctx.assetLoading) {
       this.drawButton(
@@ -1183,13 +1649,13 @@ export class MenuSystem {
         save.bestLoop > 0
           ? `@dBEST: @yL${save.bestLoop} ${save.bestArea}@d  KILLS: @w${save.bestKills}`
           : `@dBEST: @w${save.bestArea}@d  KILLS: @w${save.bestKills}`;
-      this.fonts.draw(ctx, best, cx, 195, 'fntSmall', { align: 'center', outline: true });
+      this.fonts.draw(ctx, best, cx, 196, 'fntSmall', { align: 'center', outline: true });
     } else if (mctx.inputMode === 'gamepad' || mctx.gamepadConnected) {
       this.fonts.draw(
         ctx,
         '@gCONTROLLER READY  @d[LS/DPAD] MOVE  [A] SELECT',
         cx,
-        195,
+        196,
         'fntSmall',
         { align: 'center', outline: true },
       );
@@ -1203,13 +1669,14 @@ export class MenuSystem {
       });
     }
 
-    // Asset mode / live status badge at bottom
-    const badgeText = mctx.assetStatusText
-      ? mctx.assetStatusText
-      : isCustomPack
-        ? `@gCUSTOM PACK: ${this.bundle.manifest.stats.spriteCount} SPRITES`
-        : `@gKRUNKED ART PACK: ${this.bundle.manifest.stats.spriteCount} SPRITES`;
-    this.fonts.draw(ctx, badgeText, cx, height - 13, 'fntSmall', {
+    // Clean atmospheric footer (NO debug "(823 SPRITES)" text!)
+    const cleanedStatus = mctx.assetStatusText
+      ? mctx.assetStatusText.replace(/\s*\(\d+\s*SPRITES\)/gi, '').trim()
+      : '';
+    const footerText =
+      cleanedStatus ||
+      (isCustomPack ? '@dCUSTOM ART PACK ACTIVE' : '@dTHE WASTELAND CALLS YOU');
+    this.fonts.draw(ctx, footerText, cx, height - 13, 'fntSmall', {
       align: 'center',
       outline: true,
     });
@@ -1218,6 +1685,177 @@ export class MenuSystem {
   // --------------------------------------------------------------------------
   // 2. CAMPFIRE MUTANT SELECT (ALL 12 MUTANTS)
   // --------------------------------------------------------------------------
+
+  private renderCampfireGround(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    width: number,
+    height: number,
+    fireX: number,
+    fireY: number,
+    seatRx: number,
+    seatRy: number,
+    timeSec: number,
+  ): void {
+    if (this.isSteamMode && this.sprites.hasSprite('sprFloor0')) {
+      // Tile authentic Steam 32x32 sprFloor0 across the campsite clearing!
+      const floorSpr = this.sprites.getSprite('sprFloor0')!;
+      const fCount = Math.max(1, floorSpr.frames.length);
+      for (let ty = 0; ty < height; ty += 32) {
+        for (let tx = 0; tx < width; tx += 32) {
+          const hash = ((tx * 73) ^ (ty * 151) ^ 0x5a) & 0xff;
+          const frame = hash % fCount;
+          this.sprites.draw(ctx, 'sprFloor0', tx, ty, { frame, pixelSnap: true });
+        }
+      }
+
+      // Stepped night atmospheric darkening around outer edges (bright warm clearing in center)
+      ctx.fillStyle = 'rgba(10, 7, 14, 0.56)';
+      ctx.fillRect(0, 0, width, height);
+
+      // Stepped pixel warm firelight pools around campfire
+      const flick = Math.round(Math.sin(timeSec * 12) * 3 + Math.cos(timeSec * 19) * 2);
+      const rings: ReadonlyArray<[number, number, string]> = [
+        [seatRx + 38 + flick, seatRy + 28 + flick, 'rgba(255, 130, 42, 0.14)'],
+        [seatRx + 18 + flick, seatRy + 16 + flick, 'rgba(255, 145, 48, 0.16)'],
+        [Math.round(seatRx * 0.65) + flick, Math.round(seatRy * 0.7) + flick, 'rgba(255, 178, 66, 0.18)'],
+      ];
+      for (const [rx, ry, col] of rings) {
+        ctx.fillStyle = col;
+        for (let dy = -ry; dy <= ry; dy += 2) {
+          const norm = dy / Math.max(1, ry);
+          const span = Math.round(rx * Math.sqrt(Math.max(0, 1 - norm * norm)));
+          ctx.fillRect(fireX - span, fireY + 4 + dy, span * 2, 2);
+        }
+      }
+
+      // Authentic Steam sprLogMenu sitting logs placed around the campfire!
+      if (this.sprites.hasSprite('sprLogMenu')) {
+        const logAngles = [-2.5, -0.6, 0.55, 2.55];
+        for (let i = 0; i < logAngles.length; i++) {
+          const a = logAngles[i]!;
+          const lx = Math.round(fireX + Math.cos(a) * (seatRx * 0.92));
+          const ly = Math.round(fireY + 10 + Math.sin(a) * (seatRy * 0.92));
+          this.sprites.draw(ctx, 'sprLogMenu', lx, ly, {
+            frame: i % 2,
+            flipX: lx > fireX,
+            pixelSnap: true,
+          });
+        }
+      }
+      return;
+    }
+
+    // Built-In Mode: Rich layered pixel-art wasteland night campsite!
+    // 1. Night twilight sky band at top with pixel stars & silhouetted mesas
+    const horizonY = 44;
+    ctx.fillStyle = '#0e0a16';
+    ctx.fillRect(0, 0, width, 18);
+    ctx.fillStyle = '#181022';
+    ctx.fillRect(0, 18, width, 14);
+    ctx.fillStyle = '#251724';
+    ctx.fillRect(0, 32, width, horizonY - 32);
+
+    // Stars
+    for (let s = 0; s < 16; s++) {
+      const sx = (s * 59 + 13) % width;
+      const sy = 5 + ((s * 17) % 24);
+      ctx.fillStyle = (s + Math.floor(timeSec * 2)) % 4 === 0 ? '#ffe9a8' : '#71658a';
+      ctx.fillRect(sx, sy, 1, 1);
+    }
+
+    // Distant jagged wasteland mesas along horizon
+    ctx.fillStyle = '#1a1119';
+    const mesas: ReadonlyArray<[number, number, number]> = [
+      [0.24, 0.34, 12],
+      [0.33, 0.42, 7],
+      [0.44, 0.56, 10],
+      [0.57, 0.65, 14],
+    ];
+    for (const [m0, m1, mh] of mesas) {
+      const mx = Math.round(m0 * width);
+      const mw = Math.round((m1 - m0) * width);
+      ctx.fillRect(mx, horizonY - mh, mw, mh + 2);
+      ctx.fillRect(mx + 3, horizonY - mh - 3, Math.max(4, mw - 6), 3);
+    }
+
+    // 2. Tiled textured wasteland dirt ground (zero smooth flat pancake!)
+    ctx.fillStyle = '#211715';
+    ctx.fillRect(0, horizonY, width, height - horizonY);
+    for (let ty = horizonY; ty < height; ty += 16) {
+      for (let tx = 0; tx < width; tx += 16) {
+        const h = ((tx * 37) ^ (ty * 91) ^ 0x3d) & 0xff;
+        // Subtle calm organic dirt slab variance
+        ctx.fillStyle = h % 3 === 0 ? '#271b18' : h % 3 === 1 ? '#221715' : '#1e1413';
+        ctx.fillRect(tx, ty, 16, 16);
+
+        // Sparse hand-crafted ground cracks & pebbles
+        if (h % 7 === 0) {
+          ctx.fillStyle = '#170f0e';
+          ctx.fillRect(tx + 3, ty + 6, 5, 1);
+          ctx.fillRect(tx + 7, ty + 7, 3, 1);
+          ctx.fillRect(tx + 9, ty + 8, 2, 1);
+        } else if (h % 9 === 0) {
+          ctx.fillStyle = '#382720';
+          ctx.fillRect(tx + 5, ty + 9, 3, 2);
+          ctx.fillStyle = '#4c362a';
+          ctx.fillRect(tx + 5, ty + 9, 2, 1);
+        } else if (h % 13 === 0) {
+          ctx.fillStyle = '#33231d';
+          ctx.fillRect(tx + 10, ty + 4, 2, 2);
+        }
+      }
+    }
+
+    // 3. Stepped quantized pixel firelight illumination pool (warm authentic pixel-art glow!)
+    const flick = Math.round(Math.sin(timeSec * 12) * 3 + Math.cos(timeSec * 21) * 1.5);
+    const firePools: ReadonlyArray<[number, number, string]> = [
+      [seatRx + 34 + flick, seatRy + 22 + flick, '#2e1e18'],
+      [seatRx + 16 + flick, seatRy + 12 + flick, '#3b251c'],
+      [Math.round(seatRx * 0.72) + flick, Math.round(seatRy * 0.72) + flick, '#4d2f1f'],
+      [Math.round(seatRx * 0.38) + flick, Math.round(seatRy * 0.44) + flick, '#693d22'],
+    ];
+    for (const [rx, ry, col] of firePools) {
+      ctx.fillStyle = col;
+      for (let dy = -ry; dy <= ry; dy += 2) {
+        const norm = dy / Math.max(1, ry);
+        const span = Math.round(rx * Math.sqrt(Math.max(0, 1 - norm * norm)));
+        ctx.fillRect(fireX - span, fireY + 5 + dy, span * 2, 2);
+      }
+    }
+
+    // 4. Pixel-art stone fire pit ring + rustic sitting logs around clearing
+    const pitRocks: ReadonlyArray<[number, number]> = [
+      [-12, 3], [-8, 7], [-2, 9], [5, 8], [11, 4], [10, -2], [-10, -2],
+    ];
+    for (const [ox, oy] of pitRocks) {
+      ctx.fillStyle = '#120c0c';
+      ctx.fillRect(fireX + ox - 2, fireY + oy - 1, 6, 4);
+      ctx.fillStyle = '#5c4d49';
+      ctx.fillRect(fireX + ox - 1, fireY + oy, 4, 2);
+      ctx.fillStyle = '#8c766c';
+      ctx.fillRect(fireX + ox - 1, fireY + oy, 2, 1);
+    }
+
+    // Weathered wasteland sitting logs placed symmetrically around fire clearing
+    const drawSittingLog = (lx: number, ly: number): void => {
+      ctx.fillStyle = '#140c0a';
+      ctx.fillRect(lx - 11, ly - 2, 22, 7);
+      ctx.fillStyle = '#523422';
+      ctx.fillRect(lx - 10, ly - 1, 20, 5);
+      ctx.fillStyle = '#734a2f';
+      ctx.fillRect(lx - 10, ly - 1, 18, 2);
+      ctx.fillStyle = '#382216';
+      ctx.fillRect(lx - 6, ly + 1, 4, 1);
+      ctx.fillRect(lx + 2, ly + 2, 5, 1);
+      // Cut log end ring
+      ctx.fillStyle = '#8f6544';
+      ctx.fillRect(lx + 8, ly, 2, 3);
+    };
+    drawSittingLog(fireX - Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
+    drawSittingLog(fireX + Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
+    drawSittingLog(fireX - Math.round(seatRx * 0.72), fireY - Math.round(seatRy * 0.45));
+    drawSittingLog(fireX + Math.round(seatRx * 0.72), fireY - Math.round(seatRy * 0.45));
+  }
 
   private renderCampfireScreen(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -1229,53 +1867,39 @@ export class MenuSystem {
     const skin = save.selectedSkins[selected.id] ?? 'a';
     const crown = this.data.getCrown(save.selectedCrown);
     const mProg = save.mutants[selected.id];
-    const hasGold = Boolean(mProg?.goldenWeapon) || selected.id === 'yv';
+    const storedGoldId = mProg?.goldenWeapon ?? (selected.id === 'yv' ? 'golden_revolver' : null);
+    const hasGold = Boolean(storedGoldId);
     const goldActive = hasGold && save.useGoldenWeapon;
+    const storedGoldLabel = storedGoldId ? resolveWeaponLabel(storedGoldId, this.data) : '';
 
-    // Dark campfire night wasteland background
-    ctx.fillStyle = '#141018';
-    ctx.fillRect(0, 0, width, height);
-
-    // Live Big Portrait bounds (left) & Mutant Details bounds (right)
     const isWide = width >= 380;
-    const portX = 8;
-    const portY = 24;
-    const portW = 74;
-    const portH = 92;
-    const infoW = isWide ? 138 : 128;
+
+    // Geometry: exact 1x 96x80 portrait + spacious Details Panel + wide non-squished campfire arc!
+    const portW = 96;
+    const portH = 80;
+    const portX = isWide ? 8 : 4;
+    const portY = isWide ? 20 : 17;
+
+    const infoW = isWide ? 142 : 138;
     const infoX = width - infoW - (isWide ? 8 : 4);
-    const clearingLeft = portX + portW + 4;
-    const clearingRight = infoX - 4;
-    const fireX = Math.round((clearingLeft + clearingRight) * 0.5);
-    const fireY = 82;
+    const infoY = isWide ? 20 : 17;
+    const infoH = isWide ? 138 : 143;
 
-    // Warm flickering firelight pool around campfire (spaced cleanly clear of portrait & details card)
-    const flicker = Math.sin(timeSec * 13) * 4 + Math.cos(timeSec * 23) * 2;
-    const fireGrad = ctx.createRadialGradient(fireX, fireY, 6, fireX, fireY, (isWide ? 106 : 86) + flicker);
-    fireGrad.addColorStop(0, 'rgba(255, 145, 45, 0.44)');
-    fireGrad.addColorStop(0.5, 'rgba(180, 70, 25, 0.18)');
-    fireGrad.addColorStop(1, 'rgba(20, 16, 24, 0)');
-    ctx.fillStyle = fireGrad;
-    ctx.fillRect(0, 0, width, height);
+    // Wide campfire clearing:
+    // - 16:9: centered cleanly between Portrait (x=104) and Details (x=276)
+    // - 4:3: spacious lower-left clearing below Portrait (y=97) and left of Details (x=178),
+    //   widening seatRx from 36 -> 70 so Fish & Rogue NEVER squish!
+    const fireX = isWide ? 190 : 90;
+    const fireY = isWide ? 90 : 131;
+    const seatRx = isWide ? 66 : 70;
+    const seatRy = isWide ? 38 : 21;
 
-    // Ground dirt clearing & stone campfire ring (strictly inside clearingLeft..clearingRight)
-    const groundRx = isWide ? 76 : 43;
-    const groundRy = isWide ? 38 : 34;
-    ctx.fillStyle = '#261b18';
-    ctx.beginPath();
-    ctx.ellipse(fireX, fireY + 6, groundRx + 4, groundRy + 3, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#36261f';
-    ctx.beginPath();
-    ctx.ellipse(fireX, fireY + 6, groundRx, groundRy, 0, 0, Math.PI * 2);
-    ctx.fill();
+    // 1. Atmospheric tiled wasteland campsite ground, logs & stepped firelight
+    this.renderCampfireGround(ctx, width, height, fireX, fireY, seatRx, seatRy, timeSec);
 
-    // Depth-sorted iconic Nuclear Throne campfire scene: all 12 mutants around the flickering fire!
-    const seatRx = isWide ? 64 : 36;
-    const seatRy = isWide ? 32 : 29;
+    // 2. Depth-sorted campfire + ALL 12 mutants at CRISP 1.0x INTEGER SCALE!
     const sceneItems: Array<{ y: number; draw: () => void }> = [];
 
-    // Campfire centerpiece item
     sceneItems.push({
       y: fireY + 2,
       draw: () => {
@@ -1292,12 +1916,12 @@ export class MenuSystem {
           ctx.fillRect(fireX - 3, fireY - 3, 6, 5);
         }
         // Rising flickering embers above flame
-        for (let e = 0; e < 6; e++) {
-          const phase = (timeSec * (0.9 + (e % 3) * 0.25) + e * 0.19) % 1;
-          const ex = Math.round(fireX + Math.sin(timeSec * 4 + e * 2.1) * (4 + phase * 6));
-          const ey = Math.round(fireY - 4 - phase * 24);
+        for (let e = 0; e < 7; e++) {
+          const phase = (timeSec * (0.85 + (e % 3) * 0.25) + e * 0.17) % 1;
+          const ex = Math.round(fireX + Math.sin(timeSec * 4 + e * 2.1) * (4 + phase * 8));
+          const ey = Math.round(fireY - 4 - phase * 28);
           ctx.save();
-          ctx.globalAlpha = (1 - phase) * 0.9;
+          ctx.globalAlpha = (1 - phase) * 0.92;
           ctx.fillStyle = e % 2 === 0 ? '#ffe047' : '#ff7b32';
           ctx.fillRect(ex, ey, 2, 2);
           ctx.restore();
@@ -1305,42 +1929,39 @@ export class MenuSystem {
       },
     });
 
-    // All 12 mutants seated around the campfire — selected mutant stands up animated with weapon & crown!
     const totalMutants = mutants.length;
+    const seatAngles = computeBalancedEllipseAngles(totalMutants, seatRx, seatRy, -Math.PI * 0.5 + 0.24);
+
     for (let i = 0; i < totalMutants; i++) {
       const m = mutants[i]!;
       const mSkin = save.selectedSkins[m.id] ?? 'a';
       const isSel = m.id === selected.id;
-      const angle = -Math.PI * 0.5 + (i / totalMutants) * Math.PI * 2 + 0.26;
-      const pullIn = isSel ? 0.88 : 1;
+      const angle = seatAngles[i]!;
+      const pullIn = isSel ? 0.9 : 1;
       const mx = Math.round(fireX + Math.cos(angle) * seatRx * pullIn);
-      const my = Math.round(fireY + 6 + Math.sin(angle) * seatRy * pullIn);
+      const my = Math.round(fireY + 5 + Math.sin(angle) * seatRy * pullIn);
       const faceLeft = mx > fireX;
 
-      // Make each sitting mutant around the fire directly clickable
       this.regions.push({
         id: `camp_sit_${m.id}`,
-        x: mx - 8,
-        y: my - 9,
-        w: 16,
-        h: 18,
+        x: mx - 9,
+        y: my - 10,
+        w: 18,
+        h: 20,
         onActivate: () => ({ type: 'select_mutant', mutant: m.id }),
       });
 
       sceneItems.push({
         y: my,
         draw: () => {
-          // Ground shadow oval under mutant
-          ctx.fillStyle = isSel ? 'rgba(255, 224, 71, 0.28)' : 'rgba(8, 6, 12, 0.45)';
-          ctx.beginPath();
-          ctx.ellipse(mx, my + 6, isSel ? 8 : 6, 3, 0, 0, Math.PI * 2);
-          ctx.fill();
+          // Crisp pixel ground shadow under mutant (zero smooth anti-aliased ellipse!)
+          ctx.fillStyle = isSel ? 'rgba(255, 224, 71, 0.34)' : 'rgba(8, 6, 12, 0.50)';
+          ctx.fillRect(mx - 6, my + 6, 12, 3);
+          ctx.fillRect(mx - 4, my + 5, 8, 5);
           if (isSel) {
-            ctx.strokeStyle = '#ffe047';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.ellipse(mx, my + 6, 8, 3, 0, 0, Math.PI * 2);
-            ctx.stroke();
+            ctx.fillStyle = '#ffe047';
+            ctx.fillRect(mx - 7, my + 7, 2, 1);
+            ctx.fillRect(mx + 5, my + 7, 2, 1);
           }
 
           let sprName: string;
@@ -1363,49 +1984,41 @@ export class MenuSystem {
             }
           }
 
-          // Normalize scale so oversized Steam sprites (e.g. 48x48 Horror) match the campfire ring cleanly
-          const sDef = this.sprites.getSprite(sprName);
-          const refH = sDef ? Math.max(16, sDef.height) : 24;
-          const targetH = isSel ? 24 : 18;
-          const normScale = Math.max(0.45, Math.min(1.25, targetH / refH));
+          // CRISP 1.0x INTEGER PIXEL SCALE FOR ALL 12 MUTANTS (fixes 0.5x Horror & 0.75x mixels!)
           const standLift = isSel ? Math.round(Math.sin(timeSec * 5) * 1) - 3 : 0;
 
-          // Selected Crown floating behind the standing mutant!
+          // Selected Crown floating behind the standing mutant at crisp integer 1x scale!
           if (isSel && crown.id !== 'none') {
-            const crX = mx + (faceLeft ? 7 : -7);
-            const crY = my + standLift - 8 + Math.sin(timeSec * 4.2) * 1.5;
-            const drewLoadoutCrown = this.sprites.hasSprite('sprLoadoutCrown')
-              ? this.sprites.drawInBox(ctx, 'sprLoadoutCrown', crown.crownIndex, crX - 6, crY - 6, 12, 12)
-              : false;
-            if (!drewLoadoutCrown) {
-              this.sprites.draw(ctx, crown.spriteIdle, crX, crY, {
-                frame: Math.floor(timeSec * 4),
-                pixelSnap: true,
-              });
-            }
+            const crX = mx + (faceLeft ? 8 : -8);
+            const crY = Math.round(my + standLift - 9 + Math.sin(timeSec * 4.2) * 1.5);
+            this.sprites.draw(ctx, crown.spriteIdle, crX, crY, {
+              frame: Math.floor(timeSec * 4),
+              scaleX: 1,
+              scaleY: 1,
+              pixelSnap: true,
+            });
           }
 
           this.sprites.draw(ctx, sprName, mx, my + standLift, {
             frame: isSel ? Math.floor(timeSec * 6) : Math.floor(timeSec * 2 + i),
             flipX: faceLeft,
-            scaleX: normScale,
-            scaleY: normScale,
-            alpha: isSel ? 1 : 0.88,
+            scaleX: 1,
+            scaleY: 1,
+            alpha: isSel ? 1 : 0.92,
             pixelSnap: true,
           });
 
-          // Starting or Golden weapon held by the standing selected mutant
+          // Starting or Golden weapon held at crisp 1.0x integer scale!
           if (isSel) {
-            const startWepId =
-              goldActive && mProg?.goldenWeapon ? mProg.goldenWeapon : m.startingWeapon;
+            const startWepId = goldActive && storedGoldId ? storedGoldId : m.startingWeapon;
             const wepSpr = resolveWeaponSpriteName(startWepId, this.data);
             const dir = faceLeft ? -1 : 1;
             this.sprites.draw(ctx, wepSpr, mx + dir * 5, my + standLift + 2, {
               frame: 0,
               rotation: faceLeft ? Math.PI : 0,
               flipY: faceLeft,
-              scaleX: 0.85,
-              scaleY: 0.85,
+              scaleX: 1,
+              scaleY: 1,
               pixelSnap: true,
             });
           }
@@ -1423,13 +2036,9 @@ export class MenuSystem {
         ? selected.sprites.bIdle
         : selected.sprites.idle;
 
-    // Live Big Portrait (left side, using pixel-verified 2-frame-per-mutant A/B indexing)
-    ctx.fillStyle = 'rgba(12, 10, 18, 0.72)';
+    // 3. Tightly framed integer 1x Big Portrait (96x80 — ZERO giant letterbox bars!)
+    ctx.fillStyle = '#0c0912';
     ctx.fillRect(portX, portY, portW, portH);
-    ctx.strokeStyle = skin === 'b' ? '#ffe047' : '#524863';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(portX + 0.5, portY + 0.5, portW - 1, portH - 1);
-
     const portSpriteName =
       skin === 'b' && selected.sprites.bPortrait && this.sprites.hasSprite(selected.sprites.bPortrait)
         ? selected.sprites.bPortrait
@@ -1440,27 +2049,82 @@ export class MenuSystem {
       skin,
       portSprDef?.frames.length ?? 24,
     );
-    const drewPort = this.sprites.drawInBox(
-      ctx,
-      portSpriteName,
-      portraitFrame,
-      portX + 3,
-      portY + 3,
-      portW - 6,
-      portH - 6,
-    );
+    let drewPort = false;
+    if (portSprDef && portSprDef.width === portW && portSprDef.height === portH && this.sprites.hasSprite(portSpriteName)) {
+      // Exact 1:1 integer pixel draw for 96x80 Built-In portraits (zero scaling, zero letterbox!)
+      drewPort = this.sprites.draw(ctx, portSpriteName, portX + portSprDef.originX, portY + portSprDef.originY, {
+        frame: portraitFrame,
+        pixelSnap: true,
+      });
+    } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(portX + 1, portY + 1, portW - 2, portH - 2);
+      ctx.clip();
+      drewPort = this.sprites.drawInBox(
+        ctx,
+        portSpriteName,
+        portraitFrame,
+        portX + 1,
+        portY + 1,
+        portW - 2,
+        portH - 2,
+      );
+      ctx.restore();
+    }
     if (!drewPort) {
-      this.sprites.drawInBox(ctx, idleSpr, Math.floor(timeSec * 4), portX + 12, portY + 16, 48, 48);
+      this.drawSpriteIntegerCentered(ctx, idleSpr, Math.floor(timeSec * 4), portX + 8, portY + 8, portW - 16, portH - 16, {
+        allow2x: true,
+      });
+    }
+    drawPixelBorder(ctx, portX, portY, portW, portH, skin === 'b' ? '#ffe047' : '#635675', 1);
+    // Corner accent rivets on portrait frame
+    ctx.fillStyle = skin === 'b' ? '#ffe047' : '#9687ad';
+    ctx.fillRect(portX, portY, 3, 1);
+    ctx.fillRect(portX, portY, 1, 3);
+    ctx.fillRect(portX + portW - 3, portY, 3, 1);
+    ctx.fillRect(portX + portW - 1, portY, 1, 3);
+
+    // 16:9 under-portrait loadout summary badge (stored Golden weapon & active Crown icon)
+    if (isWide) {
+      const subY = portY + portH + 4;
+      const subH = 54;
+      ctx.fillStyle = 'rgba(12, 9, 18, 0.84)';
+      ctx.fillRect(portX, subY, portW, subH);
+      drawPixelBorder(ctx, portX, subY, portW, subH, '#4c425e', 1);
+      const startWepId = goldActive && storedGoldId ? storedGoldId : selected.startingWeapon;
+      const startWepLabel = resolveWeaponLabel(startWepId, this.data);
+      this.fonts.draw(ctx, '@dSTART WEAPON', portX + 4, subY + 4, 'fntSmall');
+      const wepSpr = resolveWeaponSpriteName(startWepId, this.data);
+      this.drawSpriteIntegerCentered(ctx, wepSpr, 0, portX + 4, subY + 13, 30, 14);
+      this.fonts.draw(ctx, startWepLabel, portX + 36, subY + 16, 'fntSmall', {
+        color: goldActive ? '#ffe047' : '#e4e8f2',
+        maxWidth: portW - 40,
+        shadow: true,
+      });
+      if (hasGold) {
+        this.fonts.draw(ctx, `@yGOLD: @w${storedGoldLabel}`, portX + 4, subY + 34, 'fntSmall', {
+          maxWidth: portW - 8,
+          shadow: true,
+        });
+      } else {
+        this.fonts.draw(ctx, '@dNO GOLDEN WEAPON', portX + 4, subY + 38, 'fntSmall');
+      }
     }
 
-    // Right-side Mutant Details Panel (positioned cleanly clear of the campfire stone ring)
-    const infoY = 22;
-    const infoH = 112;
-    ctx.fillStyle = 'rgba(12, 10, 18, 0.82)';
+    // 4. Right-Side Mutant Details Panel with DYNAMIC Y layout (ZERO text collisions!)
+    if (this.isSteamMode && this.sprites.hasSprite('sprLoadoutSplat')) {
+      this.sprites.draw(ctx, 'sprLoadoutSplat', infoX + infoW + 4, infoY + infoH + 2, {
+        frame: 3,
+        alpha: 0.72,
+        pixelSnap: true,
+      });
+    }
+    ctx.fillStyle = 'rgba(12, 9, 18, 0.88)';
     ctx.fillRect(infoX, infoY, infoW, infoH);
-    ctx.strokeStyle = '#524863';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(infoX + 0.5, infoY + 0.5, infoW - 1, infoH - 1);
+    drawPixelBorder(ctx, infoX, infoY, infoW, infoH, '#5b5070', 1);
+    ctx.fillStyle = '#ffe047';
+    ctx.fillRect(infoX + 1, infoY + 1, infoW - 2, 1);
 
     this.fonts.draw(ctx, selected.name, infoX + 6, infoY + 5, 'fntM1', {
       color: '#ffe047',
@@ -1471,45 +2135,65 @@ export class MenuSystem {
       outline: true,
     });
 
-    this.fonts.draw(ctx, `@wPASSIVE: @s${selected.passiveDesc}`, infoX + 6, infoY + 19, 'fntSmall', {
-      maxWidth: infoW - 12,
+    // Subtle divider below header
+    ctx.fillStyle = 'rgba(130, 118, 156, 0.35)';
+    ctx.fillRect(infoX + 5, infoY + 15, infoW - 10, 1);
+
+    const hasBestLine = Boolean(mProg && mProg.runs > 0);
+    const detailsMaxW = infoW - 12;
+    const layout = computeCampfireDetailsLayout(
+      this.fonts,
+      selected,
+      detailsMaxW,
+      infoY + 18,
+      infoY + infoH - 4,
+      hasBestLine,
+    );
+
+    const pRes = this.fonts.draw(ctx, `@wPASSIVE: @s${selected.passiveDesc}`, infoX + 6, layout.passiveY, 'fntSmall', {
+      maxWidth: detailsMaxW,
+      lineSpacing: layout.lineSpacing,
       shadow: true,
     });
-    this.fonts.draw(ctx, `@gACTIVE: @s${selected.activeDesc}`, infoX + 6, infoY + 46, 'fntSmall', {
-      maxWidth: infoW - 12,
+    const activeY = Math.max(layout.activeY, layout.passiveY + pRes.height + 3);
+    const aRes = this.fonts.draw(ctx, `@gACTIVE: @s${selected.activeDesc}`, infoX + 6, activeY, 'fntSmall', {
+      maxWidth: detailsMaxW,
+      lineSpacing: layout.lineSpacing,
       shadow: true,
     });
-    this.fonts.draw(ctx, `@pTB: @s${selected.throneButtDesc}`, infoX + 6, infoY + 74, 'fntSmall', {
-      maxWidth: infoW - 12,
+    const tbY = Math.max(layout.tbY, activeY + aRes.height + 3);
+    const tRes = this.fonts.draw(ctx, `@pTB: @s${selected.throneButtDesc}`, infoX + 6, tbY, 'fntSmall', {
+      maxWidth: detailsMaxW,
+      lineSpacing: layout.lineSpacing,
       shadow: true,
     });
 
-    if (mProg && mProg.runs > 0) {
-      this.fonts.draw(
-        ctx,
-        `@dBEST ${mProg.bestLoop > 0 ? `L${mProg.bestLoop} ` : ''}${mProg.bestArea} | ${mProg.bestKills}K`,
-        infoX + 6,
-        infoY + infoH - 11,
-        'fntSmall',
-        { shadow: false },
-      );
+    if (hasBestLine && mProg) {
+      const bestY = Math.max(layout.bestY, tbY + tRes.height + 3);
+      if (bestY + 6 <= infoY + infoH - 1) {
+        this.fonts.draw(
+          ctx,
+          `@dBEST ${mProg.bestLoop > 0 ? `L${mProg.bestLoop} ` : ''}${mProg.bestArea} | ${mProg.bestKills}K`,
+          infoX + 6,
+          bestY,
+          'fntSmall',
+          { shadow: false },
+        );
+      }
     }
 
-    // Header & Top-Left Back button
+    // 5. Header & Top-Left Back button
     const inActions = this.campfireRow === 'actions';
     const inputMode = mctx.inputMode ?? 'kbm';
     this.drawButton(
       ctx,
       'camp_back',
-      6,
       4,
-      46,
-      15,
+      2,
+      44,
+      13,
       inputMode === 'gamepad' ? 'BACK [B]' : 'BACK',
-      () => ({
-        type: 'open_screen',
-        screen: 'title',
-      }),
+      () => ({ type: 'open_screen', screen: 'title' }),
       {
         font: 'fntSmall',
         accent: '#ff8a38',
@@ -1517,21 +2201,30 @@ export class MenuSystem {
       },
     );
 
-    this.fonts.draw(ctx, 'SELECT MUTANT', width * 0.5, 6, 'fntM1', {
+    this.fonts.draw(ctx, 'SELECT MUTANT', width * 0.5, 4, 'fntM1', {
       align: 'center',
       color: '#ffffff',
       outline: true,
     });
 
-    // Loadout Action Row: SKIN A/B | CROWN | GOLDEN | PLAY/GO!
-    const rowY = 140;
+    // 6. Uniform-Height Loadout Action Row: SKIN | FULL CROWN NAME | GOLD | GO! (ALL h=18, same rowY!)
+    const rowY = 164;
+    const btnH = 18;
+    const gap = 4;
+    const skinW = isWide ? 58 : 48;
+    const crownW = isWide ? 124 : 106; // Fits full "CROWN OF PROTECTION" (96px fallback / 76px steam) with ZERO truncation!
+    const goldW = isWide ? 116 : 70;
+    const goW = isWide ? 86 : 76;
+    const barTotalW = skinW + crownW + goldW + goW + gap * 3;
+    const barStartX = Math.round((width - barTotalW) * 0.5);
+
     this.drawButton(
       ctx,
       'camp_skin',
-      8,
+      barStartX,
       rowY,
-      54,
-      18,
+      skinW,
+      btnH,
       skin === 'b' ? '@ySKIN: B' : 'SKIN: A',
       () => ({ type: 'toggle_bskin', mutant: selected.id }),
       {
@@ -1541,16 +2234,15 @@ export class MenuSystem {
       },
     );
 
-    const crownLabel =
-      crown.id === 'none' ? 'CROWN: NONE' : crown.name.replace('CROWN OF ', 'CRN: ');
+    const crownX = barStartX + skinW + gap;
     this.drawButton(
       ctx,
       'camp_crown',
-      66,
+      crownX,
       rowY,
-      86,
-      18,
-      crownLabel.slice(0, 14),
+      crownW,
+      btnH,
+      crown.id === 'none' ? 'NO CROWN' : `@p${crown.name}`,
       () => {
         const idx = ALL_CROWN_IDS.indexOf(save.selectedCrown);
         const nextCrown = ALL_CROWN_IDS[(idx + 1) % ALL_CROWN_IDS.length]!;
@@ -1563,14 +2255,20 @@ export class MenuSystem {
       },
     );
 
+    const goldX = crownX + crownW + gap;
+    const goldBtnLabel = hasGold
+      ? isWide
+        ? (goldActive ? `@yGOLD: ${storedGoldLabel.replace('GOLDEN ', '')}` : `GOLD: ${storedGoldLabel.replace('GOLDEN ', '')}`)
+        : (goldActive ? '@yGOLD: ON' : 'GOLD: OFF')
+      : '@dGOLD: NONE';
     this.drawButton(
       ctx,
       'camp_golden',
-      156,
+      goldX,
       rowY,
-      68,
-      18,
-      hasGold ? (goldActive ? '@yGOLD: ON' : 'GOLD: OFF') : '@dGOLD: NONE',
+      goldW,
+      btnH,
+      goldBtnLabel,
       () => (hasGold ? { type: 'toggle_golden', enabled: !save.useGoldenWeapon } : null),
       {
         font: 'fntSmall',
@@ -1579,6 +2277,7 @@ export class MenuSystem {
       },
     );
 
+    const goX = goldX + goldW + gap;
     const goLabel =
       inputMode === 'gamepad'
         ? '@gGO! [A]'
@@ -1588,10 +2287,10 @@ export class MenuSystem {
     this.drawButton(
       ctx,
       'camp_go',
-      width - 82,
-      rowY - 2,
-      74,
-      22,
+      goX,
+      rowY,
+      goW,
+      btnH,
       goLabel,
       () => ({
         type: 'start_run',
@@ -1607,14 +2306,32 @@ export class MenuSystem {
       },
     );
 
-    // Bottom 12-Mutant Roster Strip (clickable + keyboard arrow navigable)
+    // 7. Active Crown Effect Description Line + Stored Golden Weapon Info Strip (y = 184..195)
+    const effectY = rowY + btnH + 2;
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.80)';
+    ctx.fillRect(4, effectY, width - 8, 11);
+    drawPixelBorder(ctx, 4, effectY, width - 8, 11, crown.id !== 'none' ? 'rgba(201, 107, 255, 0.45)' : 'rgba(92, 82, 112, 0.35)', 1);
+    const crownEffectText = crown.description.replace(/#/g, ' - ');
+    const statusInfo =
+      crown.id !== 'none'
+        ? `@p${crown.name}: @s${crownEffectText}${hasGold && !isWide ? `  @y[${storedGoldLabel}]` : ''}`
+        : hasGold
+          ? `@ySTORED GOLD: @w${storedGoldLabel}  @d- ${crownEffectText}`
+          : `@d${crown.name}: ${crownEffectText}`;
+    this.fonts.draw(ctx, statusInfo, Math.round(width * 0.5), effectY + 2, 'fntSmall', {
+      align: 'center',
+      maxWidth: width - 16,
+      shadow: true,
+    });
+
+    // 8. Bottom 12-Mutant Roster Strip (crisp integer 1x 16x24 sprCharSelect!)
     const count = mutants.length;
-    const slotGap = 3;
-    const slotW = Math.min(24, Math.floor((width - 16 - (count - 1) * slotGap) / count));
-    const slotH = 30;
+    const slotGap = isWide ? 4 : 3;
+    const slotW = Math.min(24, Math.floor((width - 12 - (count - 1) * slotGap) / count));
+    const slotH = 28;
     const stripW = count * slotW + (count - 1) * slotGap;
     const stripX = Math.round((width - stripW) * 0.5);
-    const stripY = height - slotH - 18;
+    const stripY = height - slotH - 14;
 
     const charSelectSpr = this.sprites.getSprite('sprCharSelect');
 
@@ -1626,16 +2343,22 @@ export class MenuSystem {
       const hovered = this.hoveredId === rid;
 
       ctx.fillStyle = isSelected
-        ? 'rgba(72, 54, 30, 0.95)'
+        ? 'rgba(72, 54, 30, 0.96)'
         : hovered
-          ? 'rgba(42, 36, 56, 0.9)'
-          : 'rgba(18, 15, 24, 0.85)';
+          ? 'rgba(42, 36, 56, 0.92)'
+          : 'rgba(16, 13, 22, 0.88)';
       ctx.fillRect(sx, stripY, slotW, slotH);
-      ctx.strokeStyle = isSelected ? '#ffe047' : hovered ? '#ffffff' : '#4a4358';
-      ctx.lineWidth = isSelected ? 2 : 1;
-      ctx.strokeRect(sx + 0.5, stripY + 0.5, slotW - 1, slotH - 1);
+      drawPixelBorder(
+        ctx,
+        sx,
+        stripY,
+        slotW,
+        slotH,
+        isSelected ? '#ffe047' : hovered ? '#ffffff' : '#4a4358',
+        isSelected ? 2 : 1,
+      );
 
-      // Draw character portrait/sprite inside slot (sprCharSelect or live mutant idle)
+      // Draw sprCharSelect (16x24) at exact crisp integer 1x scale!
       const useCharSelect =
         charSelectSpr &&
         charSelectSpr.frames.length >= 12 &&
@@ -1643,10 +2366,10 @@ export class MenuSystem {
       let drewCard = false;
       if (useCharSelect) {
         const frame = charSelectSpr.frames.length >= 13 ? m.raceIndex : i;
-        drewCard = this.sprites.drawInBox(ctx, 'sprCharSelect', frame, sx + 2, stripY + 2, slotW - 4, slotH - 6);
+        drewCard = this.drawSpriteIntegerCentered(ctx, 'sprCharSelect', frame, sx + 2, stripY + 2, slotW - 4, slotH - 4);
       }
       if (!drewCard) {
-        this.sprites.drawInBox(ctx, m.sprites.idle, 0, sx + 2, stripY + 4, slotW - 4, slotH - 8);
+        this.drawSpriteIntegerCentered(ctx, m.sprites.idle, 0, sx + 2, stripY + 2, slotW - 4, slotH - 4);
       }
 
       this.regions.push({
@@ -1666,14 +2389,10 @@ export class MenuSystem {
         : inputMode === 'touch'
           ? `@w${selected.name}  @dTAP MUTANT OR GO TO PLAY`
           : `@y< A / D > @w${selected.name}  @d(UP/DOWN LOADOUT - ENTER PLAY)`;
-    this.fonts.draw(
-      ctx,
-      campHint,
-      width * 0.5,
-      height - 11,
-      'fntSmall',
-      { align: 'center', outline: true },
-    );
+    this.fonts.draw(ctx, campHint, width * 0.5, height - 10, 'fntSmall', {
+      align: 'center',
+      outline: true,
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -1687,11 +2406,16 @@ export class MenuSystem {
     const { width, height, simState } = mctx;
     const list = simState?.pendingMutations ?? [];
 
-    // Rich dark backdrop so mutation cards & headers pop cleanly with zero bleed-through
-    ctx.fillStyle = 'rgba(10, 9, 14, 0.92)';
+    // Opaque dark backdrop (alpha >= 0.94) so world & portal warp text NEVER bleed through!
+    ctx.fillStyle = OPAQUE_MENU_BACKDROP;
     ctx.fillRect(0, 0, width, height);
 
-    this.fonts.draw(ctx, '@gMUTATION', width * 0.5, 16, 'fntL', {
+    if (this.isSteamMode && this.sprites.hasSprite('bakMut')) {
+      const bx = Math.round((width - 320) * 0.5);
+      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.16, pixelSnap: true });
+    }
+
+    this.fonts.draw(ctx, '@gMUTATION', width * 0.5, 10, 'fntL', {
       align: 'center',
       outline: true,
     });
@@ -1701,20 +2425,22 @@ export class MenuSystem {
         ? '@dCHOOSE ONE  ([LS/DPAD] BROWSE  [A] PICK)'
         : mutInputMode === 'touch'
           ? '@dTAP A MUTATION TO SELECT'
-          : '@dCHOOSE ONE  (CLICK OR KEYS 1-' + Math.max(1, list.length) + ')';
-    this.fonts.draw(ctx, mutPrompt, width * 0.5, 34, 'fntSmall', {
+          : list.length <= 1
+            ? '@dPRESS 1 OR ENTER TO SELECT'
+            : `@dCHOOSE ONE  (CLICK OR KEYS 1-${list.length})`;
+    this.fonts.draw(ctx, mutPrompt, width * 0.5, 28, 'fntSmall', {
       align: 'center',
       outline: true,
     });
 
     // Context badge for Horror's 5th choice or Crown of Destiny's single forced choice
     if (list.length >= 5) {
-      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', width * 0.5, 44, 'fntSmall', {
+      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', width * 0.5, 38, 'fntSmall', {
         align: 'center',
         outline: true,
       });
     } else if (list.length === 1 && simState?.crown === 'destiny') {
-      this.fonts.draw(ctx, '@pCROWN OF DESTINY', width * 0.5, 44, 'fntSmall', {
+      this.fonts.draw(ctx, '@pCROWN OF DESTINY', width * 0.5, 38, 'fntSmall', {
         align: 'center',
         outline: true,
       });
@@ -1722,12 +2448,13 @@ export class MenuSystem {
 
     if (list.length === 0) return;
 
-    const cardW = list.length >= 5 ? 54 : 62;
-    const cardH = 82;
-    const gap = list.length >= 5 ? 6 : 10;
+    const isWide = width >= 380;
+    const cardW = list.length >= 5 ? (isWide ? 66 : 58) : 64;
+    const cardH = 74;
+    const gap = list.length >= 5 ? (isWide ? 10 : 5) : 10;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const cardY = 60;
+    const cardY = 54;
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
 
@@ -1745,36 +2472,40 @@ export class MenuSystem {
       const x = startX + i * (cardW + gap);
       const y = isFocused ? cardY - 6 : cardY;
 
-      ctx.fillStyle = isFocused ? 'rgba(34, 52, 38, 0.96)' : 'rgba(20, 22, 28, 0.92)';
+      // Clean single-framed NT card (eliminating cluttered double-framing!)
+      ctx.fillStyle = isFocused ? 'rgba(30, 48, 34, 0.96)' : 'rgba(18, 20, 26, 0.90)';
       ctx.fillRect(x, y, cardW, cardH);
-      ctx.strokeStyle = isFocused ? '#52e864' : '#535766';
-      ctx.lineWidth = isFocused ? 2 : 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, cardW - 1, cardH - 1);
+      if (isFocused) {
+        ctx.fillStyle = '#52e864';
+        ctx.fillRect(x + 2, y + 2, cardW - 4, 2);
+      }
+      drawPixelBorder(ctx, x, y, cardW, cardH, isFocused ? '#52e864' : '#4a4e5e', isFocused ? 2 : 1);
 
       // Key badge [1]..[5]
-      this.fonts.draw(ctx, `@y[${i + 1}]`, x + 4, y + 4, 'fntSmall', { outline: true });
+      this.fonts.draw(ctx, `@y[${i + 1}]`, x + 4, y + 5, 'fntSmall', { outline: true });
 
-      // Mutation sprSkillIcon card
+      // Crisp INTEGER 1x sprSkillIcon (24x32 — ZERO 1.1875x mixels!)
       const drewIcon = def
-        ? this.sprites.drawInBox(
+        ? this.drawSpriteIntegerCentered(
             ctx,
             def.sprite || 'sprSkillIcon',
             def.iconFrame,
-            x + Math.floor((cardW - 30) / 2),
+            x + Math.floor((cardW - 24) / 2),
             y + 15,
-            30,
-            38,
+            24,
+            32,
           )
         : false;
       if (!drewIcon) {
         ctx.fillStyle = '#4de862';
-        ctx.fillRect(x + 16, y + 20, cardW - 32, 28);
+        ctx.fillRect(x + Math.floor((cardW - 24) / 2), y + 15, 24, 32);
       }
 
       const name = def ? def.name : mutId.replace(/_/g, ' ').toUpperCase();
-      this.fonts.draw(ctx, name, x + cardW * 0.5, y + 58, 'fntSmall', {
+      this.fonts.draw(ctx, name, x + Math.floor(cardW * 0.5), y + 50, 'fntSmall', {
         align: 'center',
-        maxWidth: cardW - 6,
+        maxWidth: cardW - 4,
+        lineSpacing: 0,
         color: isFocused ? '#ffffff' : '#b8bec9',
         outline: true,
       });
@@ -1789,49 +2520,66 @@ export class MenuSystem {
       });
     }
 
-    // Selected mutation detail box at bottom
+    // Selected mutation detail box with DYNAMIC Y height (tip NEVER collides on multi-line descriptions!)
+    const owned = simState?.player.mutations ?? [];
     const focusedDef = this.data.getMutation(list[activeIdx]!);
-    const descBoxW = Math.min(300, width - 24);
+    const descBoxW = Math.min(304, width - 16);
     const descX = Math.round((width - descBoxW) * 0.5);
-    const descY = height - 62;
-    ctx.fillStyle = 'rgba(10, 12, 16, 0.9)';
-    ctx.fillRect(descX, descY, descBoxW, 46);
-    ctx.strokeStyle = '#52e864';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(descX + 0.5, descY + 0.5, descBoxW - 1, 45);
+    const trayReserve = owned.length > 0 ? 22 : 8;
+
+    const fontSmall = this.fonts.getFont('fntSmall');
+    const smallLH = Math.round((fontSmall ? Math.max(1, fontSmall.lineHeight) : 8) * (fontSmall?.scaleY || 1));
+    const descLines = focusedDef
+      ? wrapMarkupText(fontSmall, focusedDef.description, descBoxW - 16, 1)
+      : [];
+    const tipLines = focusedDef
+      ? wrapMarkupText(fontSmall, `"${focusedDef.tip}"`, descBoxW - 16, 1)
+      : [];
+    const descEstH = descLines.length > 0 ? smallLH + (descLines.length - 1) * (smallLH + 1) : smallLH;
+    const tipEstH = tipLines.length > 0 ? smallLH + (tipLines.length - 1) * (smallLH + 1) : smallLH;
+    const descBoxH = Math.max(46, 20 + descEstH + 4 + tipEstH + 6);
+    const descY = Math.min(height - trayReserve - descBoxH, Math.max(cardY + cardH + 6, height - trayReserve - descBoxH));
+
+    ctx.fillStyle = 'rgba(10, 12, 16, 0.94)';
+    ctx.fillRect(descX, descY, descBoxW, descBoxH);
+    drawPixelBorder(ctx, descX, descY, descBoxW, descBoxH, '#52e864', 1);
 
     if (focusedDef) {
-      this.fonts.draw(ctx, `@y${focusedDef.name}`, width * 0.5, descY + 6, 'fntM1', {
+      this.fonts.draw(ctx, `@y${focusedDef.name}`, width * 0.5, descY + 5, 'fntM1', {
         align: 'center',
         outline: true,
       });
-      this.fonts.draw(ctx, focusedDef.description, width * 0.5, descY + 20, 'fntSmall', {
+      const descTextY = descY + 18;
+      const dRes = this.fonts.draw(ctx, focusedDef.description, width * 0.5, descTextY, 'fntSmall', {
         align: 'center',
         maxWidth: descBoxW - 16,
         outline: true,
       });
-      this.fonts.draw(ctx, `@d"${focusedDef.tip}"`, width * 0.5, descY + 34, 'fntSmall', {
+      const tipY = descTextY + dRes.height + 4;
+      this.fonts.draw(ctx, `@d"${focusedDef.tip}"`, width * 0.5, tipY, 'fntSmall', {
         align: 'center',
+        maxWidth: descBoxW - 16,
       });
     }
 
-    // Compact bottom tray of already-acquired mutations so players can review synergies while choosing
-    const owned = simState?.player.mutations ?? [];
+    // Owned mutations tray cleanly padded inside viewport bottom (never 2px off bottom!)
     if (owned.length > 0) {
-      const iconStep = 12;
-      const shown = Math.min(owned.length, 16);
-      const rowW = shown * iconStep;
+      const iconSize = 16;
+      const iconStep = 17;
+      const maxFit = Math.max(1, Math.floor((width - 16) / iconStep));
+      const shown = Math.min(owned.length, maxFit);
+      const rowW = shown * iconStep - 1;
       const oxStart = Math.round((width - rowW) * 0.5);
-      const oy = height - 13;
+      const oy = height - iconSize - 4;
       for (let i = 0; i < shown; i++) {
         const oDef = this.data.getMutation(owned[i]!);
         const ix = oxStart + i * iconStep;
         const drew = oDef
-          ? this.sprites.drawInBox(ctx, oDef.hudSprite || 'sprSkillIconHUD', oDef.iconFrame, ix, oy, 10, 10)
+          ? this.drawSpriteIntegerCentered(ctx, oDef.hudSprite || 'sprSkillIconHUD', oDef.iconFrame, ix, oy, iconSize, iconSize)
           : false;
         if (!drew) {
           ctx.fillStyle = '#4de862';
-          ctx.fillRect(ix, oy, 9, 9);
+          ctx.fillRect(ix + 2, oy + 2, 12, 12);
         }
       }
     }
@@ -1845,27 +2593,33 @@ export class MenuSystem {
     const list = simState?.pendingUltras ?? [];
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
 
-    ctx.fillStyle = 'rgba(10, 9, 14, 0.92)';
+    // Opaque dark backdrop (alpha >= 0.94) so world/portal text never bleeds through!
+    ctx.fillStyle = OPAQUE_MENU_BACKDROP;
     ctx.fillRect(0, 0, width, height);
 
-    this.fonts.draw(ctx, '@yULTRA MUTATION', width * 0.5, 14, 'fntL', {
+    if (this.isSteamMode && this.sprites.hasSprite('bakMut')) {
+      const bx = Math.round((width - 320) * 0.5);
+      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.16, pixelSnap: true });
+    }
+
+    this.fonts.draw(ctx, '@yULTRA MUTATION', width * 0.5, 16, 'fntL', {
       align: 'center',
       outline: true,
     });
-    this.fonts.draw(ctx, '@gLEVEL ULTRA REACHED - CHOOSE YOUR PATH', width * 0.5, 34, 'fntSmall', {
+    this.fonts.draw(ctx, '@gLEVEL ULTRA REACHED - CHOOSE YOUR PATH', width * 0.5, 36, 'fntSmall', {
       align: 'center',
       outline: true,
     });
 
     if (list.length === 0) return;
 
-    // Generous card dimensions so multi-line Ultra descriptions (e.g. CONFISCATE) never overflow borders
-    const cardW = 136;
-    const cardH = 136;
+    // Tighter, balanced cards eliminating giant empty dark lower void!
+    const cardW = 138;
+    const cardH = 114;
     const gap = 16;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const cardY = 54;
+    const cardY = Math.round((height - cardH) * 0.5) + 6;
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
 
@@ -1883,39 +2637,42 @@ export class MenuSystem {
       const x = startX + i * (cardW + gap);
       const y = isFocused ? cardY - 4 : cardY;
 
-      ctx.fillStyle = isFocused ? 'rgba(54, 42, 24, 0.96)' : 'rgba(22, 18, 30, 0.92)';
+      ctx.fillStyle = isFocused ? 'rgba(52, 40, 22, 0.96)' : 'rgba(20, 17, 28, 0.92)';
       ctx.fillRect(x, y, cardW, cardH);
-      ctx.strokeStyle = isFocused ? '#ffe047' : '#635978';
-      ctx.lineWidth = isFocused ? 2 : 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, cardW - 1, cardH - 1);
+      if (isFocused) {
+        ctx.fillStyle = '#ffe047';
+        ctx.fillRect(x + 2, y + 2, cardW - 4, 2);
+      }
+      drawPixelBorder(ctx, x, y, cardW, cardH, isFocused ? '#ffe047' : '#5e5573', isFocused ? 2 : 1);
 
-      this.fonts.draw(ctx, `@y[${i + 1}] ULTRA ${i === 0 ? 'A' : 'B'}`, x + cardW * 0.5, y + 6, 'fntSmall', {
+      this.fonts.draw(ctx, `@y[${i + 1}] ULTRA ${i === 0 ? 'A' : 'B'}`, x + cardW * 0.5, y + 7, 'fntSmall', {
         align: 'center',
         outline: true,
       });
 
+      // Crisp integer 1x sprEGSkillIcon (24x32 — zero fractional scaling!)
       const iconSprName = def?.sprite || 'sprEGSkillIcon';
       const iconSprDef = this.sprites.getSprite(iconSprName);
       const ultraFrame = def
         ? computeUltraIconFrame(mutant.raceIndex, def.slot, iconSprDef?.frames.length ?? 24)
         : 0;
       const drewIcon = def
-        ? this.sprites.drawInBox(ctx, iconSprName, ultraFrame, x + Math.floor((cardW - 34) / 2), y + 18, 34, 38)
+        ? this.drawSpriteIntegerCentered(ctx, iconSprName, ultraFrame, x + Math.floor((cardW - 24) / 2), y + 18, 24, 32)
         : false;
       if (!drewIcon) {
         ctx.fillStyle = '#ffe047';
-        ctx.fillRect(x + Math.floor((cardW - 32) / 2), y + 20, 32, 32);
+        ctx.fillRect(x + Math.floor((cardW - 24) / 2), y + 18, 24, 32);
       }
 
       const title = def ? def.name : ultraId.toUpperCase();
-      this.fonts.draw(ctx, title, x + cardW * 0.5, y + 60, 'fntM1', {
+      const titleRes = this.fonts.draw(ctx, title, x + cardW * 0.5, y + 54, 'fntM1', {
         align: 'center',
         maxWidth: cardW - 10,
         color: '#ffe047',
         outline: true,
       });
       if (def) {
-        this.fonts.draw(ctx, def.description, x + cardW * 0.5, y + 76, 'fntSmall', {
+        this.fonts.draw(ctx, def.description, x + cardW * 0.5, y + 54 + titleRes.height + 5, 'fntSmall', {
           align: 'center',
           maxWidth: cardW - 12,
           outline: true,
@@ -1931,10 +2688,22 @@ export class MenuSystem {
         onActivate: () => ({ type: 'pick_ultra', index: i, ultraId }),
       });
     }
+
+    const uInput = mctx.inputMode ?? 'kbm';
+    const uPrompt =
+      uInput === 'gamepad'
+        ? '@d[L/R] BROWSE  [A] CONFIRM ULTRA'
+        : uInput === 'touch'
+          ? '@dTAP AN ULTRA CARD TO EVOLVE'
+          : '@dCLICK OR KEYS 1-2 / ENTER TO EVOLVE';
+    this.fonts.draw(ctx, uPrompt, width * 0.5, height - 16, 'fntSmall', {
+      align: 'center',
+      outline: true,
+    });
   }
 
   // --------------------------------------------------------------------------
-  // 4. PAUSE OVERLAY (NT-FAITHFUL ACTIONS + LOADOUT / MUTATIONS / CROWN PANEL)
+  // 4. PAUSE OVERLAY (CLEAN 2-COLUMN NT OVERLAY + KEYBOARD MUTATION INSPECTION)
   // --------------------------------------------------------------------------
 
   private renderPauseOverlay(
@@ -1944,21 +2713,23 @@ export class MenuSystem {
     const { width, height, simState, save } = mctx;
     const cx = Math.round(width * 0.5);
 
-    ctx.fillStyle = 'rgba(8, 6, 14, 0.78)';
+    // Heavy dark opaque backdrop cleanly masking gameplay HUD behind Pause!
+    ctx.fillStyle = 'rgba(8, 6, 14, 0.92)';
     ctx.fillRect(0, 0, width, height);
 
-    const panelW = Math.min(300, width - 20);
-    const panelH = 188;
+    const panelW = Math.min(304, width - 16);
+    const panelH = 196;
     const px = cx - Math.floor(panelW / 2);
     const py = Math.round((height - panelH) * 0.5);
 
-    ctx.fillStyle = 'rgba(18, 14, 24, 0.95)';
+    // Clean single-frame NT overlay (eliminating 4 nested grey rectangle boxes!)
+    ctx.fillStyle = 'rgba(16, 13, 22, 0.98)';
     ctx.fillRect(px, py, panelW, panelH);
-    ctx.strokeStyle = '#ffe047';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(px + 0.5, py + 0.5, panelW - 1, panelH - 1);
+    ctx.fillStyle = '#ffe047';
+    ctx.fillRect(px + 1, py + 1, panelW - 2, 2);
+    drawPixelBorder(ctx, px, py, panelW, panelH, '#ffe047', 1);
 
-    this.fonts.draw(ctx, 'PAUSED', cx, py + 6, 'fntL', {
+    this.fonts.draw(ctx, 'PAUSED', cx, py + 7, 'fntL', {
       align: 'center',
       color: '#ffffff',
       outline: true,
@@ -1972,12 +2743,16 @@ export class MenuSystem {
       this.fonts.draw(ctx, info, cx, py + 26, 'fntSmall', { align: 'center', outline: true });
     }
 
+    // Subtle divider below header
+    ctx.fillStyle = 'rgba(130, 120, 158, 0.35)';
+    ctx.fillRect(px + 10, py + 37, panelW - 20, 1);
+
     // Left Column: Primary Pause Action Buttons
-    const btnW = 114;
-    const btnH = 19;
+    const btnW = 110;
+    const btnH = 20;
     const bx = px + 10;
 
-    this.drawButton(ctx, 'pause_resume', bx, py + 42, btnW, btnH, 'RESUME', () => ({ type: 'resume' }), {
+    this.drawButton(ctx, 'pause_resume', bx, py + 44, btnW, btnH, 'RESUME', () => ({ type: 'resume' }), {
       accent: '#52e864',
       focused: this.focusedIndex === 0,
       font: 'fntSmall',
@@ -1986,7 +2761,7 @@ export class MenuSystem {
       ctx,
       'pause_options',
       bx,
-      py + 65,
+      py + 68,
       btnW,
       btnH,
       'OPTIONS',
@@ -2000,7 +2775,7 @@ export class MenuSystem {
         : pauseMode === 'touch'
           ? 'RESTART'
           : 'RESTART [R]';
-    this.drawButton(ctx, 'pause_restart', bx, py + 88, btnW, btnH, restartLabel, () => ({ type: 'restart' }), {
+    this.drawButton(ctx, 'pause_restart', bx, py + 92, btnW, btnH, restartLabel, () => ({ type: 'restart' }), {
       accent: '#ff8a38',
       focused: this.focusedIndex === 2,
       font: 'fntSmall',
@@ -2009,7 +2784,7 @@ export class MenuSystem {
       ctx,
       'pause_campfire',
       bx,
-      py + 111,
+      py + 116,
       btnW,
       btnH,
       'CAMPFIRE',
@@ -2017,146 +2792,196 @@ export class MenuSystem {
       { accent: '#ff4242', focused: this.focusedIndex === 3, font: 'fntSmall' },
     );
 
-    // Right Column: Active Weapons, Crown & Hoverable Mutations / Ultra Tray
-    const rx = bx + btnW + 10;
+    // Subtle vertical column rule between actions and loadout
+    const rx = bx + btnW + 12;
     const rw = px + panelW - rx - 10;
+    ctx.fillStyle = 'rgba(130, 120, 158, 0.28)';
+    ctx.fillRect(rx - 6, py + 44, 1, 96);
+
     let tooltipTitle = '';
-    let tooltipDesc = '';
+    let tooltipLine1 = '';
+    let tooltipLine2 = '';
 
     if (simState) {
       const player = simState.player;
       const mutant = this.data.getMutant(player.mutant);
 
-      // Weapons sub-box
-      ctx.fillStyle = 'rgba(10, 8, 16, 0.85)';
-      ctx.fillRect(rx, py + 42, rw, 44);
-      ctx.strokeStyle = '#4a4358';
-      ctx.strokeRect(rx + 0.5, py + 42.5, rw - 1, 43);
-
-      this.fonts.draw(ctx, '@dWEAPONS', rx + 4, py + 45, 'fntSmall', { shadow: true });
+      // Weapons section (clean flat layout — no nested box borders!)
+      this.fonts.draw(ctx, '@dWEAPONS', rx, py + 44, 'fntSmall', { shadow: true });
       for (let s = 0; s < 2; s++) {
         const slot = player.weapons[s];
-        const wy = py + 55 + s * 14;
+        const wy = py + 54 + s * 13;
         if (slot) {
           const wDef = this.data.getWeapon(slot.weaponId);
           const wSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
-          this.sprites.drawInBox(ctx, wSpr, 0, rx + 4, wy, 20, 10, { maxScale: 1 });
+          this.drawSpriteIntegerCentered(ctx, wSpr, 0, rx, wy, 22, 10);
           const wCol = slot.cursed ? '#d47aff' : wDef?.golden ? '#ffe047' : s === player.activeSlot ? '#ffffff' : '#9ca0ad';
           const wName = resolveWeaponLabel(slot.weaponId, this.data);
-          const trimmed = wName.length > 16 ? `${wName.slice(0, 15).trimEnd()}.` : wName;
-          this.fonts.draw(ctx, trimmed, rx + 27, wy + 2, 'fntSmall', { color: wCol, shadow: true });
+          const trimmed = wName.length > 17 ? `${wName.slice(0, 16).trimEnd()}.` : wName;
+          this.fonts.draw(ctx, trimmed, rx + 25, wy + 2, 'fntSmall', { color: wCol, shadow: true });
         } else {
-          this.fonts.draw(ctx, '@d(EMPTY SLOT)', rx + 27, wy + 2, 'fntSmall', { shadow: false });
+          this.fonts.draw(ctx, '@d(EMPTY SLOT)', rx + 25, wy + 2, 'fntSmall', { shadow: false });
         }
       }
 
-      // Active Crown & Mutant strip
+      // Active Crown & Mutant row
+      const crownY = py + 84;
+      ctx.fillStyle = 'rgba(130, 120, 158, 0.22)';
+      ctx.fillRect(rx, crownY - 2, rw, 1);
       const crownDef = this.data.getCrown(simState.crown);
-      const crownY = py + 90;
-      ctx.fillStyle = 'rgba(10, 8, 16, 0.85)';
-      ctx.fillRect(rx, crownY, rw, 15);
-      ctx.strokeStyle = '#4a4358';
-      ctx.strokeRect(rx + 0.5, crownY + 0.5, rw - 1, 14);
       if (crownDef.id !== 'none') {
-        this.sprites.drawInBox(ctx, crownDef.spriteIdle, 0, rx + 3, crownY + 2, 12, 11);
-        this.fonts.draw(ctx, `@p${crownDef.name.replace('CROWN OF ', 'CRN: ')}`, rx + 18, crownY + 4, 'fntSmall', {
+        this.drawSpriteIntegerCentered(ctx, crownDef.spriteIdle, 0, rx, crownY + 1, 16, 14);
+        this.fonts.draw(ctx, `@p${crownDef.name}`, rx + 18, crownY + 4, 'fntSmall', {
+          maxWidth: rw - 18,
           shadow: true,
         });
       } else {
-        this.fonts.draw(ctx, `@y${mutant.name}  @dNO CROWN`, rx + 5, crownY + 4, 'fntSmall', {
+        this.fonts.draw(ctx, `@y${mutant.name}  @dNO CROWN`, rx, crownY + 4, 'fntSmall', {
           shadow: true,
         });
       }
 
-      // Mutations + Ultra interactive tray
-      const mutY = py + 109;
-      ctx.fillStyle = 'rgba(10, 8, 16, 0.85)';
-      ctx.fillRect(rx, mutY, rw, 29);
-      ctx.strokeStyle = '#4a4358';
-      ctx.strokeRect(rx + 0.5, mutY + 0.5, rw - 1, 28);
+      // Mutations + Ultra interactive tray (supports BOTH hover AND Left/Right keyboard inspection!)
+      const mutY = py + 102;
+      ctx.fillStyle = 'rgba(130, 120, 158, 0.22)';
+      ctx.fillRect(rx, mutY - 2, rw, 1);
 
       const muts = player.mutations;
-      if (muts.length === 0 && !player.ultra) {
-        this.fonts.draw(ctx, '@dNO MUTATIONS YET', rx + 5, mutY + 11, 'fntSmall');
+      const totalOwned = muts.length + (player.ultra ? 1 : 0);
+      if (this.pauseInspectIdx >= totalOwned) {
+        this.pauseInspectIdx = totalOwned > 0 ? totalOwned - 1 : -1;
+      }
+
+      this.fonts.draw(
+        ctx,
+        totalOwned > 0 ? `@dMUTATIONS (${totalOwned})  @y< L/R >` : '@dMUTATIONS (0)',
+        rx,
+        mutY + 1,
+        'fntSmall',
+      );
+
+      if (totalOwned === 0) {
+        this.fonts.draw(ctx, '@dNO MUTATIONS YET', rx, mutY + 14, 'fntSmall');
       } else {
-        const iconStep = 13;
-        const cols = Math.max(1, Math.floor((rw - 6) / iconStep));
+        const iconStep = 14;
+        const cols = Math.max(1, Math.floor(rw / iconStep));
         for (let i = 0; i < muts.length; i++) {
           const def = this.data.getMutation(muts[i]!);
           const col = i % cols;
           const row = Math.floor(i / cols);
           if (row >= 2) break;
-          const mx = rx + 4 + col * iconStep;
-          const my = mutY + 3 + row * 12;
+          const mx = rx + col * iconStep;
+          const my = mutY + 11 + row * 13;
           const rid = `pause_mut_${i}`;
           const hovered = this.hoveredId === rid;
-          if (hovered && def) {
-            tooltipTitle = `@g${def.name}`;
-            tooltipDesc = def.description;
-          }
           if (hovered) {
-            ctx.fillStyle = 'rgba(82, 232, 100, 0.32)';
-            ctx.fillRect(mx - 1, my - 1, 12, 12);
+            this.pauseInspectIdx = i;
+          }
+          const inspected = hovered || this.pauseInspectIdx === i;
+          if (inspected && def) {
+            tooltipTitle = `@g${def.name}`;
+            tooltipLine1 = def.description.replace(/#/g, ' ');
+            tooltipLine2 = `@d"${def.tip}"`;
+            drawPixelBorder(ctx, mx - 1, my - 1, 14, 14, '#52e864', 1);
           }
           const drew = def
-            ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 10, 10)
+            ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 12, 12, { maxScale: 1 })
             : false;
           if (!drew) {
             ctx.fillStyle = '#4de862';
-            ctx.fillRect(mx, my, 10, 10);
+            ctx.fillRect(mx + 1, my + 1, 10, 10);
           }
-          this.regions.push({ id: rid, x: mx - 1, y: my - 1, w: 12, h: 12, onActivate: () => null });
+          this.regions.push({
+            id: rid,
+            x: mx - 1,
+            y: my - 1,
+            w: 14,
+            h: 14,
+            onActivate: () => {
+              this.pauseInspectIdx = i;
+              return { type: 'ui_sfx', sound: 'sndHover' };
+            },
+          });
         }
         if (player.ultra) {
           const uDef = this.data.getUltra(player.ultra);
           const idx = muts.length;
           const col = idx % cols;
           const row = Math.min(1, Math.floor(idx / cols));
-          const ux = rx + 4 + col * iconStep;
-          const uy = mutY + 3 + row * 12;
+          const ux = rx + col * iconStep;
+          const uy = mutY + 11 + row * 13;
           const rid = 'pause_ultra';
           const hovered = this.hoveredId === rid;
-          if (hovered && uDef) {
+          if (hovered) {
+            this.pauseInspectIdx = idx;
+          }
+          const inspected = hovered || this.pauseInspectIdx === idx;
+          if (inspected && uDef) {
             tooltipTitle = `@yULTRA: ${uDef.name}`;
-            tooltipDesc = uDef.description;
+            tooltipLine1 = uDef.description;
+            drawPixelBorder(ctx, ux - 1, uy - 1, 14, 14, '#ffe047', 1);
           }
           const egHudDef = this.sprites.getSprite('sprEGIconHUD');
           const uFrame = uDef
             ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
             : 0;
           const drew = uDef
-            ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uFrame, ux - 1, uy - 1, 12, 12)
+            ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uFrame, ux, uy, 12, 12, { maxScale: 1 })
             : false;
           if (!drew) {
             ctx.fillStyle = '#ffe047';
-            ctx.fillRect(ux, uy, 10, 10);
+            ctx.fillRect(ux + 1, uy + 1, 10, 10);
           }
-          this.regions.push({ id: rid, x: ux - 1, y: uy - 1, w: 12, h: 12, onActivate: () => null });
+          this.regions.push({
+            id: rid,
+            x: ux - 1,
+            y: uy - 1,
+            w: 14,
+            h: 14,
+            onActivate: () => {
+              this.pauseInspectIdx = idx;
+              return { type: 'ui_sfx', sound: 'sndHover' };
+            },
+          });
         }
       }
 
+      // Default mutant tooltip: clean separate lines with ZERO stray trailing "|" pipe!
       if (!tooltipTitle) {
         tooltipTitle = `@y${mutant.name}  @d(${mutant.passiveName})`;
-        tooltipDesc = `${mutant.passiveDesc}  |  @g${mutant.activeName}`;
+        tooltipLine1 = `@wPASSIVE: @s${mutant.passiveDesc}`;
+        tooltipLine2 = `@gACTIVE: @s${mutant.activeName}`;
       }
     } else {
       const m = this.data.getMutant(save.selectedMutant);
       tooltipTitle = `@y${m.name}`;
-      tooltipDesc = m.passiveDesc;
+      tooltipLine1 = m.passiveDesc;
     }
 
-    // Bottom run-info / hovered-mutation tooltip bar
+    // Bottom tooltip strip (clean top divider, dynamic non-colliding lines!)
     const tipY = py + 144;
-    const tipH = 34;
-    ctx.fillStyle = 'rgba(10, 8, 16, 0.88)';
-    ctx.fillRect(px + 10, tipY, panelW - 20, tipH);
-    ctx.strokeStyle = '#524863';
-    ctx.strokeRect(px + 10.5, tipY + 0.5, panelW - 21, tipH - 1);
-    this.fonts.draw(ctx, tooltipTitle, px + 16, tipY + 5, 'fntSmall', { outline: true });
-    this.fonts.draw(ctx, tooltipDesc, px + 16, tipY + 17, 'fntSmall', {
-      maxWidth: panelW - 32,
+    ctx.fillStyle = 'rgba(130, 120, 158, 0.35)';
+    ctx.fillRect(px + 10, tipY, panelW - 20, 1);
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.60)';
+    ctx.fillRect(px + 10, tipY + 1, panelW - 20, panelH - (tipY - py) - 6);
+
+    const tHead = this.fonts.draw(ctx, tooltipTitle, px + 14, tipY + 5, 'fntSmall', { outline: true });
+    const l1Y = tipY + 5 + tHead.height + 3;
+    const l1Res = this.fonts.draw(ctx, tooltipLine1, px + 14, l1Y, 'fntSmall', {
+      maxWidth: panelW - 28,
+      lineSpacing: 0,
       shadow: true,
     });
+    if (tooltipLine2) {
+      const l2Y = l1Y + l1Res.height + 2;
+      if (l2Y + 6 <= py + panelH - 3) {
+        this.fonts.draw(ctx, tooltipLine2, px + 14, l2Y, 'fntSmall', {
+          maxWidth: panelW - 28,
+          lineSpacing: 0,
+          shadow: true,
+        });
+      }
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -2171,7 +2996,7 @@ export class MenuSystem {
     const inputMode = mctx.inputMode ?? 'kbm';
     const cx = Math.round(width * 0.5);
 
-    ctx.fillStyle = 'rgba(12, 10, 18, 0.94)';
+    ctx.fillStyle = OPAQUE_MENU_BACKDROP;
     ctx.fillRect(0, 0, width, height);
 
     const panelW = Math.min(296, width - 16);
@@ -2179,11 +3004,9 @@ export class MenuSystem {
     const px = Math.round((width - panelW) * 0.5);
     const modalY = 8;
 
-    ctx.fillStyle = 'rgba(20, 17, 28, 0.96)';
+    ctx.fillStyle = 'rgba(19, 16, 27, 0.98)';
     ctx.fillRect(px, modalY, panelW, panelH);
-    ctx.strokeStyle = '#6b6080';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(px + 0.5, modalY + 0.5, panelW - 1, panelH - 1);
+    drawPixelBorder(ctx, px, modalY, panelW, panelH, '#6b6080', 1);
 
     // Top row: BACK button on top-left + OPTIONS header centered cleanly at modalY + 8
     this.drawButton(
@@ -2198,7 +3021,7 @@ export class MenuSystem {
         type: 'open_screen',
         screen: returnScreenFromOptions,
       }),
-      { font: 'fntSmall' },
+      { font: 'fntSmall', accent: '#ff8a38' },
     );
 
     this.fonts.draw(ctx, 'OPTIONS', cx, modalY + 8, 'fntM1', {
@@ -2214,7 +3037,7 @@ export class MenuSystem {
       });
     }
 
-    // 3-Tab Row below header (VIDEO/AUDIO | CONTROLS | KEYBINDS) — fits 320x240 & 426x240 cleanly
+    // 3-Tab Row below header (VIDEO/AUDIO | CONTROLS | KEYBINDS)
     const tabW = 86;
     const tabH = 14;
     const tabGap = 6;
@@ -2308,7 +3131,7 @@ export class MenuSystem {
       );
       y += 20;
 
-      // Crosshair style + Show FPS + Mute row
+      // Crosshair style (crisp integer 1x 16x16 preview!) + Show FPS + Mute row
       const thirdW = Math.floor((contentW - 8) / 3);
       this.drawButton(
         ctx,
@@ -2316,18 +3139,19 @@ export class MenuSystem {
         contentX,
         y,
         thirdW,
-        16,
+        18,
         `AIM ${save.render.crosshairStyle + 1}`,
         () => ({
           type: 'update_render',
           partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 9 },
         }),
-        { font: 'fntSmall', labelOffsetX: -10, focused: this.focusedIndex === 2 },
+        { font: 'fntSmall', labelOffsetX: -11, focused: this.focusedIndex === 2 },
       );
-      this.sprites.draw(ctx, 'sprCrosshair', contentX + thirdW - 12, y + 8, {
+      // Crisp 1.0x INTEGER crosshair preview (zero 0.7x mixels!)
+      this.sprites.draw(ctx, 'sprCrosshair', contentX + thirdW - 12, y + 9, {
         frame: save.render.crosshairStyle,
-        scaleX: 0.7,
-        scaleY: 0.7,
+        scaleX: 1,
+        scaleY: 1,
         pixelSnap: true,
       });
 
@@ -2337,7 +3161,7 @@ export class MenuSystem {
         contentX + thirdW + 4,
         y,
         thirdW,
-        16,
+        18,
         save.render.showFps ? 'HUD FPS: @gON' : 'HUD FPS: @dOFF',
         () => ({ type: 'update_render', partial: { showFps: !save.render.showFps } }),
         { font: 'fntSmall', focused: this.focusedIndex === 3 },
@@ -2349,7 +3173,7 @@ export class MenuSystem {
         contentX + (thirdW + 4) * 2,
         y,
         thirdW,
-        16,
+        18,
         save.audio.muted ? '@rMUTED' : '@gAUDIO ON',
         () => ({ type: 'update_audio', partial: { muted: !save.audio.muted } }),
         {
@@ -2358,9 +3182,9 @@ export class MenuSystem {
           focused: this.focusedIndex === 4,
         },
       );
-      y += 22;
+      y += 23;
 
-      // Sliders: Screen Shake + Master / SFX / Music / Ambience volumes
+      // Sliders with visible pixel thumb knobs: Screen Shake + Master / SFX / Music / Ambience volumes
       this.drawSliderRow(
         ctx,
         'opt_shake',
@@ -2443,7 +3267,7 @@ export class MenuSystem {
           : '@dCLICK, DRAG, OR ARROWS - SETTINGS AUTO-SAVE';
       this.fonts.draw(ctx, genFooter, cx, modalY + panelH - 12, 'fntSmall', { align: 'center' });
     } else if (this.optionsTab === 'controls') {
-      // Dedicated Controls Tab (PC + Tesla Controller & Touch Controls)
+      // Dedicated Controls Tab (PC / Tesla Controller + Touch Controls)
       const ctrl = save.controls;
       this.drawButton(
         ctx,
@@ -2531,9 +3355,7 @@ export class MenuSystem {
       const boxH = 54;
       ctx.fillStyle = 'rgba(12, 10, 18, 0.85)';
       ctx.fillRect(contentX, y, contentW, boxH);
-      ctx.strokeStyle = mctx.gamepadConnected ? '#52e864' : '#4a4358';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(contentX + 0.5, y + 0.5, contentW - 1, boxH - 1);
+      drawPixelBorder(ctx, contentX, y, contentW, boxH, mctx.gamepadConnected ? '#52e864' : '#4a4358', 1);
 
       const rawName = (mctx.gamepadName ?? '').trim().toUpperCase();
       const shortName = rawName.length > 26 ? `${rawName.slice(0, 25)}.` : rawName;
@@ -2571,16 +3393,17 @@ export class MenuSystem {
         { align: 'center', outline: true },
       );
 
+      // Fixed "PC & TESLA" -> "PC / TESLA" (Steam fntSmall garbles '&'!)
       const ctrlFooter =
         inputMode === 'gamepad'
           ? '@d[LB/RB] TABS  [L/R] ADJUST  [A] TOGGLE  [B] BACK'
-          : '@dPC & TESLA GAMEPAD + TOUCH AUTO-DETECT';
+          : '@dPC / TESLA GAMEPAD + TOUCH AUTO-DETECT';
       this.fonts.draw(ctx, ctrlFooter, cx, modalY + panelH - 12, 'fntSmall', {
         align: 'center',
       });
     } else {
-      // Keybind Rebinding Table
-      const rowH = 19;
+      // Keybind Rebinding Table (balanced vertical spacing + ESC TO CANCEL + conflict auto-swap note)
+      const rowH = 20;
       const colW = Math.floor((contentW - 8) / 2);
 
       for (let i = 0; i < KEYBIND_LABELS.length; i++) {
@@ -2588,7 +3411,7 @@ export class MenuSystem {
         const col = i % 2;
         const row = Math.floor(i / 2);
         const rx = contentX + col * (colW + 8);
-        const ry = y + row * (rowH + 4);
+        const ry = y + 4 + row * (rowH + 6);
         const isListening = rebindingField === entry.field;
         const isRowFocused = this.focusedIndex === i;
         const keyText = isListening
@@ -2613,13 +3436,35 @@ export class MenuSystem {
         );
       }
 
+      // Informative status banner filling lower region cleanly (with prominent ESC TO CANCEL!)
+      const noteY = y + 4 + 4 * (rowH + 6) + 4;
+      ctx.fillStyle = rebindingField ? 'rgba(64, 48, 18, 0.72)' : 'rgba(12, 10, 18, 0.72)';
+      ctx.fillRect(contentX, noteY, contentW, 20);
+      drawPixelBorder(
+        ctx,
+        contentX,
+        noteY,
+        contentW,
+        20,
+        rebindingField ? '#ffe047' : 'rgba(104, 96, 128, 0.45)',
+        1,
+      );
+      const kbHint = rebindingField
+        ? '@yLISTENING FOR KEY - PRESS ESC TO CANCEL'
+        : '@dCLICK OR ENTER TO REBIND - CONFLICTS AUTO-SWAP - ESC TO CANCEL';
+      this.fonts.draw(ctx, kbHint, cx, noteY + 6, 'fntSmall', {
+        align: 'center',
+        maxWidth: contentW - 8,
+        outline: Boolean(rebindingField),
+      });
+
       this.drawButton(
         ctx,
         'opt_kb_reset',
-        cx - 56,
-        modalY + panelH - 26,
-        112,
-        16,
+        cx - 58,
+        modalY + panelH - 28,
+        116,
+        17,
         'RESET DEFAULTS',
         () => ({ type: 'reset_keybinds' }),
         { font: 'fntSmall', accent: '#ff8a38', focused: this.focusedIndex === 8 },
@@ -2639,21 +3484,34 @@ export class MenuSystem {
     const { width, height, simState, save } = mctx;
     const cx = Math.round(width * 0.5);
 
-    ctx.fillStyle = victory ? 'rgba(20, 18, 10, 0.90)' : 'rgba(18, 8, 12, 0.90)';
+    // Clean opaque dark backdrop so gameplay arena never bleeds brightly through corners!
+    ctx.fillStyle = victory ? 'rgba(16, 14, 9, 0.96)' : 'rgba(15, 7, 10, 0.96)';
     ctx.fillRect(0, 0, width, height);
+
+    const areaCode = simState?.areaCode ?? save.bestArea;
+    const loopNum = simState?.loop ?? 0;
+    const muts = simState?.player.mutations ?? [];
+    const ultra = simState?.player.ultra ?? null;
+    const hasMutRow = muts.length > 0 || Boolean(ultra);
+
+    // Dynamically size card height so 0-mutation Game Over never leaves a giant empty black void!
+    const cardW = Math.min(292, width - 18);
+    const cardH = hasMutRow ? 148 : 118;
+    const totalBlockH = 38 + cardH + 10 + 22;
+    const topY = Math.max(6, Math.round((height - totalBlockH) * 0.5));
+    const cardX = Math.round((width - cardW) * 0.5);
+    const cardY = topY + 36;
 
     // Header
     this.fonts.draw(
       ctx,
       victory ? 'VICTORY!' : 'GAME OVER',
       cx,
-      8,
+      topY,
       'fntL',
       { align: 'center', color: victory ? '#ffe047' : '#ff4242', outline: true },
     );
 
-    const areaCode = simState?.areaCode ?? save.bestArea;
-    const loopNum = simState?.loop ?? 0;
     const sub = victory
       ? '@yYOU REACHED THE KRUNKED THRONE'
       : loopNum > 0
@@ -2661,19 +3519,14 @@ export class MenuSystem {
         : areaCode.startsWith('7-')
           ? '@rYOU ALMOST REACHED THE KRUNKED THRONE'
           : '@dYOU DID NOT REACH THE KRUNKED THRONE';
-    this.fonts.draw(ctx, sub, cx, 28, 'fntSmall', { align: 'center', outline: true });
+    this.fonts.draw(ctx, sub, cx, topY + 20, 'fntSmall', { align: 'center', outline: true });
 
-    // Summary Card (with NT Area Progression Map, Weapons, Crown & Mutations)
-    const cardW = Math.min(288, width - 20);
-    const cardH = 148;
-    const cardX = Math.round((width - cardW) * 0.5);
-    const cardY = 40;
-
-    ctx.fillStyle = 'rgba(14, 12, 20, 0.92)';
+    // Summary Card
+    ctx.fillStyle = 'rgba(14, 11, 20, 0.96)';
     ctx.fillRect(cardX, cardY, cardW, cardH);
-    ctx.strokeStyle = victory ? '#ffe047' : '#a82838';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
+    ctx.fillStyle = victory ? '#ffe047' : '#c92a3c';
+    ctx.fillRect(cardX + 1, cardY + 1, cardW - 2, 2);
+    drawPixelBorder(ctx, cardX, cardY, cardW, cardH, victory ? '#ffe047' : '#a82838', 1);
 
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
     const areaText = simState
@@ -2688,14 +3541,13 @@ export class MenuSystem {
     const secs = Math.floor(((simState?.stats.timeTicks ?? 0) / 30) % 60);
     const timeStr = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 
-    // Left sprite box: killer sprite on Game Over, triumphant mutant portrait on Victory
+    // Left sprite box: killer sprite on Game Over (skipping blank dissolve / white frame 0!), portrait on Victory
     const boxX = cardX + 10;
     const boxY = cardY + 10;
     const boxSize = 52;
-    ctx.fillStyle = '#0d0a12';
+    ctx.fillStyle = '#0c0912';
     ctx.fillRect(boxX, boxY, boxSize, boxSize);
-    ctx.strokeStyle = '#524863';
-    ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxSize - 1, boxSize - 1);
+    drawPixelBorder(ctx, boxX, boxY, boxSize, boxSize, '#524863', 1);
 
     const endSkin: 'a' | 'b' = simState?.player.skin ?? save.selectedSkins[mutant.id] ?? 'a';
     if (victory) {
@@ -2719,7 +3571,9 @@ export class MenuSystem {
         boxSize - 4,
       );
       if (!drew) {
-        this.sprites.drawInBox(ctx, mutant.sprites.idle, 0, boxX + 8, boxY + 8, boxSize - 16, boxSize - 16);
+        this.drawSpriteIntegerCentered(ctx, mutant.sprites.idle, 0, boxX + 4, boxY + 4, boxSize - 8, boxSize - 8, {
+          allow2x: true,
+        });
       }
     } else {
       const rawCause = (simState?.player.lastDamageCause ?? '').trim().toUpperCase();
@@ -2737,15 +3591,37 @@ export class MenuSystem {
 
       let drew = false;
       if (hasValidKiller) {
-        drew = this.sprites.drawInBox(ctx, rawKiller, 0, boxX + 6, boxY + 6, boxSize - 12, boxSize - 12);
+        const killerDef = this.sprites.getSprite(rawKiller);
+        const killerFrame = resolveDisplaySpriteFrame(killerDef, rawKiller);
+        drew = this.drawSpriteIntegerCentered(
+          ctx,
+          rawKiller,
+          killerFrame,
+          boxX + 4,
+          boxY + 4,
+          boxSize - 8,
+          boxSize - 8,
+          { allow2x: true },
+        );
       }
       if (!drew) {
         const deadDef = this.sprites.getSprite(deadSpr);
-        const deadFrame = resolveCorpseFrame(deadDef?.frames.length ?? 1);
-        drew = this.sprites.drawInBox(ctx, deadSpr, deadFrame, boxX + 8, boxY + 8, boxSize - 16, boxSize - 16);
+        const deadFrame = resolveDisplaySpriteFrame(deadDef, deadSpr);
+        drew = this.drawSpriteIntegerCentered(
+          ctx,
+          deadSpr,
+          deadFrame,
+          boxX + 4,
+          boxY + 4,
+          boxSize - 8,
+          boxSize - 8,
+          { allow2x: true },
+        );
       }
       if (!drew) {
-        this.sprites.drawInBox(ctx, 'sprBanditIdle', 0, boxX + 6, boxY + 6, boxSize - 12, boxSize - 12);
+        this.drawSpriteIntegerCentered(ctx, 'sprBanditIdle', 0, boxX + 4, boxY + 4, boxSize - 8, boxSize - 8, {
+          allow2x: true,
+        });
       }
     }
 
@@ -2791,15 +3667,14 @@ export class MenuSystem {
         const wSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
         ctx.fillStyle = 'rgba(24, 20, 34, 0.85)';
         ctx.fillRect(wx, wepRowY, 26, 13);
-        ctx.strokeStyle = slot.cursed ? '#b94aff' : '#524863';
-        ctx.strokeRect(wx + 0.5, wepRowY + 0.5, 25, 12);
-        this.sprites.drawInBox(ctx, wSpr, 0, wx + 2, wepRowY + 1, 22, 11, { maxScale: 1 });
+        drawPixelBorder(ctx, wx, wepRowY, 26, 13, slot.cursed ? '#b94aff' : '#524863', 1);
+        this.drawSpriteIntegerCentered(ctx, wSpr, 0, wx + 2, wepRowY + 1, 22, 11);
         wx += 30;
       }
       if (simState.crown !== 'none') {
         const cDef = this.data.getCrown(simState.crown);
-        this.sprites.drawInBox(ctx, cDef.spriteIdle, 0, wx + 2, wepRowY + 1, 12, 11);
-        wx += 16;
+        this.drawSpriteIntegerCentered(ctx, cDef.spriteIdle, 0, wx + 1, wepRowY, 16, 14);
+        wx += 18;
       }
       if (bosses.length > 0) {
         const bossLabel = bosses
@@ -2812,98 +3687,103 @@ export class MenuSystem {
       }
     }
 
-    // Iconic NT Horizontal Area Progression Map (1-1 -> 7-3 + Throne emblem + reached skull/loop marker)
-    const mapY = cardY + 74;
-    const mapLeft = cardX + 16;
+    // Iconic NT Horizontal Area Progression Map (with Vault support, clear Loop L1/L2 labels & clean 7-3 spacing!)
+    const mapY = cardY + 75;
+    const mapLeft = cardX + 18;
     const mapRight = cardX + cardW - 22;
     const nodeCount = MAIN_PATH_AREAS.length;
     const progressIdx = victory ? nodeCount - 1 : resolveRunProgressIndex(areaCode);
 
-    ctx.fillStyle = 'rgba(10, 8, 16, 0.78)';
-    ctx.fillRect(cardX + 8, mapY - 7, cardW - 16, 21);
-    ctx.strokeStyle = '#3b344a';
-    ctx.strokeRect(cardX + 8.5, mapY - 6.5, cardW - 17, 20);
+    ctx.fillStyle = 'rgba(10, 8, 16, 0.84)';
+    ctx.fillRect(cardX + 8, mapY - 8, cardW - 16, 26);
+    drawPixelBorder(ctx, cardX + 8, mapY - 8, cardW - 16, 26, '#3b344a', 1);
 
-    // Base road rail + completed emerald path
+    // Base road rail + completed emerald/gold path
     ctx.fillStyle = '#3e394a';
-    ctx.fillRect(mapLeft, mapY + 2, mapRight - mapLeft, 2);
+    ctx.fillRect(mapLeft, mapY + 1, mapRight - mapLeft, 2);
     const reachX = Math.round(mapLeft + ((mapRight - mapLeft) * progressIdx) / Math.max(1, nodeCount - 1));
     ctx.fillStyle = victory ? '#ffe047' : '#52e864';
-    ctx.fillRect(mapLeft, mapY + 2, Math.max(2, reachX - mapLeft), 2);
+    ctx.fillRect(mapLeft, mapY + 1, Math.max(2, reachX - mapLeft), 2);
 
     for (let n = 0; n < nodeCount; n++) {
       const nx = Math.round(mapLeft + ((mapRight - mapLeft) * n) / Math.max(1, nodeCount - 1));
       const reached = n <= progressIdx;
       const isBossArea = MAIN_PATH_AREAS[n]!.endsWith('-3');
       if (n === nodeCount - 1) {
-        const drewThrone = this.sprites.drawInBox(ctx, 'sprGameOverThrone', 0, nx - 4, mapY - 2, 9, 8);
+        // Positioned at mapY - 4..mapY + 4 -> crisp 4px vertical gap above "7-3" label at mapY + 8!
+        const drewThrone = this.drawSpriteIntegerCentered(ctx, 'sprGameOverThrone', 0, nx - 4, mapY - 4, 9, 8);
         if (!drewThrone) {
           ctx.fillStyle = reached ? '#ffe047' : '#635c75';
-          ctx.fillRect(nx - 3, mapY - 1, 6, 6);
+          ctx.fillRect(nx - 3, mapY - 3, 6, 6);
         }
       } else {
         const dotSize = isBossArea ? 4 : 3;
         ctx.fillStyle = reached ? (isBossArea ? '#ffe047' : '#52e864') : '#524b61';
-        ctx.fillRect(nx - Math.floor(dotSize / 2), mapY + 3 - Math.floor(dotSize / 2), dotSize, dotSize);
+        ctx.fillRect(nx - Math.floor(dotSize / 2), mapY + 2 - Math.floor(dotSize / 2), dotSize, dotSize);
       }
     }
 
-    // Reached area marker (sprGameOverSkull on Game Over, gold pulse diamond on Victory)
+    // Reached area skull marker (cleanly above road rail)
     if (!victory) {
-      const drewSkull = this.sprites.drawInBox(ctx, 'sprGameOverSkull', 0, reachX - 4, mapY - 6, 8, 6);
+      const drewSkull = this.drawSpriteIntegerCentered(ctx, 'sprGameOverSkull', 0, reachX - 4, mapY - 7, 8, 6);
       if (!drewSkull) {
         ctx.fillStyle = '#ff4242';
-        ctx.fillRect(reachX - 2, mapY - 5, 4, 4);
+        ctx.fillRect(reachX - 2, mapY - 6, 4, 4);
       }
     }
-    this.fonts.draw(ctx, '1-1', mapLeft - 2, mapY + 6, 'fntSmall', { color: '#8f8b9e' });
-    this.fonts.draw(
-      ctx,
-      loopNum > 0 ? `@yL${loopNum}` : '7-3',
-      mapRight + 4,
-      mapY + 6,
-      'fntSmall',
-      { align: 'right', color: '#8f8b9e' },
-    );
 
-    // Acquired mutations & Ultra strip inside summary card
-    const muts = simState?.player.mutations ?? [];
-    const ultra = simState?.player.ultra ?? null;
-    this.fonts.draw(
-      ctx,
-      `@dMUTATIONS (${muts.length}${ultra ? '+U' : ''}):`,
-      cardX + 10,
-      cardY + 95,
-      'fntSmall',
-      { outline: true },
-    );
-    const maxShownMuts = Math.min(muts.length, 15);
-    for (let i = 0; i < maxShownMuts; i++) {
-      const def = this.data.getMutation(muts[i]!);
-      const mx = cardX + 10 + i * 15;
-      const my = cardY + 107;
-      const drew = def
-        ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 12, 12)
-        : false;
-      if (!drew) {
-        ctx.fillStyle = '#4de862';
-        ctx.fillRect(mx, my, 11, 11);
-      }
+    // Clear Loop L1/L2 labels on BOTH ends + Vault/Secret tag when applicable, spaced cleanly below Throne!
+    const leftLabel = loopNum > 0 ? `@yL${loopNum} @d1-1` : '1-1';
+    const rightLabel = loopNum > 0 ? `@yL${loopNum} @d7-3` : '7-3';
+    this.fonts.draw(ctx, leftLabel, mapLeft - 4, mapY + 8, 'fntSmall', { color: '#8f8b9e' });
+    if (areaCode === 'vault') {
+      this.fonts.draw(ctx, '@gVAULT', reachX, mapY + 8, 'fntSmall', { align: 'center' });
+    } else if (loopNum > 0) {
+      this.fonts.draw(ctx, `@yLOOP ${loopNum}`, cx, mapY + 8, 'fntSmall', { align: 'center' });
     }
-    if (ultra) {
-      const uDef = this.data.getUltra(ultra);
-      const egHudDef = this.sprites.getSprite('sprEGIconHUD');
-      const uFrame = uDef
-        ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
-        : 0;
-      const ux = cardX + 10 + maxShownMuts * 15;
-      const uy = cardY + 106;
-      const drew = uDef
-        ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uFrame, ux, uy, 14, 14)
-        : false;
-      if (!drew) {
-        ctx.fillStyle = '#ffe047';
-        ctx.fillRect(ux, uy + 1, 12, 12);
+    this.fonts.draw(ctx, rightLabel, mapRight + 6, mapY + 8, 'fntSmall', {
+      align: 'right',
+      color: '#8f8b9e',
+    });
+
+    // Acquired mutations & Ultra strip (only expands card when mutations/ultra exist!)
+    if (hasMutRow) {
+      this.fonts.draw(
+        ctx,
+        `@dMUTATIONS (${muts.length}${ultra ? '+U' : ''}):`,
+        cardX + 10,
+        cardY + 99,
+        'fntSmall',
+        { outline: true },
+      );
+      const maxShownMuts = Math.min(muts.length, 15);
+      for (let i = 0; i < maxShownMuts; i++) {
+        const def = this.data.getMutation(muts[i]!);
+        const mx = cardX + 10 + i * 17;
+        const my = cardY + 110;
+        const drew = def
+          ? this.drawSpriteIntegerCentered(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 16, 16)
+          : false;
+        if (!drew) {
+          ctx.fillStyle = '#4de862';
+          ctx.fillRect(mx + 2, my + 2, 12, 12);
+        }
+      }
+      if (ultra) {
+        const uDef = this.data.getUltra(ultra);
+        const egHudDef = this.sprites.getSprite('sprEGIconHUD');
+        const uFrame = uDef
+          ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
+          : 0;
+        const ux = cardX + 10 + maxShownMuts * 17;
+        const uy = cardY + 109;
+        const drew = uDef
+          ? this.drawSpriteIntegerCentered(ctx, 'sprEGIconHUD', uFrame, ux, uy, 18, 18)
+          : false;
+        if (!drew) {
+          ctx.fillStyle = '#ffe047';
+          ctx.fillRect(ux + 2, uy + 2, 12, 12);
+        }
       }
     }
 
@@ -2919,7 +3799,7 @@ export class MenuSystem {
       maxWidth: cardW - 16,
     });
 
-    // Bottom buttons: RETRY & CAMPFIRE (100% gamepad/keyboard/touch focusable)
+    // Bottom buttons: RETRY & CAMPFIRE
     const endMode = mctx.inputMode ?? 'kbm';
     const retryBtnLabel =
       endMode === 'gamepad'

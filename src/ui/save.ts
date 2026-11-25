@@ -103,6 +103,70 @@ function keyCodeVal(val: unknown, fallback: string): string {
   return fallback;
 }
 
+const KEYBIND_FIELDS: readonly (keyof KeyBindings)[] = [
+  'up',
+  'down',
+  'left',
+  'right',
+  'swap',
+  'pickup',
+  'pause',
+  'activeAlt',
+];
+
+/**
+ * Guarantees every action in KeyBindings maps to a distinct key code.
+ * If an untrusted/loaded save binds two actions to the same key, reassigns the
+ * duplicate to an unused default key so directional/action inputs never cancel out.
+ */
+export function deduplicateKeybinds(binds: KeyBindings): KeyBindings {
+  const out: KeyBindings = { ...binds };
+  const used = new Set<string>();
+  const defaultPool = KEYBIND_FIELDS.map((f) => DEFAULT_KEYBINDINGS[f]);
+
+  for (const field of KEYBIND_FIELDS) {
+    const code = out[field];
+    if (!used.has(code)) {
+      used.add(code);
+      continue;
+    }
+    const fallback =
+      defaultPool.find((candidate) => !used.has(candidate)) ??
+      `${DEFAULT_KEYBINDINGS[field]}_${field}`;
+    out[field] = fallback;
+    used.add(fallback);
+  }
+  return out;
+}
+
+/**
+ * Applies partial KeyBindings updates with automatic conflict swapping:
+ * rebinding an action to a key already bound to another action cleanly swaps
+ * the two bindings so two actions never collide on the same key.
+ */
+export function resolveKeybindUpdate(
+  current: KeyBindings,
+  partial: Partial<KeyBindings>,
+): KeyBindings {
+  const next: KeyBindings = { ...current };
+  for (const field of KEYBIND_FIELDS) {
+    if (partial[field] === undefined) continue;
+    const desired = keyCodeVal(partial[field], next[field]);
+    const previous = next[field];
+    if (desired === previous) continue;
+
+    // Swap with any conflicting action that already owns `desired`
+    for (const other of KEYBIND_FIELDS) {
+      if (other !== field && next[other] === desired) {
+        next[other] = previous;
+        break;
+      }
+    }
+    next[field] = desired;
+  }
+  return deduplicateKeybinds(next);
+}
+
 function isMutantId(v: unknown): v is MutantId {
   return typeof v === 'string' && MUTANT_SET.has(v);
 }
@@ -287,7 +351,7 @@ export function validateSaveData(raw: unknown): SaveData {
       showFps: boolVal(renderRaw.showFps, def.render.showFps),
       pixelSnap: boolVal(renderRaw.pixelSnap, def.render.pixelSnap),
     },
-    keybinds: {
+    keybinds: deduplicateKeybinds({
       up: keyCodeVal(kbRaw.up, def.keybinds.up),
       down: keyCodeVal(kbRaw.down, def.keybinds.down),
       left: keyCodeVal(kbRaw.left, def.keybinds.left),
@@ -296,7 +360,7 @@ export function validateSaveData(raw: unknown): SaveData {
       pickup: keyCodeVal(kbRaw.pickup, def.keybinds.pickup),
       pause: keyCodeVal(kbRaw.pause, def.keybinds.pause),
       activeAlt: keyCodeVal(kbRaw.activeAlt, def.keybinds.activeAlt),
-    },
+    }),
     controls: {
       gamepadAimAssist: boolVal(ctrlRaw.gamepadAimAssist, def.controls.gamepadAimAssist),
       gamepadRumble: boolVal(ctrlRaw.gamepadRumble, def.controls.gamepadRumble),
@@ -479,18 +543,13 @@ export class SaveManager {
   }
 
   updateKeybinds(partial: Partial<KeyBindings>): KeyBindings {
-    this.data.keybinds = {
-      up: keyCodeVal(partial.up, this.data.keybinds.up),
-      down: keyCodeVal(partial.down, this.data.keybinds.down),
-      left: keyCodeVal(partial.left, this.data.keybinds.left),
-      right: keyCodeVal(partial.right, this.data.keybinds.right),
-      swap: keyCodeVal(partial.swap, this.data.keybinds.swap),
-      pickup: keyCodeVal(partial.pickup, this.data.keybinds.pickup),
-      pause: keyCodeVal(partial.pause, this.data.keybinds.pause),
-      activeAlt: keyCodeVal(partial.activeAlt, this.data.keybinds.activeAlt),
-    };
+    this.data.keybinds = resolveKeybindUpdate(this.data.keybinds, partial);
     this.save();
     return this.data.keybinds;
+  }
+
+  rebindKey(field: keyof KeyBindings, code: string): KeyBindings {
+    return this.updateKeybinds({ [field]: code });
   }
 
   resetKeybinds(): KeyBindings {
