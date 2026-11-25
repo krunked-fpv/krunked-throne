@@ -57,9 +57,11 @@ export function resolveHealthFillFrame(hurtFlashTicks: number): number {
 
 /**
  * Pixel-verified Ultra icon frame resolver across both Steam NT and Built-In Art packs:
- * - Steam `sprEGSkillIcon` (48 frames) & `sprEGIconHUD` (52 frames) store 3 frames per race
- *   starting at race 0 (`0..2` random/placeholder), so mutant races 1..12 sit at `raceIndex * 3 + slot`.
- * - Built-In Art stores compact 24 frames (`(raceIndex - 1) * 2 + slot`).
+ * - Steam `sprEGIconHUD` (52 frames) has a 3-frame race-0 dummy prefix (`0..2`), so
+ *   mutant races 1..12 sit at `raceIndex * 3 + offset` (Fish = 3,4 .. Rogue = 36,37).
+ * - Steam `sprEGSkillIcon` (48 frames = 16 races x 3) has NO race-0 prefix, so
+ *   mutant races 1..12 sit at `(raceIndex - 1) * 3 + offset` (Fish = 0,1 .. Rogue = 33,34).
+ * - Built-In Art stores compact 24 frames (`(raceIndex - 1) * 2 + offset`).
  */
 export function computeUltraIconFrame(
   raceIndex: number,
@@ -67,8 +69,11 @@ export function computeUltraIconFrame(
   totalFrames: number = 24,
 ): number {
   const offset = slot === 'b' ? 1 : 0;
-  if (totalFrames >= 39) {
+  if (totalFrames >= 51) {
     return Math.max(0, raceIndex) * 3 + offset;
+  }
+  if (totalFrames >= 36) {
+    return Math.max(0, raceIndex - 1) * 3 + offset;
   }
   return Math.max(0, raceIndex - 1) * 2 + offset;
 }

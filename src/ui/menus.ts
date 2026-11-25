@@ -1028,7 +1028,12 @@ export class MenuSystem {
         this.sprites.draw(ctx, 'sprLogoGlow', cx, logoY, { alpha: glowPulse, pixelSnap: true });
       }
       const logoSpr = this.sprites.getSprite('sprLogo');
-      const logoFrame = computeTitleLogoFrame(timeSec, logoSpr?.frames.length ?? 8);
+      let logoFrame = computeTitleLogoFrame(timeSec, logoSpr?.frames.length ?? 8);
+      // In Steam data.win, sprLogo frame 0 is a 1x1 blank placeholder; skip straight to frame 1 when tiny
+      const f0 = logoSpr?.frames[logoFrame];
+      if (logoFrame === 0 && f0 && f0.srcW <= 2 && f0.srcH <= 2 && (logoSpr?.frames.length ?? 0) > 1) {
+        logoFrame = 1;
+      }
       this.sprites.draw(ctx, 'sprLogo', cx, logoY, {
         frame: logoFrame,
         pixelSnap: true,

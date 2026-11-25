@@ -274,14 +274,24 @@ const DEFAULT_RENDER_SETTINGS: RenderSettings = {
 };
 
 describe('parity-render-ui: Ultra & Ammo Icon Frame Resolvers + Fallback Atlas Parity', () => {
-  it('maps Ultra icons accurately for both Steam 48/52-frame 3-per-race sheets and 24-frame fallback atlas', () => {
-    // Steam NT stride: raceIndex * 3 + (slot === 'b' ? 1 : 0)
-    expect(computeUltraIconFrame(1, 'a', 48)).toBe(3); // Fish A
-    expect(computeUltraIconFrame(1, 'b', 48)).toBe(4); // Fish B
+  it('maps Ultra icons accurately for Steam 48f sprEGSkillIcon, 52f sprEGIconHUD, and 24f fallback atlas', () => {
+    // Steam sprEGSkillIcon (48 frames, NO race-0 prefix): (raceIndex - 1) * 3 + offset
+    expect(computeUltraIconFrame(1, 'a', 48)).toBe(0); // Fish A
+    expect(computeUltraIconFrame(1, 'b', 48)).toBe(1); // Fish B
+    expect(computeUltraIconFrame(2, 'a', 48)).toBe(3); // Crystal A
+    expect(computeUltraIconFrame(2, 'b', 48)).toBe(4); // Crystal B
+    expect(computeUltraIconFrame(11, 'a', 48)).toBe(30); // Horror A
+    expect(computeUltraIconFrame(11, 'b', 48)).toBe(31); // Horror B
+    expect(computeUltraIconFrame(12, 'a', 48)).toBe(33); // Rogue A
+    expect(computeUltraIconFrame(12, 'b', 48)).toBe(34); // Rogue B
+
+    // Steam sprEGIconHUD (52 frames, WITH 3-frame race-0 prefix): raceIndex * 3 + offset
+    expect(computeUltraIconFrame(1, 'a', 52)).toBe(3); // Fish A
+    expect(computeUltraIconFrame(1, 'b', 52)).toBe(4); // Fish B
     expect(computeUltraIconFrame(2, 'a', 52)).toBe(6); // Crystal A
     expect(computeUltraIconFrame(2, 'b', 52)).toBe(7); // Crystal B
-    expect(computeUltraIconFrame(11, 'a', 48)).toBe(33); // Horror A
-    expect(computeUltraIconFrame(11, 'b', 48)).toBe(34); // Horror B
+    expect(computeUltraIconFrame(11, 'a', 52)).toBe(33); // Horror A
+    expect(computeUltraIconFrame(11, 'b', 52)).toBe(34); // Horror B
     expect(computeUltraIconFrame(12, 'a', 52)).toBe(36); // Rogue A
     expect(computeUltraIconFrame(12, 'b', 52)).toBe(37); // Rogue B
 
