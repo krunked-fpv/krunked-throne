@@ -1041,9 +1041,9 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
     }
   }
 
-  // Sleep until player advances up red carpet, damages Throne, or destroys a generator
+  // Sleep until player sees Throne enter viewport on carpet, damages Throne, or destroys a generator
   if (boss.aiState === 'sleep') {
-    const approachedCarpet = player.y < boss.y + 340 || dist < 340;
+    const approachedCarpet = player.y < boss.y + 150 || dist < 150;
     if (approachedCarpet || boss.hp < boss.maxHp || state.generatorsRemaining < 4) {
       rt.throneWoken = true;
       boss.aiState = 'orb_volley';

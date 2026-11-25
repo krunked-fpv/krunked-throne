@@ -655,7 +655,7 @@ export function getDefaultAreaGenParams(
         stamp4Chance: 0.08,
         spawnChance: 0.08,
         despawnChance: 0.04,
-        carpetChance: 0.24,
+        carpetChance: 0,
         rectilinear: true,
         minRunLen: 4,
         maxRunLen: 8,

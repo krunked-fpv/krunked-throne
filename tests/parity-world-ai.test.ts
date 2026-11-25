@@ -407,7 +407,7 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
     sB.rngState = rB.getState();
 
     let sawDepartSfx = false;
-    for (let t = 0; t < 120; t++) {
+    for (let t = 0; t < 240; t++) {
       // Remove deployed IDPD squad so only the van remains
       sB.enemies = sB.enemies.filter((e) => e.defId === 'idpd_van');
       drainEvents(sB);
@@ -931,7 +931,10 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
     const pedestal = state.props.find((p) => p.kind === 'proto_statue')!;
     expect(pedestal).toBeDefined();
     expect(pedestal.sprite).toBe('sprCrownPedIdle');
-    expect(pedestal.interactPrompt).toBe('[E] SWITCH CROWN');
+    // Prompt stays hidden while Crown Guardians are still alive!
+    expect(pedestal.interactPrompt).toBeUndefined();
+    stepSimulation(state, makeInput());
+    expect(pedestal.interactPrompt).toBeUndefined();
     // Zero stray sprPillar props in Crown Vault!
     expect(state.props.some((p) => p.sprite === 'sprPillar')).toBe(false);
     // Vault weapon & ammo chests use sprProtoChest!
@@ -943,12 +946,13 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
       expect(c.sprite).toBe('sprProtoChest');
     }
 
-    // Clear guardians -> exit portal opens in alcove >= 110px away from pedestal and emits '5-3' on portal_open!
+    // Clear guardians -> prompt appears, exit portal opens in alcove >= 110px away from pedestal and emits '5-3' on portal_open!
     drainEvents(state);
     state.enemies = [];
     state.player.x = pedestal.x;
     state.player.y = pedestal.y;
     stepSimulation(state, makeInput());
+    expect(pedestal.interactPrompt).toBe('[E] SWITCH CROWN');
     expect(state.portal.active).toBe(true);
     expect(state.portal.targetArea).toBe('5-3');
     const portalOpenEv = state.events.find((ev) => ev.type === 'portal_open');
@@ -1144,10 +1148,13 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
     sVan.rngState = rV.getState();
     for (let t = 0; t < 40 && van!.aiState === 'drive'; t++) stepSimulation(sVan, makeInput());
     expect(van!.aiState).toBe('open');
-    expect(sVan.props.some((p) => p.interactPrompt === '[E] BOARD VAN')).toBe(true);
+    expect(van!.aiTimer).toBe(150);
+    const vanBoardAnchor = sVan.props.find((p) => p.interactPrompt === '[E] BOARD VAN');
+    expect(vanBoardAnchor).toBeDefined();
+    expect(vanBoardAnchor!.sprite).toBe('');
 
-    // Once van closes into 'parked', [E] BOARD VAN prompt prop is removed cleanly
-    for (let t = 0; t < 60 && van!.aiState === 'open'; t++) stepSimulation(sVan, makeInput());
+    // Once van closes into 'parked' after 150-tick (5.0s) window, [E] BOARD VAN prompt prop is removed cleanly
+    for (let t = 0; t < 165 && van!.aiState === 'open'; t++) stepSimulation(sVan, makeInput());
     expect(sVan.props.some((p) => p.interactPrompt === '[E] BOARD VAN')).toBe(false);
   });
 
@@ -1292,7 +1299,7 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
         if (map.tiles[t] === TileType.Carpet) carpet += 1;
       }
       expect(cracked).toBe(0);
-      if (code === '3-?') expect(carpet).toBe(0);
+      if (code === '3-?' || code === 'hq-1') expect(carpet).toBe(0);
     }
 
     // 2. Authentic biome props across Oasis, Pizza Sewers, Mansion, Caves, Cursed Caves, Frozen City, Labs & HQ
@@ -1391,14 +1398,23 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
     expect(bb.y).toBe(bbStartY);
     expect(sIntro.player.hp).toBe(8);
 
-    // 3. 7-3 Krunked Throne: giant rad orb fires at aiTimer === 24 (no % 12 modulo collision) & intact-gen walk-on victory
+    // 3. 7-3 Krunked Throne: stays asleep until player approaches within 150px, giant rad orb fires at aiTimer === 24 & intact-gen walk-on victory
     const sThrone = createRunState({ mutant: 'fish', seed: 7122 });
     sThrone.player.godMode = true;
     warpToArea(sThrone, '7-3', 0);
     const throne = sThrone.enemies.find((e) => e.bossId === 'nuclear_throne')!;
+    // At 220px south of Throne (> 150px), Throne remains silently asleep so player sees sprNothingOff enter viewport!
     sThrone.player.x = throne.x;
+    sThrone.player.y = throne.y + 220;
+    stepSimulation(sThrone, makeInput());
+    expect(throne.aiState).toBe('sleep');
+    expect(sThrone.boss?.introTicks).toBe(0);
+
+    // Stepping within 150px wakes the Throne!
     sThrone.player.y = throne.y + 110;
     stepSimulation(sThrone, makeInput());
+    expect(throne.aiState).not.toBe('sleep');
+    expect(sThrone.boss?.introTicks).toBe(45);
     for (let t = 0; t < 45; t++) stepSimulation(sThrone, makeInput());
 
     // Force advance_volley right before aiTimer === 24 -> verify giant orb fires on aiTimer === 24!
