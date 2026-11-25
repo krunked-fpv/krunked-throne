@@ -25,7 +25,10 @@ export type SynthSoundKind =
   | 'alert'
   | 'low_hp'
   | 'boss_intro'
+  | 'footstep'
   | 'ui_click';
+
+export const SYNTH_SOFT_CLIP_CEILING = 0.88;
 
 export interface SynthVoice {
   stop: () => void;
@@ -60,7 +63,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     return 'low_hp';
   }
 
-  // 1. UI Clicks, Hover, Mutant Confirm/Select, Menu & Weapon Swap
+  // 1. UI Clicks, Hover, Mutant Confirm/Select, Menu, Weapon Swap & Reload Clicks
   if (
     name.includes('click') ||
     name.includes('hover') ||
@@ -73,6 +76,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('pause') ||
     name.includes('menu') ||
     name.includes('swap') ||
+    name.includes('reload') ||
     name.startsWith('ui')
   ) {
     return 'ui_click';
@@ -89,6 +93,7 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('levelup') ||
     name.includes('level_up') ||
     name.includes('levelultra') ||
+    /(?:ultra[abc])(?:\.ogg)?$/.test(name) ||
     name.includes('mutappear') ||
     name.includes('mutstrongspirit') ||
     name.includes('strongspiritgain') ||
@@ -121,6 +126,11 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('bossroar')
   ) {
     return 'boss_intro';
+  }
+
+  // 2b-foot. Subtle surface / mutant footsteps (checked after nothingfootstep, before metal/crystal/hit)
+  if (name.startsWith('sndfoot') || name.includes('footstep')) {
+    return 'footstep';
   }
 
   // 2c. Enemy Alert / Telegraph Warning Cues
@@ -313,6 +323,8 @@ export function classifySound(soundName: string): SynthSoundKind {
     name.includes('throw') ||
     name.includes('chickenreturn') ||
     name.includes('chickenlosehead') ||
+    name.includes('chickenheadless') ||
+    name.includes('rogueaim') ||
     name.includes('strongspiritlost') ||
     name.includes('plantfire') ||
     name.includes('plantsnare') ||
@@ -360,9 +372,10 @@ export function classifySound(soundName: string): SynthSoundKind {
   return 'bullet';
 }
 
-// Cached 1-second white noise buffer & saturation curve per AudioContext
+// Cached 1-second white noise buffer, crunch saturation & soft-clip limiter curves per AudioContext
 const noiseBufferCache = new WeakMap<AudioContext, AudioBuffer>();
 const crunchCurveCache = new WeakMap<AudioContext, Float32Array<ArrayBuffer>>();
+const softLimitCurveCache = new WeakMap<AudioContext, Float32Array<ArrayBuffer>>();
 
 function getNoiseBuffer(ctx: AudioContext): AudioBuffer {
   let buffer = noiseBufferCache.get(ctx);
@@ -381,14 +394,39 @@ function getNoiseBuffer(ctx: AudioContext): AudioBuffer {
 function getCrunchCurve(ctx: AudioContext): Float32Array<ArrayBuffer> {
   let curve = crunchCurveCache.get(ctx);
   if (!curve) {
-    const samples = 256;
+    const samples = 257;
     curve = new Float32Array(new ArrayBuffer(samples * 4));
-    const drive = 24;
+    const drive = 16;
     for (let i = 0; i < samples; i++) {
-      const x = (i * 2) / samples - 1;
-      curve[i] = Math.tanh(x * (1 + drive * 0.14));
+      const x = (i * 2) / (samples - 1) - 1;
+      curve[i] = 0.86 * Math.tanh(x * (1 + drive * 0.12));
     }
     crunchCurveCache.set(ctx, curve);
+  }
+  return curve;
+}
+
+/**
+ * Unity-gain soft-clipper curve for a 0.5x pre-scaled voice bus (`x in [-1, 1]` represents `2*x in [-2, 2]`).
+ * Transparent for low/moderate signals, warm analog knee near peak, strictly bounded below `0.88`
+ * so stacked synth layers NEVER digitally clip above `0.92`.
+ */
+export function buildSoftLimitCurve(samples = 513): Float32Array<ArrayBuffer> {
+  const n = samples % 2 === 1 ? samples : samples + 1;
+  const curve = new Float32Array(new ArrayBuffer(n * 4));
+  const ceiling = SYNTH_SOFT_CLIP_CEILING;
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / (n - 1) - 1;
+    curve[i] = ceiling * Math.tanh((2 * x) / ceiling);
+  }
+  return curve;
+}
+
+function getSoftLimitCurve(ctx: AudioContext): Float32Array<ArrayBuffer> {
+  let curve = softLimitCurveCache.get(ctx);
+  if (!curve) {
+    curve = buildSoftLimitCurve(513);
+    softLimitCurveCache.set(ctx, curve);
   }
   return curve;
 }
@@ -423,14 +461,27 @@ export function playSynthSound(
     const targetDest = destination || ctx.destination;
     const activeNodes: Array<{ stop?: (when?: number) => void; disconnect: () => void }> = [];
 
-    // Voice output bus (supports stereo panning across all synth layers)
-    let voiceOut: AudioNode = targetDest;
+    // Voice output bus: panner + warm unity-gain soft-clipper so multi-layer transients stay punchy and < 0.92 peak
+    let postMixDest: AudioNode = targetDest;
     if (Math.abs(pan) > 0.001 && typeof ctx.createStereoPanner === 'function') {
       const panner = ctx.createStereoPanner();
       panner.pan.setValueAtTime(pan, now);
       panner.connect(targetDest);
       activeNodes.push(panner);
-      voiceOut = panner;
+      postMixDest = panner;
+    }
+
+    let voiceOut: AudioNode = postMixDest;
+    if (typeof ctx.createWaveShaper === 'function') {
+      const preScale = ctx.createGain();
+      preScale.gain.setValueAtTime(0.5, now);
+      const softLimiter = ctx.createWaveShaper();
+      softLimiter.curve = getSoftLimitCurve(ctx);
+      softLimiter.oversample = '2x';
+      preScale.connect(softLimiter);
+      softLimiter.connect(postMixDest);
+      activeNodes.push(preScale, softLimiter);
+      voiceOut = preScale;
     }
 
     const gainNode = ctx.createGain();
@@ -478,10 +529,10 @@ export function playSynthSound(
 
         const bodyFilter = ctx.createBiquadFilter();
         bodyFilter.type = 'lowpass';
-        bodyFilter.frequency.setValueAtTime((isHeavy ? 2800 : 3200) * pitchRate, now);
-        bodyFilter.frequency.exponentialRampToValueAtTime(380, now + 0.095);
+        bodyFilter.frequency.setValueAtTime((isHeavy ? 2350 : 2750) * pitchRate, now);
+        bodyFilter.frequency.exponentialRampToValueAtTime(360, now + 0.095);
 
-        gainNode.gain.setValueAtTime((isHeavy ? 0.5 : 0.42) * volume, now);
+        gainNode.gain.setValueAtTime((isHeavy ? 0.32 : 0.28) * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + (isHeavy ? 0.125 : 0.092));
 
         osc.connect(bodyFilter);
@@ -495,14 +546,15 @@ export function playSynthSound(
           bodyFilter.connect(gainNode);
         }
 
-        // 2. Razor-crisp 15ms muzzle transient crack (makes revolvers & rifles snap through the mix!)
+        // 2. Crisp 15ms muzzle transient crack (trimmed for clean headroom without harsh fizz)
         const snapSrc = ctx.createBufferSource();
         snapSrc.buffer = getNoiseBuffer(ctx);
         const snapHp = ctx.createBiquadFilter();
-        snapHp.type = 'highpass';
-        snapHp.frequency.setValueAtTime((isHeavy ? 2400 : 3400) * pitchRate, now);
+        snapHp.type = 'bandpass';
+        snapHp.frequency.setValueAtTime((isHeavy ? 2600 : 3200) * pitchRate, now);
+        snapHp.Q.setValueAtTime(0.8, now);
         const snapGain = ctx.createGain();
-        snapGain.gain.setValueAtTime((isHeavy ? 0.42 : 0.38) * volume, now);
+        snapGain.gain.setValueAtTime((isHeavy ? 0.24 : 0.22) * volume, now);
         snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.022);
         snapSrc.connect(snapHp);
         snapHp.connect(snapGain);
@@ -513,11 +565,11 @@ export function playSynthSound(
         noiseSrc.buffer = getNoiseBuffer(ctx);
         const crackFilter = ctx.createBiquadFilter();
         crackFilter.type = 'bandpass';
-        crackFilter.frequency.setValueAtTime((isHeavy ? 1750 : 2500) * pitchRate, now);
+        crackFilter.frequency.setValueAtTime((isHeavy ? 1650 : 2300) * pitchRate, now);
         crackFilter.Q.setValueAtTime(0.95, now);
 
         const noiseGain = ctx.createGain();
-        noiseGain.gain.setValueAtTime((isHeavy ? 0.45 : 0.34) * volume, now);
+        noiseGain.gain.setValueAtTime((isHeavy ? 0.27 : 0.22) * volume, now);
         noiseGain.gain.exponentialRampToValueAtTime(0.001, now + (isHeavy ? 0.072 : 0.048));
 
         noiseSrc.connect(crackFilter);
@@ -530,7 +582,7 @@ export function playSynthSound(
         sub.frequency.setValueAtTime((isHeavy ? 148 : 180) * pitchRate, now);
         sub.frequency.exponentialRampToValueAtTime(isHeavy ? 38 : 46, now + 0.068);
         const subGain = ctx.createGain();
-        subGain.gain.setValueAtTime((isHeavy ? 0.54 : 0.38) * volume, now);
+        subGain.gain.setValueAtTime((isHeavy ? 0.33 : 0.24) * volume, now);
         subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.078);
         sub.connect(subGain);
         subGain.connect(voiceOut);
@@ -582,10 +634,10 @@ export function playSynthSound(
         crackSrc.buffer = getNoiseBuffer(ctx);
         const hp = ctx.createBiquadFilter();
         hp.type = 'bandpass';
-        hp.frequency.setValueAtTime(3600 * pitchRate, now);
-        hp.Q.setValueAtTime(0.65, now);
+        hp.frequency.setValueAtTime(3200 * pitchRate, now);
+        hp.Q.setValueAtTime(0.75, now);
         const crackGain = ctx.createGain();
-        crackGain.gain.setValueAtTime((isDouble ? 0.54 : 0.48) * volume, now);
+        crackGain.gain.setValueAtTime((isDouble ? 0.32 : 0.28) * volume, now);
         crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.048);
         crackSrc.connect(hp);
         hp.connect(crackGain);
@@ -598,12 +650,12 @@ export function playSynthSound(
         sub.frequency.exponentialRampToValueAtTime(Math.max(24, 30 * pitchRate), now + (isDouble ? 0.25 : 0.2));
 
         const subGain = ctx.createGain();
-        subGain.gain.setValueAtTime((isDouble ? 0.72 : 0.65) * volume, now);
+        subGain.gain.setValueAtTime((isDouble ? 0.44 : 0.4) * volume, now);
         subGain.gain.exponentialRampToValueAtTime(0.001, now + (isDouble ? 0.27 : 0.22));
         sub.connect(subGain);
         subGain.connect(voiceOut);
 
-        gainNode.gain.setValueAtTime((isDouble ? 0.7 : 0.64) * volume, now);
+        gainNode.gain.setValueAtTime((isDouble ? 0.44 : 0.4) * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + (isDouble ? 0.32 : 0.27));
 
         activeNodes.push(shaper, noiseSrc, lp, crackSrc, hp, crackGain, sub, subGain);
@@ -628,10 +680,10 @@ export function playSynthSound(
         overtone.frequency.setValueAtTime(1640 * pitchRate, now);
         overtone.frequency.exponentialRampToValueAtTime(Math.max(180, 310 * pitchRate), now + 0.07);
         const overGain = ctx.createGain();
-        overGain.gain.setValueAtTime(0.24 * volume, now);
+        overGain.gain.setValueAtTime(0.18 * volume, now);
         overGain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
 
-        gainNode.gain.setValueAtTime(0.48 * volume, now);
+        gainNode.gain.setValueAtTime(0.36 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
         osc.connect(gainNode);
         overtone.connect(overGain);
@@ -642,11 +694,11 @@ export function playSynthSound(
         zipSrc.buffer = getNoiseBuffer(ctx);
         const bp = ctx.createBiquadFilter();
         bp.type = 'bandpass';
-        bp.frequency.setValueAtTime(3800 * pitchRate, now);
+        bp.frequency.setValueAtTime(3600 * pitchRate, now);
         bp.frequency.exponentialRampToValueAtTime(920 * pitchRate, now + 0.09);
         bp.Q.setValueAtTime(3.0, now);
         const zipGain = ctx.createGain();
-        zipGain.gain.setValueAtTime(0.32 * volume, now);
+        zipGain.gain.setValueAtTime(0.24 * volume, now);
         zipGain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
         zipSrc.connect(bp);
         bp.connect(zipGain);
@@ -669,7 +721,7 @@ export function playSynthSound(
         tube.frequency.setValueAtTime(210 * pitchRate, now);
         tube.frequency.exponentialRampToValueAtTime(Math.max(42, 58 * pitchRate), now + 0.16);
 
-        gainNode.gain.setValueAtTime(0.62 * volume, now);
+        gainNode.gain.setValueAtTime(0.44 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
         tube.connect(gainNode);
 
@@ -678,10 +730,10 @@ export function playSynthSound(
         const bp = ctx.createBiquadFilter();
         bp.type = 'bandpass';
         bp.frequency.setValueAtTime(950 * pitchRate, now);
-        bp.frequency.exponentialRampToValueAtTime(2600 * pitchRate, now + 0.16);
+        bp.frequency.exponentialRampToValueAtTime(2400 * pitchRate, now + 0.16);
         bp.Q.setValueAtTime(1.4, now);
         const hissGain = ctx.createGain();
-        hissGain.gain.setValueAtTime(0.36 * volume, now);
+        hissGain.gain.setValueAtTime(0.25 * volume, now);
         hissGain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
 
         hiss.connect(bp);
@@ -713,14 +765,15 @@ export function playSynthSound(
         noiseSrc.connect(filter);
         filter.connect(shaper);
 
-        // 2. Razor-sharp shockwave crack
+        // 2. Crisp shockwave crack (bandpassed to avoid harsh ultra-high clipping)
         const crack = ctx.createBufferSource();
         crack.buffer = getNoiseBuffer(ctx);
         const hp = ctx.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.setValueAtTime(1600, now);
+        hp.type = 'bandpass';
+        hp.frequency.setValueAtTime(2200, now);
+        hp.Q.setValueAtTime(0.75, now);
         const crackGain = ctx.createGain();
-        crackGain.gain.setValueAtTime(0.55 * volume, now);
+        crackGain.gain.setValueAtTime(0.32 * volume, now);
         crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
         crack.connect(hp);
         hp.connect(crackGain);
@@ -733,12 +786,12 @@ export function playSynthSound(
         sub.frequency.exponentialRampToValueAtTime(Math.max(22, 26 * pitchRate), now + 0.48);
 
         const subGain = ctx.createGain();
-        subGain.gain.setValueAtTime(0.76 * volume, now);
+        subGain.gain.setValueAtTime(0.46 * volume, now);
         subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
         sub.connect(subGain);
         subGain.connect(voiceOut);
 
-        gainNode.gain.setValueAtTime(0.82 * volume, now);
+        gainNode.gain.setValueAtTime(0.48 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
 
         activeNodes.push(shaper, noiseSrc, filter, crack, hp, crackGain, sub, subGain);
@@ -826,7 +879,7 @@ export function playSynthSound(
         lp.Q.setValueAtTime(isPlasma ? 4.5 : 2.2, now);
 
         const dur = isPlasma ? 0.23 : 0.17;
-        gainNode.gain.setValueAtTime(0.5 * volume, now);
+        gainNode.gain.setValueAtTime(0.36 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
 
         mod.connect(modGain);
@@ -867,13 +920,13 @@ export function playSynthSound(
         metal2.frequency.exponentialRampToValueAtTime(clangBase * 2.1, now + 0.12);
 
         const metalGain = ctx.createGain();
-        metalGain.gain.setValueAtTime(0.36 * volume, now);
+        metalGain.gain.setValueAtTime(0.24 * volume, now);
         metalGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
         metal1.connect(metalGain);
         metal2.connect(metalGain);
         metalGain.connect(voiceOut);
 
-        gainNode.gain.setValueAtTime(0.5 * volume, now);
+        gainNode.gain.setValueAtTime(0.36 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
 
         activeNodes.push(noiseSrc, bandpass, metal1, metal2, metalGain);
@@ -933,7 +986,7 @@ export function playSynthSound(
           now + (isCorpseSlam ? 0.11 : 0.068)
         );
 
-        gainNode.gain.setValueAtTime((isCorpseSlam ? 0.62 : 0.52) * volume, now);
+        gainNode.gain.setValueAtTime((isCorpseSlam ? 0.44 : 0.36) * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + (isCorpseSlam ? 0.12 : 0.078));
         osc.connect(gainNode);
 
@@ -942,10 +995,10 @@ export function playSynthSound(
         crunch.buffer = getNoiseBuffer(ctx);
         const bp = ctx.createBiquadFilter();
         bp.type = 'bandpass';
-        bp.frequency.setValueAtTime((isHardSurface ? 2600 : 1550) * pitchRate, now);
+        bp.frequency.setValueAtTime((isHardSurface ? 2400 : 1500) * pitchRate, now);
         bp.Q.setValueAtTime(isHardSurface ? 2.2 : 1.1, now);
         const cGain = ctx.createGain();
-        cGain.gain.setValueAtTime(0.38 * volume, now);
+        cGain.gain.setValueAtTime(0.26 * volume, now);
         cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.048);
 
         crunch.connect(bp);
@@ -972,10 +1025,10 @@ export function playSynthSound(
 
         const lp = ctx.createBiquadFilter();
         lp.type = 'lowpass';
-        lp.frequency.setValueAtTime(1800 * pitchRate, now);
-        lp.frequency.exponentialRampToValueAtTime(210, now + 0.24);
+        lp.frequency.setValueAtTime(1550 * pitchRate, now);
+        lp.frequency.exponentialRampToValueAtTime(200, now + 0.24);
 
-        gainNode.gain.setValueAtTime(0.54 * volume, now);
+        gainNode.gain.setValueAtTime(0.34 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
 
         osc.connect(lp);
@@ -987,10 +1040,10 @@ export function playSynthSound(
         splat.buffer = getNoiseBuffer(ctx);
         const bp = ctx.createBiquadFilter();
         bp.type = 'bandpass';
-        bp.frequency.setValueAtTime(1080 * pitchRate, now);
+        bp.frequency.setValueAtTime(1020 * pitchRate, now);
         bp.frequency.exponentialRampToValueAtTime(300 * pitchRate, now + 0.16);
         const sGain = ctx.createGain();
-        sGain.gain.setValueAtTime(0.38 * volume, now);
+        sGain.gain.setValueAtTime(0.24 * volume, now);
         sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
         splat.connect(bp);
         bp.connect(sGain);
@@ -1002,7 +1055,7 @@ export function playSynthSound(
         thud.frequency.setValueAtTime(135 * pitchRate, now);
         thud.frequency.exponentialRampToValueAtTime(36, now + 0.12);
         const thudGain = ctx.createGain();
-        thudGain.gain.setValueAtTime(0.45 * volume, now);
+        thudGain.gain.setValueAtTime(0.28 * volume, now);
         thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
         thud.connect(thudGain);
         thudGain.connect(voiceOut);
@@ -1091,14 +1144,15 @@ export function playSynthSound(
 
         const lp = ctx.createBiquadFilter();
         lp.type = 'lowpass';
-        lp.frequency.setValueAtTime(1600, now);
-        lp.frequency.exponentialRampToValueAtTime(340, now + 0.65);
-        lp.Q.setValueAtTime(3.2, now);
+        lp.frequency.setValueAtTime(1180, now);
+        lp.frequency.exponentialRampToValueAtTime(260, now + 0.6);
+        lp.Q.setValueAtTime(2.0, now);
 
+        // Balanced cinematic brassy sting (well-controlled RMS relative to gunfire!)
         gainNode.gain.setValueAtTime(0.001, now);
-        gainNode.gain.linearRampToValueAtTime(0.52 * volume, now + 0.025);
-        gainNode.gain.setValueAtTime(0.46 * volume, now + 0.35);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.72);
+        gainNode.gain.linearRampToValueAtTime(0.24 * volume, now + 0.03);
+        gainNode.gain.setValueAtTime(0.18 * volume, now + 0.28);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.64);
 
         horn1.connect(lp);
         horn2.connect(lp);
@@ -1109,10 +1163,10 @@ export function playSynthSound(
         const sub = ctx.createOscillator();
         sub.type = 'sine';
         sub.frequency.setValueAtTime(78 * pitchRate, now);
-        sub.frequency.exponentialRampToValueAtTime(30, now + 0.55);
+        sub.frequency.exponentialRampToValueAtTime(30, now + 0.48);
         const subGain = ctx.createGain();
-        subGain.gain.setValueAtTime(0.65 * volume, now);
-        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.62);
+        subGain.gain.setValueAtTime(0.32 * volume, now);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.54);
         sub.connect(subGain);
         subGain.connect(voiceOut);
 
@@ -1120,10 +1174,10 @@ export function playSynthSound(
         const clang = ctx.createOscillator();
         clang.type = 'triangle';
         clang.frequency.setValueAtTime(620 * pitchRate, now);
-        clang.frequency.exponentialRampToValueAtTime(410 * pitchRate, now + 0.38);
+        clang.frequency.exponentialRampToValueAtTime(410 * pitchRate, now + 0.32);
         const clangGain = ctx.createGain();
-        clangGain.gain.setValueAtTime(0.24 * volume, now);
-        clangGain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+        clangGain.gain.setValueAtTime(0.14 * volume, now);
+        clangGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
         clang.connect(clangGain);
         clangGain.connect(voiceOut);
 
@@ -1192,6 +1246,42 @@ export function playSynthSound(
       }
 
       case 'portal': {
+        const isLoop = rawLower.includes('loop');
+        if (isLoop) {
+          // Subtle resonant dimensional vortex hum for sndPortalLoop / sndPortalStrikeLoop
+          const hum = ctx.createOscillator();
+          hum.type = 'sine';
+          hum.frequency.setValueAtTime(165 * pitchRate, now);
+          hum.frequency.exponentialRampToValueAtTime(215 * pitchRate, now + 0.18);
+          hum.frequency.exponentialRampToValueAtTime(155 * pitchRate, now + 0.36);
+
+          gainNode.gain.setValueAtTime(0.001, now);
+          gainNode.gain.linearRampToValueAtTime(0.18 * volume, now + 0.04);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+          hum.connect(gainNode);
+
+          const swirl = ctx.createBufferSource();
+          swirl.buffer = getNoiseBuffer(ctx);
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(680 * pitchRate, now);
+          bp.frequency.exponentialRampToValueAtTime(1250 * pitchRate, now + 0.22);
+          bp.Q.setValueAtTime(3.6, now);
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.12 * volume, now);
+          sg.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+          swirl.connect(bp);
+          bp.connect(sg);
+          sg.connect(voiceOut);
+
+          activeNodes.push(hum, swirl, bp, sg);
+          hum.start(now);
+          swirl.start(now, Math.random() * 0.4);
+          hum.stop(now + 0.4);
+          swirl.stop(now + 0.38);
+          break;
+        }
+
         // Dimensional vortex swirl + shimmering ascending harmonic arpeggio
         const osc = ctx.createOscillator();
         osc.type = 'sine';
@@ -1207,7 +1297,7 @@ export function playSynthSound(
         lfo.connect(lfoGain);
         lfoGain.connect(osc.frequency);
 
-        gainNode.gain.setValueAtTime(0.42 * volume, now);
+        gainNode.gain.setValueAtTime(0.32 * volume, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
         osc.connect(gainNode);
 
@@ -1221,7 +1311,7 @@ export function playSynthSound(
         bp.frequency.exponentialRampToValueAtTime(600 * pitchRate, now + 0.68);
         bp.Q.setValueAtTime(3.2, now);
         const sGain = ctx.createGain();
-        sGain.gain.setValueAtTime(0.24 * volume, now);
+        sGain.gain.setValueAtTime(0.18 * volume, now);
         sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.68);
         swirl.connect(bp);
         bp.connect(sGain);
@@ -1235,7 +1325,7 @@ export function playSynthSound(
           chime.type = 'triangle';
           chime.frequency.setValueAtTime(portalChimes[i]! * pitchRate, t);
           const cg = ctx.createGain();
-          cg.gain.setValueAtTime(0.2 * volume, t);
+          cg.gain.setValueAtTime(0.16 * volume, t);
           cg.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
           chime.connect(cg);
           cg.connect(voiceOut);
@@ -1277,11 +1367,11 @@ export function playSynthSound(
           lp.frequency.setValueAtTime(3400, noteTime);
 
           const noteGain = ctx.createGain();
-          noteGain.gain.setValueAtTime((isFinal ? 0.34 : 0.26) * volume, noteTime);
+          noteGain.gain.setValueAtTime((isFinal ? 0.24 : 0.19) * volume, noteTime);
           noteGain.gain.exponentialRampToValueAtTime(0.001, noteTime + dur);
 
           const shimGain = ctx.createGain();
-          shimGain.gain.setValueAtTime(0.35, noteTime);
+          shimGain.gain.setValueAtTime(0.28, noteTime);
 
           osc.connect(lp);
           shimmer.connect(shimGain);
@@ -1309,7 +1399,7 @@ export function playSynthSound(
         bp.Q.setValueAtTime(0.85, now);
 
         gainNode.gain.setValueAtTime(0.01, now);
-        gainNode.gain.linearRampToValueAtTime(0.46 * volume, now + 0.025);
+        gainNode.gain.linearRampToValueAtTime(0.34 * volume, now + 0.025);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
         roar.connect(bp);
         bp.connect(gainNode);
@@ -1321,7 +1411,7 @@ export function playSynthSound(
         hp.type = 'highpass';
         hp.frequency.setValueAtTime(2800 * pitchRate, now);
         const cGain = ctx.createGain();
-        cGain.gain.setValueAtTime(0.24 * volume, now);
+        cGain.gain.setValueAtTime(0.18 * volume, now);
         cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
         crackle.connect(hp);
         hp.connect(cGain);
@@ -1338,6 +1428,8 @@ export function playSynthSound(
       case 'ability': {
         const isEat = rawLower.includes('roboteat') || rawLower.includes('slurp');
         const isSpawn = rawLower.includes('spawn') || rawLower.includes('snare') || rawLower.includes('plant');
+        const isRogueAim = rawLower.includes('rogueaim');
+        const isHeadless = rawLower.includes('chickenheadless');
         const isThrowOrRoll =
           rawLower.includes('roll') ||
           rawLower.includes('throw') ||
@@ -1346,7 +1438,31 @@ export function playSynthSound(
           rawLower.includes('fly') ||
           rawLower.includes('launch');
 
-        if (isEat) {
+        if (isRogueAim) {
+          // Crisp IDPD Portal Strike targeting reticle lock-on sweep
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(640 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(1120 * pitchRate, now + 0.11);
+          gainNode.gain.setValueAtTime(0.22 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.14);
+        } else if (isHeadless) {
+          // Brief urgent headless-Chicken flutter/pulse
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(340 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(190 * pitchRate, now + 0.08);
+          gainNode.gain.setValueAtTime(0.2 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.11);
+        } else if (isEat) {
           // Crunchy metallic chomp-chomp for Robot Eat Gun
           const crunch = ctx.createBufferSource();
           crunch.buffer = getNoiseBuffer(ctx);
@@ -1456,10 +1572,32 @@ export function playSynthSound(
         break;
       }
 
+      case 'footstep': {
+        // Subtle tactile surface footstep tap (never drowns out combat)
+        const isMetal = rawLower.includes('metal') || rawLower.includes('robot') || rawLower.includes('crystal');
+        const isWater = rawLower.includes('water') || rawLower.includes('slime');
+        const n = ctx.createBufferSource();
+        n.buffer = getNoiseBuffer(ctx);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime((isMetal ? 1850 : isWater ? 1200 : 780) * pitchRate, now);
+        bp.Q.setValueAtTime(isMetal ? 3.0 : 1.4, now);
+        gainNode.gain.setValueAtTime((isMetal ? 0.14 : 0.12) * volume, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + (isWater ? 0.045 : 0.028));
+        n.connect(bp);
+        bp.connect(gainNode);
+        activeNodes.push(n, bp);
+        n.start(now, Math.random() * 0.5);
+        n.stop(now + 0.05);
+        break;
+      }
+
       case 'ui_click':
       default: {
         const isHover = rawLower.includes('hover');
         const isSwap = rawLower.includes('swap');
+        const isReload = rawLower.includes('reload');
+        const isBack = rawLower.includes('back');
         const isMutantConfirm = rawLower.includes('cnfm') || rawLower.includes('slct');
 
         if (isHover) {
@@ -1474,6 +1612,34 @@ export function playSynthSound(
           activeNodes.push(osc);
           osc.start(now);
           osc.stop(now + 0.032);
+        } else if (isReload) {
+          // Crisp two-stage weapon reload-complete metallic snap (breech/rack ready cue)
+          const n = ctx.createBufferSource();
+          n.buffer = getNoiseBuffer(ctx);
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(2800 * pitchRate, now);
+          bp.Q.setValueAtTime(3.6, now);
+          gainNode.gain.setValueAtTime(0.2 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.028);
+          n.connect(bp);
+          bp.connect(gainNode);
+
+          const ready = ctx.createOscillator();
+          ready.type = 'triangle';
+          ready.frequency.setValueAtTime(780 * pitchRate, now + 0.022);
+          ready.frequency.exponentialRampToValueAtTime(1240 * pitchRate, now + 0.052);
+          const rg = ctx.createGain();
+          rg.gain.setValueAtTime(0.18 * volume, now + 0.022);
+          rg.gain.exponentialRampToValueAtTime(0.001, now + 0.058);
+          ready.connect(rg);
+          rg.connect(voiceOut);
+
+          activeNodes.push(n, bp, ready, rg);
+          n.start(now, Math.random() * 0.4);
+          ready.start(now + 0.022);
+          n.stop(now + 0.035);
+          ready.stop(now + 0.064);
         } else if (isSwap) {
           // Tactile metallic weapon rack / slide click on weapon swap
           const n = ctx.createBufferSource();
@@ -1483,7 +1649,7 @@ export function playSynthSound(
           bp.frequency.setValueAtTime(2200 * pitchRate, now);
           bp.frequency.exponentialRampToValueAtTime(3400 * pitchRate, now + 0.04);
           bp.Q.setValueAtTime(3.2, now);
-          gainNode.gain.setValueAtTime(0.32 * volume, now);
+          gainNode.gain.setValueAtTime(0.24 * volume, now);
           gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
           n.connect(bp);
           bp.connect(gainNode);
@@ -1493,7 +1659,7 @@ export function playSynthSound(
           latch.frequency.setValueAtTime(640 * pitchRate, now + 0.018);
           latch.frequency.exponentialRampToValueAtTime(920 * pitchRate, now + 0.048);
           const lg = ctx.createGain();
-          lg.gain.setValueAtTime(0.24 * volume, now + 0.018);
+          lg.gain.setValueAtTime(0.18 * volume, now + 0.018);
           lg.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
           latch.connect(lg);
           lg.connect(voiceOut);
@@ -1517,7 +1683,7 @@ export function playSynthSound(
           const lp = ctx.createBiquadFilter();
           lp.type = 'lowpass';
           lp.frequency.setValueAtTime(1800, now);
-          gainNode.gain.setValueAtTime((isSelect ? 0.22 : 0.3) * volume, now);
+          gainNode.gain.setValueAtTime((isSelect ? 0.18 : 0.24) * volume, now);
           gainNode.gain.exponentialRampToValueAtTime(0.001, now + (isSelect ? 0.09 : 0.14));
           o1.connect(lp);
           o2.connect(lp);
@@ -1527,6 +1693,20 @@ export function playSynthSound(
           o2.start(now);
           o1.stop(now + 0.15);
           o2.stop(now + 0.15);
+        } else if (isBack) {
+          // Soft descending cancel / back UI click
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(680 * pitchRate, now);
+          osc.frequency.exponentialRampToValueAtTime(Math.max(160, 300 * pitchRate), now + 0.042);
+
+          gainNode.gain.setValueAtTime(0.24 * volume, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+
+          osc.connect(gainNode);
+          activeNodes.push(osc);
+          osc.start(now);
+          osc.stop(now + 0.055);
         } else {
           // Crisp tactile arcade UI click
           const osc = ctx.createOscillator();
@@ -1534,7 +1714,7 @@ export function playSynthSound(
           osc.frequency.setValueAtTime(1050 * pitchRate, now);
           osc.frequency.exponentialRampToValueAtTime(Math.max(180, 420 * pitchRate), now + 0.032);
 
-          gainNode.gain.setValueAtTime(0.28 * volume, now);
+          gainNode.gain.setValueAtTime(0.24 * volume, now);
           gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
 
           osc.connect(gainNode);

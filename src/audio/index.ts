@@ -41,6 +41,8 @@ export {
 export {
   playSynthSound,
   classifySound,
+  buildSoftLimitCurve,
+  SYNTH_SOFT_CLIP_CEILING,
   type SynthSoundKind,
   type SynthVoice,
   type SynthOptions,

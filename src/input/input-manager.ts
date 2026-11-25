@@ -137,11 +137,12 @@ export class InputManager {
   private pointerMoved = false;
   private activeMenuTouchPointerId: number | null = null;
 
-  // Dedup timestamps between PointerEvent and Mouse/TouchEvent
-  private lastPointerMouseMs = -10000;
+  // Dedup timestamps between PointerEvent and Mouse/TouchEvent (per-button for chorded LMB+RMB!)
+  private lastPointerMouseMoveMs = -10000;
   private lastPointerTouchMs = -10000;
   private lastAnyTouchMs = -10000;
-  private lastMouseDownPointerMs = -10000;
+  private lastPointerDownMsByButton = new Map<number, number>();
+  private lastPointerUpMsByButton = new Map<number, number>();
   private lastWheelSwapMs = -10000;
   private lastMouseClientX: number | null = null;
   private lastMouseClientY: number | null = null;
@@ -155,13 +156,13 @@ export class InputManager {
   private retryPressed = false;
   private selectIndex: number | undefined = undefined;
 
-  // Edge-triggered UI / Menu latches (cleared on consumeMenuInput)
+  // Edge-triggered UI / Menu latches (nav directions buffered with step counters so rapid taps never collapse)
   private menuClicked = false;
   private menuRightClicked = false;
-  private menuNavUp = false;
-  private menuNavDown = false;
-  private menuNavLeft = false;
-  private menuNavRight = false;
+  private menuNavUpCount = 0;
+  private menuNavDownCount = 0;
+  private menuNavLeftCount = 0;
+  private menuNavRightCount = 0;
   private menuConfirm = false;
   private menuBack = false;
   private menuRetry = false;
@@ -378,6 +379,8 @@ export class InputManager {
   resetHeldState(): void {
     this.keysHeld.clear();
     this.mouseButtonsHeld.clear();
+    this.lastPointerDownMsByButton.clear();
+    this.lastPointerUpMsByButton.clear();
     this.touch.clearAllTouches();
     this.gamepad.resetState();
     this.activeMenuTouchPointerId = null;
@@ -499,10 +502,10 @@ export class InputManager {
 
     // Menu navigation (suppressed while gameplayActive so gameplay WASD/Space never auto-confirms Mutation/GameOver on frame 0!)
     if (!this.gameplayActive) {
-      if (code === 'ArrowUp' || code === kb.up) this.menuNavUp = true;
-      if (code === 'ArrowDown' || code === kb.down) this.menuNavDown = true;
-      if (code === 'ArrowLeft' || code === kb.left) this.menuNavLeft = true;
-      if (code === 'ArrowRight' || code === kb.right) this.menuNavRight = true;
+      if (code === 'ArrowUp' || code === kb.up) this.menuNavUpCount = Math.min(16, this.menuNavUpCount + 1);
+      if (code === 'ArrowDown' || code === kb.down) this.menuNavDownCount = Math.min(16, this.menuNavDownCount + 1);
+      if (code === 'ArrowLeft' || code === kb.left) this.menuNavLeftCount = Math.min(16, this.menuNavLeftCount + 1);
+      if (code === 'ArrowRight' || code === kb.right) this.menuNavRightCount = Math.min(16, this.menuNavRightCount + 1);
       if (code === 'Enter' || code === 'Space') this.menuConfirm = true;
       if (code === 'BracketLeft') this.menuPrevTab = true;
       if (code === 'BracketRight') this.menuNextTab = true;
@@ -650,6 +653,38 @@ export class InputManager {
     this.simulateKeyUp(e.code);
   }
 
+  /**
+   * Synchronizes held mouse button state directly from the W3C PointerEvent.buttons bitmask
+   * (bit 1 = LMB/0, bit 2 = RMB/2, bit 4 = MMB/1). Essential in Chromium where chorded
+   * LMB+RMB presses and partial button releases emit `pointermove` with updated `buttons`
+   * instead of secondary `pointerdown`/`pointerup` events.
+   */
+  private syncMouseButtonsBitmask(buttons: number, now: number): boolean {
+    let changed = false;
+    const checks: ReadonlyArray<readonly [number, number]> = [
+      [0, 1], // LMB
+      [2, 2], // RMB
+      [1, 4], // MMB
+    ];
+    for (let i = 0; i < checks.length; i++) {
+      const [btn, mask] = checks[i]!;
+      const isDown = (buttons & mask) !== 0;
+      const wasDown = this.mouseButtonsHeld.has(btn);
+      if (isDown !== wasDown) {
+        changed = true;
+        if (isDown) {
+          this.lastPointerDownMsByButton.set(btn, now);
+          this.lastPointerUpMsByButton.delete(btn);
+        } else {
+          this.lastPointerUpMsByButton.set(btn, now);
+          this.lastPointerDownMsByButton.delete(btn);
+        }
+        this.simulateMouseButton(btn, isDown);
+      }
+    }
+    return changed;
+  }
+
   private onPointerDown(e: PointerEvent): void {
     const pos = this.mapClientEvent(e.clientX, e.clientY);
     if (e.pointerType === 'touch') {
@@ -667,12 +702,17 @@ export class InputManager {
       return;
     }
 
-    this.lastPointerMouseMs = this.nowMsFn();
-    this.lastMouseDownPointerMs = this.lastPointerMouseMs;
+    const now = this.nowMsFn();
+    this.lastPointerMouseMoveMs = now;
+    this.lastPointerDownMsByButton.set(e.button, now);
+    this.lastPointerUpMsByButton.delete(e.button);
     this.lastMouseClientX = e.clientX;
     this.lastMouseClientY = e.clientY;
     this.simulateMouseMoveLogical(pos.x, pos.y);
     this.simulateMouseButton(e.button, true);
+    if (typeof e.buttons === 'number' && e.buttons !== 0) {
+      this.syncMouseButtonsBitmask(e.buttons, now);
+    }
   }
 
   private isSubThresholdMouseJitter(clientX: number, clientY: number): boolean {
@@ -695,12 +735,17 @@ export class InputManager {
       return;
     }
 
-    if (this.isSubThresholdMouseJitter(e.clientX, e.clientY)) {
+    const now = this.nowMsFn();
+    // Sync chorded mouse button presses/releases from PointerEvent.buttons BEFORE jitter gate
+    const buttonsChanged =
+      typeof e.buttons === 'number' ? this.syncMouseButtonsBitmask(e.buttons, now) : false;
+
+    if (!buttonsChanged && this.isSubThresholdMouseJitter(e.clientX, e.clientY)) {
       return;
     }
     this.lastMouseClientX = e.clientX;
     this.lastMouseClientY = e.clientY;
-    this.lastPointerMouseMs = this.nowMsFn();
+    this.lastPointerMouseMoveMs = now;
     this.simulateMouseMoveLogical(pos.x, pos.y);
   }
 
@@ -721,8 +766,14 @@ export class InputManager {
       return;
     }
 
-    this.lastPointerMouseMs = this.nowMsFn();
+    const now = this.nowMsFn();
+    this.lastPointerMouseMoveMs = now;
+    this.lastPointerUpMsByButton.set(e.button, now);
+    this.lastPointerDownMsByButton.delete(e.button);
     this.simulateMouseButton(e.button, false);
+    if (typeof e.buttons === 'number') {
+      this.syncMouseButtonsBitmask(e.buttons, now);
+    }
   }
 
   private onPointerCancel(e: PointerEvent): void {
@@ -777,7 +828,7 @@ export class InputManager {
   private onMouseMove(e: MouseEvent): void {
     if (!this.canvas || isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
-    if (now - this.lastPointerMouseMs < 6) return;
+    if (now - this.lastPointerMouseMoveMs < 6) return;
     if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
     if (this.isSubThresholdMouseJitter(e.clientX, e.clientY)) return;
     this.lastMouseClientX = e.clientX;
@@ -789,7 +840,8 @@ export class InputManager {
   private onMouseDown(e: MouseEvent): void {
     if (isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
-    if (now - this.lastMouseDownPointerMs < 12) return;
+    const lastDownForBtn = this.lastPointerDownMsByButton.get(e.button) ?? -10000;
+    if (now - lastDownForBtn < 12) return;
     if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
     this.lastMouseClientX = e.clientX;
     this.lastMouseClientY = e.clientY;
@@ -803,7 +855,8 @@ export class InputManager {
   private onMouseUp(e: MouseEvent): void {
     if (isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
-    if (now - this.lastPointerMouseMs < 6) return;
+    const lastUpForBtn = this.lastPointerUpMsByButton.get(e.button) ?? -10000;
+    if (now - lastUpForBtn < 12) return;
     if (now - this.lastAnyTouchMs < TOUCH_COMPAT_MOUSE_WINDOW_MS) return;
     this.simulateMouseButton(e.button, false);
   }
@@ -840,10 +893,10 @@ export class InputManager {
     }
 
     if (!this.gameplayActive) {
-      if (gp.menuNavUp) this.menuNavUp = true;
-      if (gp.menuNavDown) this.menuNavDown = true;
-      if (gp.menuNavLeft) this.menuNavLeft = true;
-      if (gp.menuNavRight) this.menuNavRight = true;
+      if (gp.menuNavUp) this.menuNavUpCount = Math.min(16, this.menuNavUpCount + 1);
+      if (gp.menuNavDown) this.menuNavDownCount = Math.min(16, this.menuNavDownCount + 1);
+      if (gp.menuNavLeft) this.menuNavLeftCount = Math.min(16, this.menuNavLeftCount + 1);
+      if (gp.menuNavRight) this.menuNavRightCount = Math.min(16, this.menuNavRightCount + 1);
       if (gp.menuConfirm) this.menuConfirm = true;
       if (gp.menuBack) this.menuBack = true;
       if (gp.menuPrevTab) this.menuPrevTab = true;
@@ -1050,10 +1103,10 @@ export class InputManager {
     this.pointerMoved = false;
     this.menuClicked = false;
     this.menuRightClicked = false;
-    this.menuNavUp = false;
-    this.menuNavDown = false;
-    this.menuNavLeft = false;
-    this.menuNavRight = false;
+    this.menuNavUpCount = 0;
+    this.menuNavDownCount = 0;
+    this.menuNavLeftCount = 0;
+    this.menuNavRightCount = 0;
     this.menuConfirm = false;
     this.menuBack = false;
     this.menuRetry = false;
@@ -1071,10 +1124,28 @@ export class InputManager {
   }
 
   /**
-   * Produces a clean per-frame UI/menu interaction snapshot and clears UI edge latches.
+   * Produces a clean per-frame UI/menu interaction snapshot, draining 1 step per
+   * buffered directional nav direction so rapid keyboard taps never collapse into 1.
    */
   consumeMenuInput(): MenuInputSnapshot {
     this.pollGamepadAndMerge();
+    const navUp = this.menuNavUpCount > 0;
+    const navDown = this.menuNavDownCount > 0;
+    const navLeft = this.menuNavLeftCount > 0;
+    const navRight = this.menuNavRightCount > 0;
+    if (navUp) this.menuNavUpCount -= 1;
+    if (navDown) this.menuNavDownCount -= 1;
+    if (navLeft) this.menuNavLeftCount -= 1;
+    if (navRight) this.menuNavRightCount -= 1;
+
+    // If more buffered nav steps remain behind this step, hold confirm until the final nav step lands
+    const hasRemainingNav =
+      this.menuNavUpCount > 0 ||
+      this.menuNavDownCount > 0 ||
+      this.menuNavLeftCount > 0 ||
+      this.menuNavRightCount > 0;
+    const confirmNow = this.menuConfirm && !hasRemainingNav;
+
     const snap: MenuInputSnapshot = {
       pointer: {
         logicalX: this.pointerLogicalX,
@@ -1084,11 +1155,11 @@ export class InputManager {
         rightClicked: this.menuRightClicked,
         moved: this.pointerMoved,
       },
-      navUp: this.menuNavUp,
-      navDown: this.menuNavDown,
-      navLeft: this.menuNavLeft,
-      navRight: this.menuNavRight,
-      confirm: this.menuConfirm,
+      navUp,
+      navDown,
+      navLeft,
+      navRight,
+      confirm: confirmNow,
       back: this.menuBack,
       retry: this.menuRetry,
       prevTab: this.menuPrevTab,
@@ -1100,7 +1171,19 @@ export class InputManager {
       capturedKeyCode: this.capturedKeyCode,
     };
 
-    this.clearMenuLatches();
+    // Clear single-shot UI latches while preserving remaining buffered directional nav counts
+    this.pointerMoved = false;
+    this.menuClicked = false;
+    this.menuRightClicked = false;
+    if (confirmNow) this.menuConfirm = false;
+    this.menuBack = false;
+    this.menuRetry = false;
+    this.menuPrevTab = false;
+    this.menuNextTab = false;
+    this.menuSecondary = false;
+    this.menuTertiary = false;
+    this.menuSelectIndex = undefined;
+    this.capturedKeyCode = undefined;
 
     return snap;
   }

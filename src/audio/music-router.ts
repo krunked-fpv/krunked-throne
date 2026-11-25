@@ -183,6 +183,11 @@ export function getMusicTrack(
     );
   }
 
+  // Mutation / Ultra select: silence combat music cleanly so NT's mutation ambience (amb/0b) breathes
+  if (screen === 'mutation_select' || screen === 'ultra_select') {
+    return null;
+  }
+
   // 2. Boss defeated wind-down (exits boss combat music cleanly once boss falls)
   if (bossDefeated && !bossId) {
     return resolveCandidateKey(
@@ -201,7 +206,13 @@ export function getMusicTrack(
     return resolveCandidateKey(candidates, manifest?.music);
   }
 
-  // 4. 7-3 Palace Throne carpet approach before waking The Throne
+  // 4. Sleeping boss intros:
+  //    - 3-3 Scrapyard before waking Big Dog: silent Scrapyard ambience (no music track until wake)
+  //    - 7-3 Palace Throne carpet approach before waking The Throne: Boss4Silence
+  if (areaCode === '3-3' && !bossId) {
+    return null;
+  }
+
   if (areaCode === '7-3' && !bossId) {
     return resolveCandidateKey(
       ['mus/Boss4Silence', 'musBoss4Silence'],
@@ -245,6 +256,13 @@ export function getAmbienceTrack(
   if (screen === 'options' && !areaCode && !biome) {
     return resolveCandidateKey(
       ['amb/0', 'amb0', 'ambCampfire'],
+      manifest?.ambience
+    );
+  }
+
+  if (screen === 'mutation_select' || screen === 'ultra_select') {
+    return resolveCandidateKey(
+      ['amb/0b', 'amb0b', 'amb/0', 'amb0', 'ambCampfire'],
       manifest?.ambience
     );
   }

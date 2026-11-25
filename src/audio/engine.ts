@@ -20,6 +20,7 @@ import { playSynthSound } from './synth-fallback';
 import { SynthMusicSequencer } from './synth-music';
 import {
   MusicRouteContext,
+  resolveCandidateKey,
   resolveMusicRoute,
   PAUSE_DUCKING_FACTOR,
 } from './music-router';
@@ -68,7 +69,6 @@ const STEAM_SOUND_ALIASES: Record<string, readonly string[]> = {
   sndCorpseImpact: ['sndImpWristHit', 'sndHitFlesh'],
   sndEnemyHit: ['sndHitFlesh', 'sndBanditHit'],
   sndEnemyHurt: ['sndHitFlesh', 'sndBanditHit'],
-  sndEnemyAlert: ['sndSniperTarget'],
   sndHitConfirm: ['sndHitFlesh'],
   sndLowHpHeartbeat: ['sndGunGodLowHP'],
 };
@@ -123,6 +123,12 @@ export interface AudioStats {
 export interface AssetSourceOptions {
   baseUrl?: string;
   resolveAudioUrl?: (relPath: string) => string;
+  /**
+   * Whether to automatically replay the previous music/ambience keys under the new manifest.
+   * Pass `false` when the caller immediately invokes `routeContext()` / `syncMusicRouting()`
+   * to prevent fetching a stale pre-swap key (e.g. `'musThemeA'`) twice.
+   */
+  reestablishTracks?: boolean;
 }
 
 export interface AudioEngineOptions {
@@ -342,12 +348,16 @@ export class AudioEngine {
     this.currentMusic = null;
     this.currentAmbience = null;
 
-    // Immediately re-establish current music & ambience under the new source mode
-    if (prevMusic) {
-      this.playMusic(prevMusic, 0.35);
-    }
-    if (prevAmbience) {
-      this.playAmbience(prevAmbience, 0.45);
+    // Optionally re-establish current music & ambience under the new source mode
+    if (opts?.reestablishTracks !== false) {
+      if (prevMusic) {
+        const nextMusic = resolveCandidateKey([prevMusic], manifest.music) ?? prevMusic;
+        this.playMusic(nextMusic, 0.35);
+      }
+      if (prevAmbience) {
+        const nextAmb = resolveCandidateKey([prevAmbience], manifest.ambience) ?? prevAmbience;
+        this.playAmbience(nextAmb, 0.45);
+      }
     }
   }
 
@@ -481,7 +491,9 @@ export class AudioEngine {
   }
 
   /**
-   * Resolves a clean-room or semantic sound key to a matching Steam manifest key if available.
+   * Resolves a clean-room or semantic sound key to a matching Steam manifest key if available,
+   * including `manifest.sounds`, `manifest.music`, `manifest.ambience`, and `manifest.looseSounds`
+   * (such as `snd/FishUltraA` or bare `FishUltraA`).
    */
   public resolveManifestSoundKey(key: string): string {
     if (!this.manifest || this.manifest.sourceMode !== 'steam') return key;
@@ -493,16 +505,47 @@ export class AudioEngine {
     ) {
       return key;
     }
+
+    // Support looseSounds lookup by bare filename (e.g. 'FishUltraA' -> 'snd/FishUltraA') or case-insensitive match
+    const loose = this.manifest.looseSounds;
+    if (loose) {
+      const prefixed = key.startsWith('snd/') ? key : `snd/${key}`;
+      if (loose[prefixed]) {
+        return prefixed;
+      }
+      const normKey = key.toLowerCase().replace(/^snd\//, '').replace(/\.ogg$/, '');
+      for (const looseKey of Object.keys(loose)) {
+        if (!loose[looseKey]) continue;
+        const normLoose = looseKey.toLowerCase().replace(/^snd\//, '').replace(/\.ogg$/, '');
+        if (normLoose === normKey) {
+          return looseKey;
+        }
+      }
+    }
+
     const aliases = STEAM_SOUND_ALIASES[key];
     if (aliases) {
       for (let i = 0; i < aliases.length; i++) {
         const alt = aliases[i]!;
-        if (this.manifest.sounds?.[alt]?.path) {
+        if (this.manifest.sounds?.[alt]?.path || this.manifest.looseSounds?.[alt]) {
           return alt;
         }
       }
     }
     return key;
+  }
+
+  /**
+   * Returns true if the loaded Steam manifest contains a playable audio asset (in `sounds` or `looseSounds`)
+   * for the given sound key (or one of its canonical aliases).
+   */
+  public hasManifestSound(key: string): boolean {
+    if (!this.manifest || this.manifest.sourceMode !== 'steam') return false;
+    const resolved = this.resolveManifestSoundKey(key);
+    return Boolean(
+      this.manifest.sounds?.[resolved]?.path ||
+      this.manifest.looseSounds?.[resolved]
+    );
   }
 
   /**
@@ -604,6 +647,68 @@ export class AudioEngine {
   }
 
   /**
+   * Starts a decoded AudioBuffer voice through sfxGain with optional stereo panning.
+   */
+  private playBufferVoice(
+    buffer: AudioBuffer,
+    voiceId: number,
+    effectiveVolume: number,
+    pitchMultiplier: number,
+    pan: number,
+  ): { stop: () => void; durationMs: number } | null {
+    if (!this.webAudio) return null;
+    const { ctx, sfxGain } = this.webAudio;
+    let durationMs = 250;
+    if (Number.isFinite(buffer.duration) && buffer.duration > 0) {
+      durationMs = Math.max(
+        60,
+        Math.min(2000, (buffer.duration * 1000) / Math.max(0.25, pitchMultiplier)),
+      );
+    }
+    try {
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = pitchMultiplier;
+
+      const voiceGain = ctx.createGain();
+      voiceGain.gain.setValueAtTime(effectiveVolume, ctx.currentTime);
+
+      source.connect(voiceGain);
+      if (Math.abs(pan) > 0.001 && typeof ctx.createStereoPanner === 'function') {
+        const panner = ctx.createStereoPanner();
+        panner.pan.setValueAtTime(pan, ctx.currentTime);
+        voiceGain.connect(panner);
+        panner.connect(sfxGain);
+      } else {
+        voiceGain.connect(sfxGain);
+      }
+
+      source.start();
+      const stop = () => {
+        try {
+          source.stop();
+          source.disconnect();
+          voiceGain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
+      source.onended = () => {
+        try {
+          source.disconnect();
+          voiceGain.disconnect();
+        } catch {
+          // ignore
+        }
+        this.activeVoices = this.activeVoices.filter((v) => v.id !== voiceId);
+      };
+      return { stop, durationMs };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Plays a sound effect with spatial panning, pitch jitter, ascending rad pickup pitch streak,
    * polyphony cap, micro-cooldown gate, and fallback procedural synth.
    */
@@ -685,95 +790,90 @@ export class AudioEngine {
     const pitchMultiplier = pitchBase * (1.0 + (Math.random() - 0.5) * 2 * jitterAmount);
     this.lastPitchRate = pitchMultiplier;
 
-    // 5. Sound playback (Web Audio Buffer vs Synth Fallback vs Headless)
+    // 5. Sound playback (Web Audio Buffer vs Steam Lazy-Decode vs Synth Fallback vs Headless)
     const voiceId = this.nextVoiceId++;
-    let voiceDurationMs = isRadPickup ? 160 : 250;
-    let stopFn = () => {};
+    const voiceRecord: ActiveVoice = {
+      id: voiceId,
+      soundKey,
+      startTimeMs: nowMs,
+      durationMs: isRadPickup ? 160 : 250,
+      stop: () => {},
+    };
 
     if (this.webAudio) {
       const { ctx, sfxGain } = this.webAudio;
       const cachedBuffer = this.bufferCache.get(soundKey) ?? this.bufferCache.get(resolvedKey);
 
       if (cachedBuffer) {
-        if (Number.isFinite(cachedBuffer.duration) && cachedBuffer.duration > 0) {
-          voiceDurationMs = Math.max(
-            60,
-            Math.min(2000, (cachedBuffer.duration * 1000) / Math.max(0.25, pitchMultiplier)),
-          );
-        }
-        try {
-          const source = ctx.createBufferSource();
-          source.buffer = cachedBuffer;
-          source.playbackRate.value = pitchMultiplier;
-
-          const voiceGain = ctx.createGain();
-          voiceGain.gain.setValueAtTime(effectiveVolume, ctx.currentTime);
-
-          source.connect(voiceGain);
-          if (Math.abs(spatial.pan) > 0.001 && typeof ctx.createStereoPanner === 'function') {
-            const panner = ctx.createStereoPanner();
-            panner.pan.setValueAtTime(spatial.pan, ctx.currentTime);
-            voiceGain.connect(panner);
-            panner.connect(sfxGain);
-          } else {
-            voiceGain.connect(sfxGain);
-          }
-
-          source.start();
-          stopFn = () => {
-            try {
-              source.stop();
-              source.disconnect();
-              voiceGain.disconnect();
-            } catch {
-              // ignore
-            }
-          };
-          source.onended = () => {
-            try {
-              source.disconnect();
-              voiceGain.disconnect();
-            } catch {
-              // ignore
-            }
-            this.activeVoices = this.activeVoices.filter((v) => v.id !== voiceId);
-          };
-        } catch {
-          // If buffer play fails, fallback to synth
+        const played = this.playBufferVoice(
+          cachedBuffer,
+          voiceId,
+          effectiveVolume,
+          pitchMultiplier,
+          spatial.pan,
+        );
+        if (played) {
+          voiceRecord.stop = played.stop;
+          voiceRecord.durationMs = played.durationMs;
+        } else {
           const synth = playSynthSound(ctx, soundKey, sfxGain, {
             volume: effectiveVolume,
             pitchRate: pitchMultiplier,
             pan: spatial.pan,
           });
-          if (synth) stopFn = synth.stop;
+          if (synth) voiceRecord.stop = synth.stop;
         }
+      } else if (
+        this.manifest?.sourceMode === 'steam' &&
+        Boolean(
+          this.manifest.sounds?.[resolvedKey]?.path ||
+          this.manifest.looseSounds?.[resolvedKey]
+        )
+      ) {
+        // Cold-cache Steam audio (including looseSounds `snd/*.ogg`): decode & play real Steam asset
+        // instead of emitting a jarring synth oscillator beep on first trigger!
+        const generation = this.assetGeneration;
+        let cancelled = false;
+        voiceRecord.stop = () => {
+          cancelled = true;
+        };
+        void this.loadSound(soundKey).then((buf) => {
+          if (cancelled || !this.webAudio || generation !== this.assetGeneration) return;
+          if (buf) {
+            const played = this.playBufferVoice(
+              buf,
+              voiceId,
+              effectiveVolume,
+              pitchMultiplier,
+              spatial.pan,
+            );
+            if (played) {
+              voiceRecord.stop = played.stop;
+              voiceRecord.durationMs = played.durationMs;
+              return;
+            }
+          }
+          // Only fall back to synth if fetching/decoding the Steam WAV/OGG genuinely failed
+          const synth = playSynthSound(this.webAudio.ctx, soundKey, this.webAudio.sfxGain, {
+            volume: effectiveVolume,
+            pitchRate: pitchMultiplier,
+            pan: spatial.pan,
+          });
+          if (synth) voiceRecord.stop = synth.stop;
+        });
       } else {
-        if (
-          this.manifest?.sourceMode === 'steam' &&
-          !this.bufferCache.has(resolvedKey) &&
-          Boolean(this.manifest.sounds && this.manifest.sounds[resolvedKey]?.path)
-        ) {
-          void this.loadSound(soundKey);
-        }
-
         // Fallback procedural synthesis
         const synth = playSynthSound(ctx, soundKey, sfxGain, {
           volume: effectiveVolume,
           pitchRate: pitchMultiplier,
           pan: spatial.pan,
         });
-        if (synth) stopFn = synth.stop;
+        if (synth) voiceRecord.stop = synth.stop;
       }
     }
 
     // Record voice
-    this.activeVoices.push({
-      id: voiceId,
-      soundKey,
-      startTimeMs: nowMs,
-      durationMs: voiceDurationMs,
-      stop: stopFn,
-    });
+    this.activeVoices.push(voiceRecord);
 
     return true;
   }
@@ -1080,19 +1180,25 @@ export class AudioEngine {
   /**
    * Consumes an array of SimEvents emitted by the simulation fixed-step tick.
    * Deduplicates semantic fallback cues when the same tick batch already carries
-   * an explicit companion `sfx` event so portal/boss/level-up/deflect/empty cues never double-fire.
+   * an explicit companion `sfx` event so portal/boss/level-up/deflect/empty/death cues never double-fire.
+   * Pass `{ handleMusic: false }` when the host (`GameApp.syncMusicRouting()`) owns music routing
+   * as the single source of truth so area loads / sleeping bosses / Loop B-tracks never double-fetch.
    */
   public consumeEvents(
     events: readonly SimEvent[],
     listenerX: number = 0,
-    listenerY: number = 0
+    listenerY: number = 0,
+    options?: { handleMusic?: boolean }
   ): void {
+    const handleMusic = options?.handleMusic ?? true;
     let hasPortalSfx = false;
     let hasBossIntroSfx = false;
     let hasLevelUpSfx = false;
     let hasDeflectSfx = false;
     let hasCorpseSfx = false;
     let hasEmptySfx = false;
+    let hasPlayerDeathSfx = false;
+    let hasAreaChange = false;
     let hasExplicitMusic = false;
 
     for (let i = 0; i < events.length; i++) {
@@ -1118,7 +1224,15 @@ export class AudioEngine {
           hasCorpseSfx = true;
         } else if (low === 'sndempty' || low === 'sndultraempty' || low === 'sndhorrorempty') {
           hasEmptySfx = true;
+        } else if (
+          (low.startsWith('sndmutant') && (low.endsWith('dead') || low.endsWith('die'))) ||
+          low === 'sndplayerdeath' ||
+          low === 'sndplayerdead'
+        ) {
+          hasPlayerDeathSfx = true;
         }
+      } else if (ev.type === 'area_change') {
+        hasAreaChange = true;
       } else if (ev.type === 'music') {
         hasExplicitMusic = true;
       }
@@ -1138,11 +1252,15 @@ export class AudioEngine {
         }
 
         case 'music': {
-          if (event.track) {
-            this.playMusic(event.track);
-          }
-          if (event.ambience) {
-            this.playAmbience(event.ambience);
+          // When `area_change` is in the same batch, defer to `area_change` routing so Loop B-sides
+          // and sleeping bosses (3-3 / 7-3) never double-fetch an un-routed area track.
+          if (handleMusic && !hasAreaChange) {
+            if (event.track) {
+              this.playMusic(event.track);
+            }
+            if (event.ambience) {
+              this.playAmbience(event.ambience);
+            }
           }
           break;
         }
@@ -1160,7 +1278,7 @@ export class AudioEngine {
 
         case 'area_change': {
           this.radStreakCount = 0;
-          if (!hasExplicitMusic) {
+          if (handleMusic) {
             this.routeContext({
               areaCode: event.areaCode,
               biome: event.biome,
@@ -1171,7 +1289,7 @@ export class AudioEngine {
         }
 
         case 'boss_intro': {
-          if (!hasExplicitMusic) {
+          if (handleMusic && (!hasExplicitMusic || hasAreaChange)) {
             const bossRoute = resolveMusicRoute({ bossId: event.bossId }, this.manifest);
             if (bossRoute.musicTrack) {
               this.playMusic(bossRoute.musicTrack);
@@ -1199,12 +1317,16 @@ export class AudioEngine {
         }
 
         case 'enemy_alert': {
-          this.playSfx('sndEnemyAlert', event.x, event.y, {
-            listenerX,
-            listenerY,
-            pitchJitter: 0.1,
-            volume: 0.72,
-          });
+          // Authentic NT enemies do not emit a global alert beep (Sniper already emits sndSniperTarget directly);
+          // never play sndSniperTarget or a synth beep in Steam mode unless sndEnemyAlert exists in manifest.
+          if (!this.manifest || this.manifest.sourceMode !== 'steam' || this.hasManifestSound('sndEnemyAlert')) {
+            this.playSfx('sndEnemyAlert', event.x, event.y, {
+              listenerX,
+              listenerY,
+              pitchJitter: 0.1,
+              volume: 0.72,
+            });
+          }
           break;
         }
 
@@ -1256,12 +1378,16 @@ export class AudioEngine {
         }
 
         case 'player_died': {
-          this.playSfx('sndPlayerDeath', listenerX, listenerY, {
-            listenerX,
-            listenerY,
-            volume: 1.0,
-          });
-          this.routeContext({ screen: 'game_over' });
+          if (!hasPlayerDeathSfx) {
+            this.playSfx('sndPlayerDeath', listenerX, listenerY, {
+              listenerX,
+              listenerY,
+              volume: 1.0,
+            });
+          }
+          if (handleMusic) {
+            this.routeContext({ screen: 'game_over' });
+          }
           break;
         }
 

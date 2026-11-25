@@ -1066,3 +1066,244 @@ describe('input-controls: End-to-End Controller & Touch UI Navigation (Zero Keyb
     expect(cancelAct.some((a) => a.type === 'open_screen')).toBe(false);
   });
 });
+
+describe('input-controls: Chromium Chorded LMB+RMB & Rapid Menu Nav Queue Regressions', () => {
+  it('handles Chromium W3C PointerEvent + MouseEvent chorded LMB+RMB press and partial RMB release without drop or stuck RMB', () => {
+    let now = 1000;
+    const input = new InputManager(DEFAULT_KEYBINDINGS, {
+      controls: { ...DEFAULT_CONTROL_SETTINGS },
+      nowMs: () => now,
+    });
+    input.setLogicalSize(LOGICAL_WIDTH_4_3, LOGICAL_HEIGHT);
+    input.setGameplayActive(true);
+
+    const canvasListeners = new Map<string, (e: unknown) => void>();
+    const windowListeners = new Map<string, (e: unknown) => void>();
+    const origWindow = globalThis.window;
+    (globalThis as unknown as { window: unknown }).window = {
+      addEventListener: (type: string, fn: (e: unknown) => void) => windowListeners.set(type, fn),
+      removeEventListener: (type: string) => windowListeners.delete(type),
+    };
+
+    const mockCanvas = {
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 320, height: 240 }),
+      addEventListener: (type: string, fn: (e: unknown) => void) => canvasListeners.set(type, fn),
+      removeEventListener: (type: string) => canvasListeners.delete(type),
+    } as unknown as HTMLCanvasElement;
+
+    const cam = new CameraController();
+    cam.setViewport(LOGICAL_WIDTH_4_3, LOGICAL_HEIGHT);
+    cam.snapTo(160, 120);
+
+    try {
+      input.attach(mockCanvas);
+
+      // 1. Exact Chromium chord sequence (Steroids dual-wield):
+      //    Press LMB (pointerdown btn=0, buttons=1 -> mousedown btn=0, buttons=1)
+      canvasListeners.get('pointerdown')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 200,
+        clientY: 120,
+        button: 0,
+        buttons: 1,
+        preventDefault: () => {},
+      });
+      now += 1;
+      canvasListeners.get('mousedown')?.({
+        clientX: 200,
+        clientY: 120,
+        button: 0,
+        buttons: 1,
+      });
+
+      //    2ms later while holding LMB, press RMB: Chromium fires pointermove(buttons=3) + mousedown(btn=2, buttons=3)
+      //    (NO second pointerdown!). Both LMB & RMB must activate cleanly!
+      now += 2;
+      windowListeners.get('pointermove')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 200,
+        clientY: 120,
+        button: 2,
+        buttons: 3,
+      });
+      canvasListeners.get('mousedown')?.({
+        clientX: 200,
+        clientY: 120,
+        button: 2,
+        buttons: 3,
+      });
+
+      const dualFrame = input.consumeSimInput(cam, 160, 120);
+      expect(dualFrame.fireHeld).toBe(true);
+      expect(dualFrame.firePressed).toBe(true);
+      expect(dualFrame.activeHeld).toBe(true);
+      expect(dualFrame.activePressed).toBe(true);
+
+      // 2. While holding LMB and moving cursor, release RMB:
+      //    Chromium fires pointermove(buttons=1) + mouseup(btn=2, buttons=1) (NO pointerup!).
+      //    RMB MUST release immediately and NEVER stick held!
+      now += 20;
+      windowListeners.get('pointermove')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 210,
+        clientY: 125,
+        button: -1,
+        buttons: 3,
+      });
+      now += 2;
+      windowListeners.get('pointermove')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 212,
+        clientY: 125,
+        button: 2,
+        buttons: 1,
+      });
+      windowListeners.get('mouseup')?.({
+        clientX: 212,
+        clientY: 125,
+        button: 2,
+        buttons: 1,
+      });
+
+      const afterRmbRelease = input.consumeSimInput(cam, 160, 120);
+      expect(afterRmbRelease.fireHeld).toBe(true);
+      expect(afterRmbRelease.activeHeld).toBe(false);
+
+      // 3. Release last button (LMB): Chromium fires pointerup(btn=0, buttons=0) + mouseup(btn=0, buttons=0)
+      now += 15;
+      windowListeners.get('pointerup')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 212,
+        clientY: 125,
+        button: 0,
+        buttons: 0,
+      });
+      windowListeners.get('mouseup')?.({
+        clientX: 212,
+        clientY: 125,
+        button: 0,
+        buttons: 0,
+      });
+
+      const idleFrame = input.consumeSimInput(cam, 160, 120);
+      expect(idleFrame.fireHeld).toBe(false);
+      expect(idleFrame.activeHeld).toBe(false);
+
+      // 4. Fallback per-button dedup path (even if pointermove didn't carry chord update):
+      //    LMB pointerdown at t=2000, RMB mousedown at t=2002 (< 12ms!), cursor pointermove at t=2030, RMB mouseup at t=2032 (< 6ms!)
+      now = 2000;
+      canvasListeners.get('pointerdown')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 180,
+        clientY: 120,
+        button: 0,
+        preventDefault: () => {},
+      });
+      now = 2002;
+      canvasListeners.get('mousedown')?.({
+        clientX: 180,
+        clientY: 120,
+        button: 2,
+      });
+      const fallbackDual = input.consumeSimInput(cam, 160, 120);
+      expect(fallbackDual.fireHeld).toBe(true);
+      expect(fallbackDual.activeHeld).toBe(true);
+
+      now = 2030;
+      windowListeners.get('pointermove')?.({
+        pointerType: 'mouse',
+        pointerId: 1,
+        clientX: 190,
+        clientY: 120,
+      });
+      now = 2032;
+      windowListeners.get('mouseup')?.({
+        clientX: 190,
+        clientY: 120,
+        button: 2,
+      });
+      const fallbackReleased = input.consumeSimInput(cam, 160, 120);
+      expect(fallbackReleased.fireHeld).toBe(true);
+      expect(fallbackReleased.activeHeld).toBe(false);
+
+      input.detach();
+    } finally {
+      (globalThis as unknown as { window: unknown }).window = origWindow;
+    }
+  });
+
+  it('queues rapid menu directional taps so 3 fast ArrowDown presses advance 3 items instead of collapsing into 1', () => {
+    const bundle = createFallbackBundle();
+    const menus = new MenuSystem(bundle);
+    const save = createDefaultSaveData();
+    const input = new InputManager(DEFAULT_KEYBINDINGS, { controls: save.controls });
+    input.setGameplayActive(false);
+
+    const pauseCtx: MenuRenderContext = {
+      screen: 'paused',
+      save,
+      simState: null,
+      width: LOGICAL_WIDTH_4_3,
+      height: LOGICAL_HEIGHT,
+      timeSec: 1,
+      returnScreenFromOptions: 'title',
+      inputMode: 'kbm',
+    };
+
+    // Rapidly tap ArrowDown 3 times within a single frame before any consumeMenuInput() poll
+    for (let i = 0; i < 3; i++) {
+      input.simulateKeyDown('ArrowDown');
+      input.simulateKeyUp('ArrowDown');
+    }
+
+    // Drains exactly 1 step per frame -> moves Pause focus 0 -> 1 -> 2 -> 3 cleanly!
+    const s1 = input.consumeMenuInput();
+    expect(s1.navDown).toBe(true);
+    menus.update(s1, pauseCtx);
+    expect(menus.getFocusedIndex()).toBe(1);
+
+    const s2 = input.consumeMenuInput();
+    expect(s2.navDown).toBe(true);
+    menus.update(s2, pauseCtx);
+    expect(menus.getFocusedIndex()).toBe(2);
+
+    const s3 = input.consumeMenuInput();
+    expect(s3.navDown).toBe(true);
+    menus.update(s3, pauseCtx);
+    expect(menus.getFocusedIndex()).toBe(3);
+
+    const s4 = input.consumeMenuInput();
+    expect(s4.navDown).toBe(false);
+
+    // Rapid Down x2 + Enter holds confirm until the 2nd Down lands
+    input.simulateKeyDown('ArrowDown');
+    input.simulateKeyUp('ArrowDown');
+    input.simulateKeyDown('ArrowDown');
+    input.simulateKeyUp('ArrowDown');
+    input.simulateKeyDown('Enter');
+    input.simulateKeyUp('Enter');
+
+    const q1 = input.consumeMenuInput();
+    expect(q1.navDown).toBe(true);
+    expect(q1.confirm).toBe(false);
+    const q2 = input.consumeMenuInput();
+    expect(q2.navDown).toBe(true);
+    expect(q2.confirm).toBe(true);
+
+    // clearMenuLatches wipes any pending buffered taps cleanly on screen switch
+    input.simulateKeyDown('ArrowUp');
+    input.simulateKeyUp('ArrowUp');
+    input.simulateKeyDown('ArrowUp');
+    input.simulateKeyUp('ArrowUp');
+    input.clearMenuLatches();
+    expect(input.consumeMenuInput().navUp).toBe(false);
+  });
+});
