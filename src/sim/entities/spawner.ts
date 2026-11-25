@@ -227,7 +227,7 @@ export function findSafeFloorSpot(
     }
 
     // Prefer tiles where circle doesn't clip solid corners (relaxed after 100 tries)
-    if (attempt < 100 && isCircleOverlappingSolid(map, pos.x, pos.y, Math.min(entityRadius, 7))) {
+    if (attempt < 100 && isCircleOverlappingSolid(map, pos.x, pos.y, Math.min(entityRadius, 12))) {
       continue;
     }
 
@@ -360,10 +360,15 @@ export function createEnemyEntity(
     opts.carveIfTight ?? Boolean(def.isBoss),
   );
 
+  const rt = getAreaRuntime(state);
   const loopHpMult = def.isBoss ? 1 + state.loop * 0.45 : 1 + state.loop * 0.3;
+  const scarierMult =
+    !rt.populatingArea && !opts.friendly && state.player.mutations.includes('scarier_face')
+      ? 0.8
+      : 1.0;
   const scaledHp = Math.max(
     1,
-    Math.round(def.maxHp * (opts.hpScale ?? loopHpMult)),
+    Math.round(def.maxHp * (opts.hpScale ?? loopHpMult) * scarierMult),
   );
 
   let defaultState = 'idle';
@@ -479,7 +484,7 @@ export function spawnBossEntity(
   });
 
   if (bossId === 'lil_hunter') {
-    boss.aiTimer = 30;
+    boss.aiTimer = 54;
     boss.targetX = spawnPos.x;
     boss.targetY = spawnPos.y;
   } else if (bossId === 'big_bandit') {
@@ -509,6 +514,7 @@ export function spawnBossEntity(
   rt.throneWoken = false;
   rt.throneLastGenCount = state.generatorsRemaining;
 
+  const startsAsleep = initialAiState === 'sleep';
   state.boss = {
     bossId,
     entityId: boss.id,
@@ -516,28 +522,31 @@ export function spawnBossEntity(
     subtitle: meta.subtitle,
     hp: boss.hp,
     maxHp: boss.maxHp,
-    introTicks: 60,
+    introTicks: startsAsleep ? 0 : 60,
     defeated: false,
   };
 
-  emitEvent(state, {
-    type: 'boss_intro',
-    bossId,
-    name: meta.name,
-    subtitle: meta.subtitle,
-  });
-  emitEvent(state, {
-    type: 'music',
-    track: meta.musicTrack,
-    ambience: getAreaDef(state.areaCode).ambienceTrack,
-    boss: true,
-  });
-  emitEvent(state, {
-    type: 'sfx',
-    sound: meta.introSound,
-    x: boss.x,
-    y: boss.y,
-  });
+  // Sleeping bosses (Big Dog 3-3, Krunked Throne 7-3) hold their intro banner & boss music until woken!
+  if (!startsAsleep) {
+    emitEvent(state, {
+      type: 'boss_intro',
+      bossId,
+      name: meta.name,
+      subtitle: meta.subtitle,
+    });
+    emitEvent(state, {
+      type: 'music',
+      track: meta.musicTrack,
+      ambience: getAreaDef(state.areaCode).ambienceTrack,
+      boss: true,
+    });
+    emitEvent(state, {
+      type: 'sfx',
+      sound: meta.introSound,
+      x: boss.x,
+      y: boss.y,
+    });
+  }
 
   return boss;
 }
@@ -659,17 +668,28 @@ function addProp(
   return prop;
 }
 
-function isPropSpotClear(state: SimState, x: number, y: number, minDist: number): boolean {
+function isExplosivePropKind(kind: PropKind): boolean {
+  return kind === 'barrel' || kind === 'toxic_barrel' || kind === 'car';
+}
+
+function isPropSpotClear(
+  state: SimState,
+  x: number,
+  y: number,
+  minDist: number,
+  kind?: PropKind,
+): boolean {
   if (isWorldSolid(state.map, x, y)) return false;
   const spDx = x - state.map.spawnX;
   const spDy = y - state.map.spawnY;
   if (spDx * spDx + spDy * spDy < 42 * 42) return false;
-  const minSq = minDist * minDist;
+  const selfExplosive = kind !== undefined && isExplosivePropKind(kind);
   for (let i = 0; i < state.props.length; i++) {
     const p = state.props[i]!;
+    const req = selfExplosive || isExplosivePropKind(p.kind) ? Math.max(minDist, 64) : minDist;
     const dx = x - p.x;
     const dy = y - p.y;
-    if (dx * dx + dy * dy < minSq) return false;
+    if (dx * dx + dy * dy < req * req) return false;
   }
   return true;
 }
@@ -693,7 +713,7 @@ function tryPlacePropNear(
     const px = anchorX + Math.cos(ang) * r;
     const py = anchorY + Math.sin(ang) * r;
     if (isCircleOverlappingSolid(state.map, px, py, Math.min(radius, 7))) continue;
-    if (!isPropSpotClear(state, px, py, 20)) continue;
+    if (!isPropSpotClear(state, px, py, 20, kind)) continue;
     addProp(state, kind, px, py, sprite, hp, radius, solid);
     return true;
   }
@@ -718,11 +738,12 @@ function spawnBiomeProps(
     const westOuter = cx - 13;
     const eastOuter = cx + 13;
     const genYs = [daisTop + 12, daisBottom + 10];
+    // 4 Generators symmetrically positioned along the visible upper/mid side corridor flanks
     const alcoveCoords: Array<{ tx: number; ty: number }> = [
-      { tx: westOuter - 2, ty: genYs[0]! },
-      { tx: eastOuter + 2, ty: genYs[0]! },
-      { tx: westOuter - 2, ty: genYs[1]! },
-      { tx: eastOuter + 2, ty: genYs[1]! },
+      { tx: cx - 10, ty: genYs[0]! },
+      { tx: cx + 10, ty: genYs[0]! },
+      { tx: cx - 10, ty: genYs[1]! },
+      { tx: cx + 10, ty: genYs[1]! },
     ];
 
     let placedGenerators = 0;
@@ -735,7 +756,7 @@ function spawnBiomeProps(
     }
     state.generatorsRemaining = placedGenerators;
 
-    // Ornate palace pillars lining outer flanks of the grand hall (kept well off the carpet)
+    // Ornate palace pillars lining outer flanks of the grand hall (kept well off the carpet; uses canonical sprPillar)
     const pillarYs = [daisBottom + 4, daisBottom + 14, daisBottom + 24, daisBottom + 34];
     for (let i = 0; i < pillarYs.length; i++) {
       const py = pillarYs[i]!;
@@ -743,7 +764,7 @@ function spawnBiomeProps(
       for (const side of [-1, 1]) {
         const raw = tileToWorldCenter(cx + side * 4, py, ts);
         if (!isWorldSolid(map, raw.x, raw.y)) {
-          addProp(state, 'pillar', raw.x, raw.y, 'sprPalacePillar', 36, 9, true);
+          addProp(state, 'pillar', raw.x, raw.y, 'sprPillar', 36, 9, true);
         }
       }
     }
@@ -759,6 +780,7 @@ function spawnBiomeProps(
   }
 
   // Proto Statue in Crown Vault & mid-world areas (3-2, 5-2, 7-2)
+  const rt = getAreaRuntime(state);
   if (areaCode === 'vault' || areaCode === '3-2' || areaCode === '5-2' || areaCode === '7-2') {
     const pos =
       areaCode === 'vault'
@@ -769,9 +791,39 @@ function spawnBiomeProps(
             6,
           )
         : findSafeFloorSpot(state, rng, 104, 12, 24, false);
-    addProp(state, 'proto_statue', pos.x, pos.y, 'sprProtoStatueIdle', 60, 12, true, {
+    const statue = addProp(state, 'proto_statue', pos.x, pos.y, 'sprProtoStatueIdle', 60, 12, true, {
       radsStored: 0,
     });
+    if (areaCode !== 'vault') {
+      rt.protoStatuePropId = statue.id;
+      rt.protoStatueX = statue.x;
+      rt.protoStatueY = statue.y;
+      rt.protoStatueCharged = false;
+    }
+  }
+
+  // Secret exit triggers:
+  // - 2-1 Sewers: Sewer Manhole grate -> hit with explosion to open Pizza Sewers (2-?)
+  if (areaCode === '2-1') {
+    const manholePos = findSafeFloorSpot(state, rng, 96, 10, 32, false);
+    const manhole = addProp(state, 'bone_pile', manholePos.x, manholePos.y, 'sprPizzaEntrance', 999, 10, false);
+    rt.pizzaManholePropId = manhole.id;
+  }
+
+  // - 3-1 Scrapyard: Golden Car -> repair with Screwdriver, then press E to enter Y.V.'s Mansion (3-?)
+  if (areaCode === '3-1') {
+    const carPos = findSafeFloorSpot(state, rng, 96, 11, 32, false);
+    const venusCar = addProp(state, 'car', carPos.x, carPos.y, 'sprVenusCar', 30, 11, true);
+    rt.venusCarPropId = venusCar.id;
+    rt.venusCarFixed = false;
+  }
+
+  // - 5-1 Frozen City: Jungle Flower (when player took Last Wish) -> feed 4 HP via E to open Jungle (5-?)
+  if (areaCode === '5-1' && state.player.mutations.includes('last_wish')) {
+    const flowerPos = findSafeFloorSpot(state, rng, 92, 9, 28, false);
+    const flower = addProp(state, 'cactus', flowerPos.x, flowerPos.y, 'sprCactus3', 999, 9, false);
+    rt.jungleFlowerPropId = flower.id;
+    rt.jungleFlowerFeeds = 0;
   }
 
   // Place strategic explosive barrels / cars right beside enemy encounter pockets for chain-kill payoffs!
@@ -836,7 +888,7 @@ function spawnBiomeProps(
       }
     } else if (biome === 'palace' || biome === 'vault') {
       if (rng.chance(0.65)) {
-        tryPlacePropNear(state, anchor.x, anchor.y, 24, 44, rng, 'pillar', 'sprPalacePillar', 36, 9, true);
+        tryPlacePropNear(state, anchor.x, anchor.y, 24, 44, rng, 'pillar', 'sprPillar', 36, 9, true);
       }
     }
   }
@@ -873,13 +925,17 @@ function spawnBiomeProps(
     case 'scrapyard': {
       const carCount = rng.int(2, 3);
       for (let i = 0; i < carCount; i++) {
-        const pos = findSafeFloorSpot(state, rng, 80, 11, 34, false);
-        addProp(state, 'car', pos.x, pos.y, 'sprCarIdle', 22, 11, true);
+        const pos = findSafeFloorSpot(state, rng, 80, 11, 64, false);
+        if (isPropSpotClear(state, pos.x, pos.y, 64, 'car')) {
+          addProp(state, 'car', pos.x, pos.y, 'sprCarIdle', 22, 11, true);
+        }
       }
       const barrelCount = rng.int(2, 4);
       for (let i = 0; i < barrelCount; i++) {
-        const pos = findSafeFloorSpot(state, rng, 64, 8, 24, false);
-        addProp(state, 'barrel', pos.x, pos.y, 'sprBarrel', 10, 8, true);
+        const pos = findSafeFloorSpot(state, rng, 64, 8, 64, false);
+        if (isPropSpotClear(state, pos.x, pos.y, 64, 'barrel')) {
+          addProp(state, 'barrel', pos.x, pos.y, 'sprBarrel', 10, 8, true);
+        }
       }
       break;
     }
@@ -922,7 +978,7 @@ function spawnBiomeProps(
       const count = rng.int(3, 5);
       for (let i = 0; i < count; i++) {
         const pos = findSafeFloorSpot(state, rng, 76, 9, 28, false);
-        addProp(state, 'pillar', pos.x, pos.y, 'sprPalacePillar', 36, 9, true);
+        addProp(state, 'pillar', pos.x, pos.y, 'sprPillar', 36, 9, true);
       }
       break;
     }
@@ -959,6 +1015,11 @@ function getEnemyCost(def: EnemyDef): number {
 
 function getBiomePool(state: SimState): Array<{ def: EnemyDef; weight: number }> {
   let candidates = getEnemiesForBiome(state.biome, state.loop);
+  if (state.biome === 'cursed_caves' && state.loop === 0 && ENEMIES.lightning_crystal) {
+    if (!candidates.some((d) => d.id === 'lightning_crystal')) {
+      candidates = [...candidates, ENEMIES.lightning_crystal];
+    }
+  }
   if (candidates.length === 0) {
     if (state.biome === 'campfire') return [];
     candidates = [ENEMIES.bandit!];
@@ -1030,7 +1091,7 @@ function pickBiomeSquadTemplates(state: SimState): string[][] {
         ['laser_crystal', 'spider', 'spider'],
         ['laser_crystal', 'spider'],
       ];
-      if (loop > 0) {
+      if (loop > 0 || state.biome === 'cursed_caves') {
         templates.push(['lightning_crystal', 'spider', 'spider']);
       }
       return templates;
@@ -1269,6 +1330,8 @@ function countHostiles(state: SimState): number {
  */
 export function populateAreaEntities(state: SimState, rng: SeededRng): void {
   const rt = resetAreaRuntime(state);
+  rt.populatingArea = true;
+  try {
   const areaDef = getAreaDef(state.areaCode);
 
   // If called standalone without loadAreaIntoState having spawned chests yet, spawn them now
@@ -1305,7 +1368,15 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
   rt.throneLastGenCount = state.generatorsRemaining;
 
   // 3. Purposeful Biome Enemy Squads across encounter pockets
-  if (budget > 0 && pool.length > 0) {
+  if (state.areaCode === 'vault') {
+    // Authentic symmetrical Crown Guardians flanking the Crown Chamber alcoves
+    const cx = Math.floor(state.map.width / 2);
+    const ts = state.map.tileSize || TILE_SIZE;
+    const westAlcove = tileToWorldCenter(cx - 11, 17, ts);
+    const eastAlcove = tileToWorldCenter(cx + 11, 17, ts);
+    createEnemyEntity(state, 'crown_guardian', westAlcove.x, westAlcove.y, rng);
+    createEnemyEntity(state, 'crown_guardian', eastAlcove.x, eastAlcove.y, rng);
+  } else if (budget > 0 && pool.length > 0) {
     const maxEnemiesCap = Math.min(76, 26 + state.loop * 14 + (state.crown === 'blood' ? 12 : 0));
     const templates = pickBiomeSquadTemplates(state);
     const allowedIds = new Set(pool.map((p) => p.def.id));
@@ -1345,15 +1416,29 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
     }
   }
 
-  // 4. Mimics on 2-1+ or Loop 1+ (never on 1-1..1-3 Loop 0 or 7-3/0-1 boss arenas)
+  // 4. Mimics on 2-1+ or Loop 1+ (replaces an existing chest when safely away from spawn!)
   const isEarlyDesert =
     state.loop === 0 &&
     (state.areaCode === '1-1' || state.areaCode === '1-2' || state.areaCode === '1-3');
   if (!isEarlyDesert && state.areaCode !== '7-3' && state.areaCode !== '0-1' && state.areaCode !== 'vault') {
     const mimicChance = state.loop > 0 ? 0.35 : 0.18;
     if (rng.chance(mimicChance)) {
-      const mimicDef = rng.chance(0.35) ? 'weapon_mimic' : 'mimic';
-      const spot = findSafeFloorSpot(state, rng, 118, 8, 22, true);
+      const isWeaponMimic = rng.chance(0.35);
+      const mimicDef = isWeaponMimic ? 'weapon_mimic' : 'mimic';
+      const targetChestKind = isWeaponMimic ? 'weapon_chest' : 'ammo_chest';
+      let spot: { x: number; y: number } | null = null;
+      for (let pIdx = state.props.length - 1; pIdx >= 0; pIdx--) {
+        const prop = state.props[pIdx]!;
+        if (prop.kind !== targetChestKind || prop.opened) continue;
+        if (isSpotSafeFromSpawn(state, prop.x, prop.y, MIN_SPAWN_NO_LOS_DIST, MIN_SPAWN_WITH_LOS_DIST)) {
+          spot = { x: prop.x, y: prop.y };
+          state.props.splice(pIdx, 1);
+          break;
+        }
+      }
+      if (!spot) {
+        spot = findSafeFloorSpot(state, rng, 118, 8, 22, true);
+      }
       createEnemyEntity(state, mimicDef, spot.x, spot.y, rng, {
         initialAiState: 'disguised',
       });
@@ -1382,6 +1467,9 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
 
   // 7. Accurate level start enemy count (hostiles only)
   state.levelStartEnemyCount = countHostiles(state);
+  } finally {
+    rt.populatingArea = false;
+  }
 }
 
 /**

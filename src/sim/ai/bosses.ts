@@ -1,28 +1,34 @@
 import {
   TILE_SIZE,
+  TileType,
   type AreaCode,
   type BossId,
   type EnemyEntity,
   type SimState,
 } from '@/contracts';
-import { AMMO_PICKUP_AMOUNT, getNextAreaTransition } from '@/data';
+import { AMMO_PICKUP_AMOUNT, getAreaDef, getNextAreaTransition } from '@/data';
 import {
   SeededRng,
   carveCircle,
   circleOverlap,
   emitEvent,
   findNearestFloor,
+  getTile,
   hasLineOfSight,
   moveCircleWithSlide,
+  segmentCircleHit,
+  worldToTile,
 } from '@/sim/core';
 import {
   NON_MELEE_AMMO_TYPES,
   applyDamageToEnemy,
+  damageProp,
   spawnEnemyProjectile,
   spawnExplosion,
   spawnPickup,
 } from '@/sim/combat';
 import {
+  BOSS_META,
   createEnemyEntity,
   getAreaRuntime,
   spawnIdpdWave,
@@ -126,15 +132,17 @@ function clearBossSummonsAndEnemyBullets(state: SimState, clearAllBullets: boole
   }
 }
 
-function openBossPortal(
+export function openBossPortal(
   state: SimState,
   anchorX: number,
   anchorY: number,
   targetArea: AreaCode,
   nextLoop: number,
   bannerText: string,
+  forceOverride: boolean = false,
 ): void {
-  if (state.portal.active) return;
+  if (state.portal.entered) return;
+  if (state.portal.active && !forceOverride) return;
   const safe = findNearestFloor(state.map, anchorX, anchorY, 12);
   state.portal.active = true;
   state.portal.x = safe.x;
@@ -167,13 +175,71 @@ function openBossPortal(
   });
 }
 
+function stepLilHunterDeathSpiral(state: SimState, rng: SeededRng): void {
+  const rt = getAreaRuntime(state);
+  const spiral = rt.lilHunterSpiral;
+  if (!spiral || !spiral.active) return;
+
+  spiral.ticksLeft -= 1;
+  const mv = moveCircleWithSlide(state.map, spiral.x, spiral.y, spiral.vx, spiral.vy, 9);
+  spiral.x = mv.x;
+  spiral.y = mv.y;
+
+  if (mv.hitX) {
+    spiral.vx = -spiral.vx;
+    spiral.bounces += 1;
+  }
+  if (mv.hitY) {
+    spiral.vy = -spiral.vy;
+    spiral.bounces += 1;
+  }
+  if (mv.hitWall) {
+    carveCircle(state.map, spiral.x, spiral.y, 20, true);
+    emitEvent(state, { type: 'sfx', sound: 'sndLilHunterFly', x: spiral.x, y: spiral.y, pitchJitter: 0.2 });
+    emitEvent(state, { type: 'shake', trauma: 0.25 });
+    spawnExplosion(state, spiral.x, spiral.y, 28, 16, 'player', rng, {
+      carveWalls: true,
+      clearsProjectiles: true,
+      isRad: true,
+      sound: 'sndExplosionS',
+    });
+  }
+
+  emitEvent(state, {
+    type: 'particle',
+    kind: 'flame',
+    x: spiral.x,
+    y: spiral.y,
+    vx: -spiral.vx * 0.25 + rng.range(-0.6, 0.6),
+    vy: -spiral.vy * 0.25 + rng.range(-0.6, 0.6),
+    color: '#ff7b29',
+    size: 5,
+    life: 8,
+  });
+
+  if (spiral.ticksLeft <= 0) {
+    spiral.active = false;
+    rt.lilHunterSpiral = null;
+    spawnExplosion(state, spiral.x, spiral.y, 44, 24, 'player', rng, {
+      carveWalls: true,
+      clearsProjectiles: true,
+      isRad: true,
+      sound: 'sndExplosionL',
+    });
+  }
+}
+
 /**
  * Steps boss-specific projectiles every tick:
  * 1. Big Dog homing destructible missiles (`boss_missile`) steer toward player and can be shot down!
  * 2. Giant Krunked Throne / Throne II green rad orbs (`boss_orb` with radius >= 9) can be shot down
- *    to drop clutch HP & ammo pickups mid-bossfight (classic Nuclear Throne sustain loop!).
+ *    to drop clutch HP & ammo pickups mid-bossfight (classic Nuclear Throne sustain loop!), and
+ *    burst into smaller orbs if left unshot at expiration.
+ * 3. Lil' Hunter malfunctioning jetpack death pinball bounce spiral.
  */
 export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
+  stepLilHunterDeathSpiral(state, rng);
+
   const player = state.player;
   for (let i = state.projectiles.length - 1; i >= 0; i--) {
     const proj = state.projectiles[i]!;
@@ -209,13 +275,25 @@ export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
       }
     }
 
-    // Destructible by player projectiles!
+    // Destructible by player projectiles using swept segment hit (zero tunneling for fast rifles/bolts/lasers!)
     let shotDown = false;
     for (let j = state.projectiles.length - 1; j >= 0; j--) {
       if (j === i) continue;
       const other = state.projectiles[j]!;
       if (other.team !== 'player') continue;
-      if (circleOverlap(proj.x, proj.y, proj.radius + 4, other.x, other.y, other.radius + 2)) {
+      const hit =
+        other.kind === 'melee_slash'
+          ? { hit: circleOverlap(proj.x, proj.y, proj.radius + 4, other.x, other.y, other.radius + 2) }
+          : segmentCircleHit(
+              other.prevX,
+              other.prevY,
+              other.x,
+              other.y,
+              proj.x,
+              proj.y,
+              proj.radius + other.radius + 4,
+            );
+      if (hit.hit) {
         shotDown = true;
         if (other.pierce <= 0 && other.kind !== 'melee_slash') {
           state.projectiles.splice(j, 1);
@@ -248,7 +326,7 @@ export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
           y: proj.y,
           pitchJitter: 0.15,
         });
-        if (player.hp < player.maxHp && rng.chance(0.45)) {
+        if (state.crown !== 'life' && player.hp < player.maxHp && rng.chance(0.45)) {
           spawnPickup(state, 'hp', proj.x, proj.y, { value: 2 }, rng);
         } else {
           const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
@@ -282,6 +360,24 @@ export function stepBossProjectiles(state: SimState, rng: SeededRng): void {
           pitchJitter: 0.12,
         });
       }
+    } else if (isDestructibleGiantOrb && proj.lifeTicks <= 1) {
+      // Unshot giant Throne / Throne II orbs split into a radial burst of smaller green orbs!
+      state.projectiles.splice(i, 1);
+      for (let k = 0; k < 6; k++) {
+        const ang = proj.angle + (k / 6) * Math.PI * 2;
+        spawnEnemyProjectile(state, {
+          kind: 'boss_orb',
+          x: proj.x + Math.cos(ang) * 6,
+          y: proj.y + Math.sin(ang) * 6,
+          angle: ang,
+          speed: 3.3,
+          damage: 2,
+          radius: 5,
+          lifeTicks: 70,
+          sprite: 'sprGuardianBullet',
+        });
+      }
+      emitEvent(state, { type: 'sfx', sound: 'sndNothingSmallball', x: proj.x, y: proj.y, pitchJitter: 0.12 });
     }
   }
 }
@@ -318,9 +414,11 @@ function stepBigBandit(state: SimState, boss: EnemyEntity, rng: SeededRng): void
 
   if (boss.aiState === 'fire') {
     const interval = enraged ? 2 : 3;
+    const volleyStart = enraged ? 29 : 38;
     if (boss.aiTimer % interval === 0) {
       const sweep = Math.sin(boss.aiTimer * 0.35) * (enraged ? 0.3 : 0.2);
       const jitter = rng.range(-0.07, 0.07);
+      const isFirstShot = boss.aiTimer >= volleyStart - interval;
       spawnEnemyProjectile(state, {
         kind: 'enemy_bullet',
         x: boss.x + Math.cos(boss.aimAngle) * 14,
@@ -331,7 +429,7 @@ function stepBigBandit(state: SimState, boss: EnemyEntity, rng: SeededRng): void
         radius: 4,
         lifeTicks: 90,
         sprite: 'sprEnemyBullet1',
-        sound: 'sndBigBanditStartShoot',
+        sound: isFirstShot ? 'sndBigBanditStartShoot' : 'sndPistol',
       });
     }
     moveBossBody(state, boss, Math.cos(toPlayer) * 0.45, Math.sin(toPlayer) * 0.45);
@@ -368,6 +466,23 @@ function stepBigBandit(state: SimState, boss: EnemyEntity, rng: SeededRng): void
       boss.targetY * dashSpeed,
       { carveWalls: true },
     );
+    // Smash breakable desert props (cacti, barrels, bone piles, pillars) in Big Bandit's path!
+    for (let p = state.props.length - 1; p >= 0; p--) {
+      const prop = state.props[p]!;
+      if (prop.hp <= 0 || prop.opened) continue;
+      if (
+        prop.kind === 'barrel' ||
+        prop.kind === 'toxic_barrel' ||
+        prop.kind === 'cactus' ||
+        prop.kind === 'bone_pile' ||
+        prop.kind === 'pillar' ||
+        prop.kind === 'car'
+      ) {
+        if (circleOverlap(boss.x, boss.y, boss.radius + 2, prop.x, prop.y, prop.radius)) {
+          damageProp(state, prop, 50, rng);
+        }
+      }
+    }
     if (state.tick % 2 === 0) {
       emitEvent(state, {
         type: 'particle',
@@ -423,12 +538,33 @@ function stepBigDog(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
 
   boss.facing = dx >= 0 ? 1 : -1;
 
-  // Sleeping until provoked by damage or close approach!
+  // Sleeping until provoked by damage, close proximity, or clear line-of-sight approach!
   if (boss.aiState === 'sleep') {
-    if (boss.hp < boss.maxHp || dist <= 175) {
+    const spotted =
+      boss.hp < boss.maxHp ||
+      dist <= 110 ||
+      (dist <= 175 && hasLineOfSight(state.map, boss.x, boss.y, player.x, player.y));
+    if (spotted) {
       boss.aiState = 'wake';
       boss.aiTimer = 18;
       boss.aiPhase = 0;
+      const meta = BOSS_META.big_dog;
+      if (state.boss && state.boss.entityId === boss.id) {
+        state.boss.introTicks = 60;
+      }
+      emitEvent(state, {
+        type: 'boss_intro',
+        bossId: 'big_dog',
+        name: meta.name,
+        subtitle: meta.subtitle,
+      });
+      emitEvent(state, {
+        type: 'music',
+        track: meta.musicTrack,
+        ambience: getAreaDef(state.areaCode).ambienceTrack,
+        boss: true,
+      });
+      emitEvent(state, { type: 'sfx', sound: meta.introSound, x: boss.x, y: boss.y });
       emitEvent(state, { type: 'sfx', sound: 'sndBigDogTaunt', x: boss.x, y: boss.y });
       emitEvent(state, { type: 'shake', trauma: 0.48 });
       emitEvent(state, {
@@ -676,8 +812,12 @@ function stepLilHunter(state: SimState, boss: EnemyEntity, rng: SeededRng): void
   const spd = hurt ? 2.9 : 2.4;
   moveBossBody(state, boss, Math.cos(desiredAng) * spd, Math.sin(desiredAng) * spd);
 
+  const hasLos = hasLineOfSight(state.map, boss.x, boss.y, player.x, player.y);
   if (boss.attackCooldown <= 0) {
-    if (hurt && countBossSummonsAlive(state) < 3 && rng.chance(0.32)) {
+    const shouldCallIdpd =
+      countBossSummonsAlive(state) < 3 &&
+      ((!hasLos && rng.chance(0.45)) || (hurt && rng.chance(0.32)));
+    if (shouldCallIdpd) {
       emitEvent(state, { type: 'sfx', sound: 'sndLilHunterSummon', x: boss.x, y: boss.y });
       spawnIdpdWave(state, rng, {
         anchorX: boss.x + rng.range(-48, 48),
@@ -751,7 +891,8 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
     emitEvent(state, { type: 'sfx', sound: 'sndNothingGenerators', x: boss.x, y: boss.y });
     emitEvent(state, { type: 'shake', trauma: 0.45 });
     if (state.generatorsRemaining === 0 && boss.hp > 1) {
-      const shockDmg = Math.max(50, Math.round(boss.maxHp * 0.2));
+      // Authentic Nuclear Throne: destroying all 4 generators chunks 50% of the Throne's max HP!
+      const shockDmg = Math.max(50, Math.round(boss.maxHp * 0.5));
       applyDamageToEnemy(state, boss, shockDmg, 0, 0, rng, { isHeavy: true });
       emitEvent(state, {
         type: 'pickup_text',
@@ -772,6 +913,23 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
       boss.aiState = 'orb_volley';
       boss.aiTimer = 46;
       boss.aiPhase = 0;
+      const meta = BOSS_META.nuclear_throne;
+      if (state.boss && state.boss.entityId === boss.id) {
+        state.boss.introTicks = 60;
+      }
+      emitEvent(state, {
+        type: 'boss_intro',
+        bossId: 'nuclear_throne',
+        name: meta.name,
+        subtitle: meta.subtitle,
+      });
+      emitEvent(state, {
+        type: 'music',
+        track: meta.musicTrack,
+        ambience: getAreaDef(state.areaCode).ambienceTrack,
+        boss: true,
+      });
+      emitEvent(state, { type: 'sfx', sound: meta.introSound, x: boss.x, y: boss.y });
       emitEvent(state, { type: 'sfx', sound: 'sndNothingRise', x: boss.x, y: boss.y });
       emitEvent(state, { type: 'shake', trauma: 0.55 });
     }
@@ -845,6 +1003,21 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
         });
       }
       if (boss.aiTimer % 8 === 0) {
+        // Side-cannon plasma orbs sweep the flanks during the Center Mega-Beam!
+        for (const side of [-1, 1] as const) {
+          const ang = Math.PI * 0.5 + side * (0.48 + ((boss.aiTimer / 8) % 3) * 0.14);
+          spawnEnemyProjectile(state, {
+            kind: 'boss_orb',
+            x: boss.x + side * 26,
+            y: boss.y + 18,
+            angle: ang,
+            speed: 3.6,
+            damage: 2,
+            radius: 5,
+            lifeTicks: 95,
+            sprite: 'sprGuardianBullet',
+          });
+        }
         emitEvent(state, { type: 'sfx', sound: 'sndNothingBeamLoop', x: boss.x, y: boss.y });
         emitEvent(state, { type: 'shake', trauma: 0.25 });
       }
@@ -902,9 +1075,18 @@ function stepNuclearThrone(state: SimState, boss: EnemyEntity, rng: SeededRng): 
       });
       emitEvent(state, { type: 'sfx', sound: 'sndGuardianAppear', x: boss.x + side * 64, y: boss.y + 40 });
     }
-    boss.aiState = 'tell';
-    boss.aiTimer = 34;
-    emitEvent(state, { type: 'sfx', sound: 'sndNothingBeamWarn', x: boss.x, y: boss.y });
+    const pTile = worldToTile(player.x, player.y, ts);
+    const onCarpet =
+      getTile(state.map, pTile.tx, pTile.ty) === TileType.Carpet ||
+      Math.abs(player.x - boss.x) <= 44;
+    if (onCarpet || boss.aiPhase % 2 === 0) {
+      boss.aiState = 'tell';
+      boss.aiTimer = 34;
+      emitEvent(state, { type: 'sfx', sound: 'sndNothingBeamWarn', x: boss.x, y: boss.y });
+    } else {
+      boss.aiTimer = 42;
+      boss.aiPhase += 1;
+    }
   }
 }
 
@@ -964,6 +1146,34 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
       }
     }
     if (boss.aiTimer <= 0) {
+      boss.aiState = 'sweep_burst';
+      boss.aiTimer = enraged ? 38 : 34;
+      boss.aiPhase += 1;
+    }
+    return;
+  }
+
+  if (boss.aiState === 'sweep_burst') {
+    boss.aimAngle = toPlayer;
+    if (boss.aiTimer % 10 === 0) {
+      const count = enraged ? 7 : 5;
+      for (let k = 0; k < count; k++) {
+        const frac = k / (count - 1) - 0.5;
+        spawnEnemyProjectile(state, {
+          kind: 'boss_orb',
+          x: boss.x + Math.cos(toPlayer + frac * 0.7) * 22,
+          y: boss.y + Math.sin(toPlayer + frac * 0.7) * 22,
+          angle: toPlayer + frac * 0.7,
+          speed: enraged ? 4.4 : 3.8,
+          damage: 2,
+          radius: 5,
+          lifeTicks: 90,
+          sprite: 'sprThrone2Bullet',
+          sound: k === 0 ? 'sndNothing2Beam' : undefined,
+        });
+      }
+    }
+    if (boss.aiTimer <= 0) {
       boss.aiState = 'plasma_balls';
       boss.aiTimer = 42;
       boss.aiPhase += 1;
@@ -971,7 +1181,7 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
     return;
   }
 
-  // Default / plasma_balls: fires huge destructible glowing plasma balls + periodic Guardian spawn
+  // Default / plasma_balls: fires huge destructible glowing plasma balls (split into orb rings if unshot!)
   boss.aimAngle = toPlayer;
   if (boss.aiTimer % 14 === 0) {
     const spreadCount = enraged ? 3 : 1;
@@ -994,13 +1204,6 @@ function stepThroneII(state: SimState, boss: EnemyEntity, rng: SeededRng): void 
   }
 
   if (boss.aiTimer <= 0) {
-    if (boss.aiPhase % 2 === 1 && countBossSummonsAlive(state) < 2) {
-      const ang = rng.range(0, Math.PI * 2);
-      createEnemyEntity(state, 'guardian', boss.x + Math.cos(ang) * 52, boss.y + Math.sin(ang) * 52, rng, {
-        isBossSummon: true,
-      });
-      emitEvent(state, { type: 'sfx', sound: 'sndGuardianAppear', x: boss.x, y: boss.y });
-    }
     boss.aiState = 'spiral_volley';
     boss.aiTimer = enraged ? 48 : 42;
     boss.aiPhase += 1;
@@ -1070,32 +1273,59 @@ export function handleBossDeath(
         isRad: true,
         sound: 'sndBigBanditDie',
       });
+      // Classic Nuclear Throne 1-1 -> 1-? Oasis secret: kill early Big Bandit within 10s (300 ticks)!
+      if (
+        state.areaCode === '1-1' &&
+        rt.earlyBigBanditSpawned &&
+        rt.earlyBigBanditSpawnTick >= 0 &&
+        state.tick - rt.earlyBigBanditSpawnTick <= 300
+      ) {
+        for (let i = state.enemies.length - 1; i >= 0; i--) {
+          if (!state.enemies[i]!.friendly) {
+            state.enemies.splice(i, 1);
+          }
+        }
+        openBossPortal(state, deathX, deathY, '1-?', state.loop, 'OASIS PORTAL!');
+      }
       break;
     }
 
     case 'big_dog': {
-      spawnExplosion(state, deathX, deathY, 54, 24, 'player', rng, {
-        carveWalls: true,
-        clearsProjectiles: true,
-        isRad: true,
-        sound: 'sndBigDogDeath',
-      });
+      // Iconic Big Dog multi-blast scrapyard detonation ring!
+      for (let k = 0; k < 5; k++) {
+        const ang = (k / 5) * Math.PI * 2 + rng.range(-0.2, 0.2);
+        const rad = k === 0 ? 0 : 20;
+        spawnExplosion(state, deathX + Math.cos(ang) * rad, deathY + Math.sin(ang) * rad, 34, 24, 'player', rng, {
+          carveWalls: true,
+          clearsProjectiles: true,
+          isRad: true,
+          sound: k === 0 ? 'sndBigDogDeath' : 'sndExplosion',
+        });
+      }
       break;
     }
 
     case 'lil_hunter': {
       clearBossSummonsAndEnemyBullets(state, true);
-      for (let k = 0; k < 3; k++) {
-        const ang = (k / 3) * Math.PI * 2 + rng.range(-0.3, 0.3);
-        const bx = deathX + Math.cos(ang) * (k === 0 ? 0 : 18);
-        const by = deathY + Math.sin(ang) * (k === 0 ? 0 : 18);
-        spawnExplosion(state, bx, by, 38, 22, 'player', rng, {
-          carveWalls: true,
-          clearsProjectiles: true,
-          isRad: true,
-          sound: k === 0 ? 'sndLilHunterDeath' : 'sndExplosionL',
-        });
-      }
+      // Iconic Lil' Hunter malfunctioning jetpack death pinball bounce!
+      const spiralAng = rng.range(0, Math.PI * 2);
+      rt.lilHunterSpiral = {
+        active: true,
+        x: deathX,
+        y: deathY,
+        vx: Math.cos(spiralAng) * 7.5,
+        vy: Math.sin(spiralAng) * 7.5,
+        ticksLeft: 20,
+        bounces: 0,
+      };
+      emitEvent(state, { type: 'sfx', sound: 'sndLilHunterDeath', x: deathX, y: deathY });
+      emitEvent(state, { type: 'sfx', sound: 'sndLilHunterFly', x: deathX, y: deathY });
+      spawnExplosion(state, deathX, deathY, 36, 20, 'player', rng, {
+        carveWalls: true,
+        clearsProjectiles: true,
+        isRad: true,
+        sound: 'sndExplosionL',
+      });
       break;
     }
 

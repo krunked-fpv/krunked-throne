@@ -1,4 +1,4 @@
-import type { BossId, EnemyEntity, SimState, WorldMap } from '@/contracts';
+import type { AreaCode, BossId, EnemyEntity, SimState, WorldMap } from '@/contracts';
 
 export interface TrackedSpecialEnemy {
   id: number;
@@ -22,6 +22,23 @@ export interface EnemyAiMemory {
   pauseTicks: number;
   strafeDir: 1 | -1;
   carryingCar: boolean;
+  necroReviveTicks: number;
+  necroTargetX: number;
+  necroTargetY: number;
+}
+
+export interface LilHunterDeathSpiral {
+  active: boolean;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ticksLeft: number;
+  bounces: number;
+}
+
+export interface RunRuntimeState {
+  vaultReturnArea: AreaCode | null;
 }
 
 export interface AreaRuntimeState {
@@ -31,24 +48,44 @@ export interface AreaRuntimeState {
   corpseHitTargets: Map<number, Set<number>>;
   processedCorpseIds: Set<number>;
   bossSummonIds: Set<number>;
+  populatingArea: boolean;
   bossDeathHandled: boolean;
   throneWoken: boolean;
   throneLastGenCount: number;
   idpdWavesRemaining: number;
   idpdWaveTimer: number;
   revivedFreakCount: number;
+  earlyBigBanditSpawned: boolean;
+  earlyBigBanditSpawnTick: number;
+  pizzaManholePropId: number | null;
+  venusCarPropId: number | null;
+  venusCarFixed: boolean;
+  jungleFlowerPropId: number | null;
+  jungleFlowerFeeds: number;
+  protoStatuePropId: number | null;
+  protoStatueCharged: boolean;
+  protoStatueX: number;
+  protoStatueY: number;
+  lastScannedEventIdx: number;
+  lastLevelKills: number;
+  lilHunterSpiral: LilHunterDeathSpiral | null;
 }
 
 const runtimeMap = new WeakMap<SimState, AreaRuntimeState>();
+const runRuntimeMap = new WeakMap<SimState, RunRuntimeState>();
 
 export const SPECIAL_DEATH_DEF_IDS: ReadonlySet<string> = new Set([
   'maggot_nest',
+  'big_maggot',
   'big_rat',
+  'ballguy',
   'snow_tank',
   'gold_snow_tank',
   'explo_freak',
   'explo_guardian',
   'idpd_van',
+  'mimic',
+  'weapon_mimic',
   'big_bandit',
   'big_dog',
   'lil_hunter',
@@ -64,13 +101,37 @@ function makeFreshRuntime(state: SimState): AreaRuntimeState {
     corpseHitTargets: new Map(),
     processedCorpseIds: new Set(),
     bossSummonIds: new Set(),
+    populatingArea: false,
     bossDeathHandled: false,
     throneWoken: false,
     throneLastGenCount: state.generatorsRemaining,
     idpdWavesRemaining: 0,
     idpdWaveTimer: 0,
     revivedFreakCount: 0,
+    earlyBigBanditSpawned: false,
+    earlyBigBanditSpawnTick: -1,
+    pizzaManholePropId: null,
+    venusCarPropId: null,
+    venusCarFixed: false,
+    jungleFlowerPropId: null,
+    jungleFlowerFeeds: 0,
+    protoStatuePropId: null,
+    protoStatueCharged: false,
+    protoStatueX: 0,
+    protoStatueY: 0,
+    lastScannedEventIdx: 0,
+    lastLevelKills: state.levelKills,
+    lilHunterSpiral: null,
   };
+}
+
+export function getRunRuntime(state: SimState): RunRuntimeState {
+  let run = runRuntimeMap.get(state);
+  if (!run) {
+    run = { vaultReturnArea: null };
+    runRuntimeMap.set(state, run);
+  }
+  return run;
 }
 
 export function getAreaRuntime(state: SimState): AreaRuntimeState {
@@ -105,6 +166,9 @@ export function getEnemyMemory(state: SimState, enemy: EnemyEntity): EnemyAiMemo
       pauseTicks: 12,
       strafeDir: enemy.id % 2 === 0 ? 1 : -1,
       carryingCar: false,
+      necroReviveTicks: 0,
+      necroTargetX: enemy.x,
+      necroTargetY: enemy.y,
     };
     rt.enemyMemory.set(enemy.id, mem);
   }
