@@ -27,7 +27,7 @@ export const MUTANTS: Record<MutantId, MutantDef> = {
     passiveDesc: 'Ammo pickups restore +25% more ammo across all pools.',
     activeName: 'COMBAT ROLL',
     activeDesc: 'Dodge roll forward with momentum burst.',
-    throneButtDesc: 'Water Boost: hold RMB for continuous jet-propelled sliding.',
+    throneButtDesc: 'Water Boost: hold ACTIVE for continuous jet sliding.',
     ultras: [
       {
         id: 'fish_a',
@@ -138,8 +138,8 @@ export const MUTANTS: Record<MutantId, MutantDef> = {
     passiveName: 'DARK VISION',
     passiveDesc: 'Sees significantly farther in dark biomes.',
     activeName: 'TELEKINESIS',
-    activeDesc: 'Hold RMB to pull enemies and pickups closer while pushing bullets away.',
-    throneButtDesc: 'Stronger Telekinesis pull, wider radius, and stronger bullet repulsion.',
+    activeDesc: 'Hold ACTIVE to pull foes & pickups while pushing bullets away.',
+    throneButtDesc: 'Wider Telekinesis radius with stronger pull and push.',
     ultras: [
       {
         id: 'eyes_a',
@@ -363,8 +363,8 @@ export const MUTANTS: Record<MutantId, MutantDef> = {
     passiveName: 'MUSCLE MEMORY',
     passiveDesc: 'All weapons become fully automatic; dual-wields both slots; wider spread.',
     activeName: 'DUAL WIELD',
-    activeDesc: 'Hold RMB to fire your secondary weapon simultaneously with your primary.',
-    throneButtDesc: 'Firing one weapon has a chance to regenerate ammo for the other weapon.',
+    activeDesc: 'Hold ACTIVE to fire your secondary weapon simultaneously.',
+    throneButtDesc: 'Firing a weapon can regenerate ammo for the other slot.',
     ultras: [
       {
         id: 'steroids_a',
@@ -641,10 +641,10 @@ export const MUTANTS: Record<MutantId, MutantDef> = {
     moveSpeed: 4.0,
     startingWeapon: 'rogue_rifle',
     passiveName: 'BLAST ARMOR',
-    passiveDesc: 'Triggers a protective blue shockwave when damaged; hunted by IDPD; Portal Strike canisters replace rad canisters.',
+    passiveDesc: 'Protective shockwave on damage; hunted by IDPD; Portal Strike canisters.',
     activeName: 'PORTAL STRIKE',
-    activeDesc: 'Call a devastating directional carpet of IDPD blasts that carve through walls.',
-    throneButtDesc: 'Portal Strikes deploy wider, longer carpets of explosions.',
+    activeDesc: 'Hold ACTIVE and drag to aim a rolling carpet of wall-carving blasts.',
+    throneButtDesc: 'Portal Strikes deploy wider, longer blast carpets.',
     ultras: [
       {
         id: 'rogue_a',

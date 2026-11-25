@@ -1,10 +1,13 @@
 import type {
-  AmmoType,
+  BiomeId,
   CasingEntity,
+  EnemyEntity,
   InputFrame,
+  MutantId,
   SimState,
   WeaponDef,
   WeaponSlotState,
+  WorldMap,
 } from '@/contracts';
 import { AMMO_PICKUP_AMOUNT, MUTANTS, getWeaponDef } from '@/data';
 import {
@@ -16,6 +19,7 @@ import {
   findNearestFloor,
   hasLineOfSight,
   moveCircleWithSlide,
+  type SolidBox,
 } from '@/sim/core';
 import {
   addRads,
@@ -40,24 +44,205 @@ import {
 } from './helpers';
 import { stepProjectiles } from './projectiles';
 
-// Tracks bonus free burst ticks per weapon slot (for Y.V. Back 2 Bizniz on burst weapons)
+// Tracks bonus free burst ticks per weapon slot (Y.V. Pop Pop/Brrrap stagger & Back 2 Bizniz)
 const slotFreeBurstShots = new WeakMap<WeaponSlotState, number>();
+const slotBurstInterval = new WeakMap<WeaponSlotState, number>();
+const slotBurstJitter = new WeakMap<WeaponSlotState, number>();
 
-function casingKindForAmmo(ammoType: AmmoType): CasingEntity['kind'] | null {
-  switch (ammoType) {
+// Per-enemy 4-tick Gamma Guts contact cooldown (never skipped due to bullet hurtFlashTicks!)
+const gammaGutsLastTick = new WeakMap<EnemyEntity, number>();
+
+interface PendingPortalBlast {
+  x: number;
+  y: number;
+  radius: number;
+  damage: number;
+  delayTicks: number;
+  hasTB: boolean;
+  isFirst: boolean;
+}
+
+// Tracks Rogue's rolling delayed Portal Strike carpet per active map
+const pendingPortalStrikes = new WeakMap<
+  SimState,
+  { mapRef: WorldMap; blasts: PendingPortalBlast[] }
+>();
+
+function getPendingPortalBlasts(state: SimState): PendingPortalBlast[] {
+  let rec = pendingPortalStrikes.get(state);
+  if (!rec || rec.mapRef !== state.map) {
+    rec = { mapRef: state.map, blasts: [] };
+    pendingPortalStrikes.set(state, rec);
+  }
+  return rec.blasts;
+}
+
+function queueRoguePortalStrike(
+  state: SimState,
+  startX: number,
+  startY: number,
+  angle: number,
+  hasTB: boolean,
+): void {
+  const player = state.player;
+  const superStrike = hasUltra(player, 'rogue_a');
+  const blastCount = superStrike ? 6 : hasTB ? 5 : 4;
+  const blastRadius = superStrike ? 46 : hasTB ? 38 : 30;
+  const blastDamage = superStrike ? 54 : hasTB ? 42 : 34;
+
+  const ts = state.map.tileSize || 16;
+  const minX = ts * 2.5;
+  const minY = ts * 2.5;
+  const maxX = state.map.width * ts - ts * 2.5;
+  const maxY = state.map.height * ts - ts * 2.5;
+
+  const blasts = getPendingPortalBlasts(state);
+  for (let b = 0; b < blastCount; b++) {
+    const bx = Math.max(minX, Math.min(maxX, startX + Math.cos(angle) * (b * 24)));
+    const by = Math.max(minY, Math.min(maxY, startY + Math.sin(angle) * (b * 24)));
+    blasts.push({
+      x: bx,
+      y: by,
+      radius: blastRadius,
+      damage: blastDamage,
+      delayTicks: 6 + b * 4,
+      hasTB,
+      isFirst: b === 0,
+    });
+  }
+
+  emitEvent(state, {
+    type: 'sfx',
+    sound: 'sndPortalStrikeLoop',
+    x: startX,
+    y: startY,
+  });
+}
+
+function stepPendingPortalStrikes(state: SimState, rng: SeededRng): void {
+  const blasts = getPendingPortalBlasts(state);
+  if (blasts.length === 0) return;
+
+  for (let i = blasts.length - 1; i >= 0; i--) {
+    const b = blasts[i]!;
+    b.delayTicks -= 1;
+    if (b.delayTicks > 0) {
+      if (b.delayTicks % 2 === 0) {
+        emitEvent(state, {
+          type: 'particle',
+          kind: 'portal_swirl',
+          x: b.x,
+          y: b.y,
+          vx: 0,
+          vy: 0,
+          color: '#4ca6ff',
+          size: Math.max(4, Math.round(b.radius * 0.2)),
+          life: 6,
+        });
+      }
+      continue;
+    }
+    blasts.splice(i, 1);
+    spawnExplosion(state, b.x, b.y, b.radius, b.damage, 'player', rng, {
+      carveWalls: true,
+      clearsProjectiles: true,
+      isRogue: true,
+      selfDamage: true,
+      cause: 'PORTAL STRIKE',
+      killerSprite: 'sprRogueExplosion',
+      sound: b.isFirst ? (b.hasTB ? 'sndPortalStrikeFireButt' : 'sndPortalStrikeFire') : '',
+    });
+  }
+}
+
+function casingKindForWeapon(wep: WeaponDef): CasingEntity['kind'] | null {
+  // Only ballistic/explosive firearms eject casings (never melee, bolts, discs, flames, or energy!)
+  if (
+    wep.projectileKind === 'melee_slash' ||
+    wep.projectileKind === 'bolt' ||
+    wep.projectileKind === 'splinter' ||
+    wep.projectileKind === 'toxic_bolt' ||
+    wep.projectileKind === 'seeking_bolt' ||
+    wep.projectileKind === 'disc' ||
+    wep.projectileKind === 'laser' ||
+    wep.projectileKind === 'plasma' ||
+    wep.projectileKind === 'lightning' ||
+    wep.projectileKind === 'flame'
+  ) {
+    return null;
+  }
+  switch (wep.ammoType) {
     case 'bullet':
       return 'bullet';
     case 'shell':
       return 'shell';
-    case 'bolt':
-      return 'bolt';
-    case 'energy':
-      return 'energy';
     case 'explosive':
       return 'debris';
-    case 'melee':
+    default:
       return null;
   }
+}
+
+function swapSoundForWeapon(wep: WeaponDef, cursed?: boolean): string {
+  if (cursed || wep.cursed) return 'sndSwapCursed';
+  if (wep.golden) return 'sndSwapGold';
+  const id = wep.id;
+  if (id === 'electric_guitar') return 'sndSwapElectricGuitar';
+  if (id === 'guitar') return 'sndSwapGuitar';
+  if (id === 'dragon') return 'sndSwapDragon';
+  if (id === 'jackhammer' || id.includes('minigun') || id.includes('gatling')) return 'sndSwapMotorized';
+  if (wep.projectileKind === 'flame' || id.includes('flame') || id.includes('flare')) return 'sndSwapFlame';
+  if (wep.ammoType === 'bolt') return 'sndSwapBow';
+  if (wep.ammoType === 'explosive') return 'sndSwapExplosive';
+  if (wep.ammoType === 'energy') return 'sndSwapEnergy';
+  if (wep.ammoType === 'shell') return 'sndSwapShotgun';
+  if (wep.ammoType === 'melee') {
+    if (
+      id.includes('hammer') ||
+      id.includes('shovel') ||
+      id.includes('wrench') ||
+      id.includes('screwdriver')
+    ) {
+      return 'sndSwapHammer';
+    }
+    return 'sndSwapSword';
+  }
+  if (wep.auto || wep.burstCount > 1 || id.includes('rifle') || id.includes('machinegun') || id.includes('smg')) {
+    return 'sndSwapMachinegun';
+  }
+  return 'sndSwapPistol';
+}
+
+function reloadCompleteSoundForWeapon(wep: WeaponDef, hasLaserBrain: boolean): string | null {
+  if (wep.projectileKind === 'melee_slash') return null;
+  if (wep.ammoType === 'shell') return 'sndShotReload';
+  if (wep.ammoType === 'bolt') return 'sndCrossReload';
+  if (wep.ammoType === 'explosive') return 'sndNadeReload';
+  if (wep.projectileKind === 'plasma') return hasLaserBrain ? 'sndPlasmaReloadUpg' : 'sndPlasmaReload';
+  if (wep.projectileKind === 'lightning') return 'sndLightningReload';
+  return null;
+}
+
+function footstepSoundForBiome(biome: BiomeId, mutant: MutantId, tick: number): string {
+  const variant = 1 + (Math.floor(tick / 9) % 6);
+  if (biome === 'sewers' || biome === 'pizza_sewers' || biome === 'oasis' || biome === 'jungle') {
+    return `sndFootSlime${variant}`;
+  }
+  const mat =
+    mutant === 'robot' || mutant === 'crystal'
+      ? 'Met'
+      : mutant === 'plant'
+        ? 'Pla'
+        : mutant === 'yv' || mutant === 'steroids' || mutant === 'rebel' || mutant === 'rogue'
+          ? 'Sho'
+          : 'Org';
+  const surface =
+    biome === 'scrapyard' || biome === 'labs' || biome === 'hq'
+      ? 'Metal'
+      : biome === 'desert' || biome === 'campfire' || biome === 'frozen_city'
+        ? 'Sand'
+        : 'Rock';
+  return `sndFoot${mat}${surface}${variant}`;
 }
 
 function computeEffectiveReload(state: SimState, baseReload: number): number {
@@ -133,6 +318,7 @@ function spawnWeaponShot(
       rng,
     );
     slotState.kickOffset = Math.min(8, wep.kick * 1.4);
+    slotState.lastFiredTick = state.tick;
     state.stats.shotsFired += 1;
     emitEvent(state, { type: 'sfx', sound: wep.fireSound, x: player.x, y: player.y, pitchJitter: 0.08 });
     emitEvent(state, {
@@ -155,6 +341,8 @@ function spawnWeaponShot(
     const angle = aimAngle + offset;
 
     if (wep.projectileKind === 'melee_slash') {
+      // Alternate independent melee swing side per weapon slot (Steroids dual-melee parity!)
+      slotState.meleeSwingSide = slotState.meleeSwingSide === -1 ? 1 : -1;
       const reach = Math.round(wep.meleeReach * (hasLongArms ? 1.45 : 1.0));
       // Shovel fans 3 arcs; Ultra Shovel fans 5 arcs + digs walls; Jackhammer digs walls
       const fanOffsets =
@@ -165,6 +353,8 @@ function spawnWeaponShot(
             : [0];
       const arcPerSlash =
         wep.id === 'ultra_shovel' ? 80 : wep.id === 'shovel' ? 95 : wep.meleeArcDeg;
+      // Share ONE hitIds array across all fan arcs so Shovel/Ultra Shovel hit each enemy 1x (never 3x/5x!)
+      const sharedHitIds: number[] = [];
 
       for (let f = 0; f < fanOffsets.length; f++) {
         const slashAng = angle + fanOffsets[f]!;
@@ -188,7 +378,7 @@ function spawnWeaponShot(
           explosionRadius: 0,
           sprite: wep.projectileSprite ?? 'sprSlash',
           weaponId: wep.id,
-          hitIds: [],
+          hitIds: sharedHitIds,
           deflectsProjectiles: wep.deflectsProjectiles,
           destroysProjectiles: wep.destroysProjectiles,
           meleeReach: reach,
@@ -298,13 +488,14 @@ function spawnWeaponShot(
     });
   }
 
-  // Eject brass/shell casing
-  const cKind = casingKindForAmmo(wep.ammoType);
+  // Eject brass/shell casing (ballistic/explosive firearms only — never melee, bolts, discs, or energy!)
+  const cKind = casingKindForWeapon(wep);
   if (cKind) {
     spawnCasing(state, player.x, player.y, aimAngle, cKind, rng);
   }
 
   slotState.kickOffset = Math.min(8, wep.kick * 1.4);
+  slotState.lastFiredTick = state.tick;
   state.stats.shotsFired += 1;
 
   emitEvent(state, {
@@ -397,23 +588,22 @@ function tryFireWeaponSlot(
     player.rads = Math.max(0, player.rads - radsToDeduct);
   }
 
-  // Steroids Throne Butt: firing a non-melee weapon has a chance to refill ammo for the OTHER slot (higher when dual-wielding!)
+  // Steroids Throne Butt: modest ammo conservation for the OTHER slot (never infinite net-positive ammo!)
   if (player.mutant === 'steroids' && hasMutation(player, 'throne_butt') && wep.ammoType !== 'melee') {
     const otherSlot = player.weapons[slotIndex === 0 ? 1 : 0];
     if (otherSlot) {
       const otherWep = getWeaponDef(otherSlot.weaponId);
       const dualActive = otherSlot.reloadTicks > 0 || otherSlot.burstRemaining > 0;
-      const procChance = dualActive ? 0.48 : 0.24;
+      const procChance = dualActive ? 0.22 : 0.12;
       if (otherWep.ammoType !== 'melee' && rng.chance(procChance)) {
-        addAmmoToPool(state, otherWep.ammoType, Math.max(1, Math.round(AMMO_PICKUP_AMOUNT[otherWep.ammoType] * 0.2)));
+        const refund = otherWep.ammoType === 'bullet' ? 2 : 1;
+        addAmmoToPool(state, otherWep.ammoType, refund);
       }
     }
   }
 
-  for (let s = 0; s < actualShotsToFireNow; s++) {
-    const jitter = actualShotsToFireNow > 1 ? rng.range(-0.07, 0.07) : 0;
-    spawnWeaponShot(state, slotState, wep, aimAngle + jitter, rng);
-  }
+  // Fire initial shot immediately; stagger Y.V. Pop Pop/Brrrap follow-up shots by 1 tick for authentic cadence!
+  spawnWeaponShot(state, slotState, wep, aimAngle, rng);
 
   const effectiveReload = Math.max(1, Math.round(computeEffectiveReload(state, wep.reloadTicks) * reloadMultiplier));
   slotState.reloadTicks = effectiveReload;
@@ -424,8 +614,19 @@ function tryFireWeaponSlot(
     slotState.burstTimer = Math.max(1, wep.burstIntervalTicks);
     const freeBonusBursts = Math.max(0, shotMultiplier - paidShots) * wep.burstCount;
     slotFreeBurstShots.set(slotState, freeBonusBursts);
+    slotBurstInterval.set(slotState, Math.max(1, wep.burstIntervalTicks));
+    slotBurstJitter.set(slotState, 0);
+  } else if (actualShotsToFireNow > 1) {
+    const followUps = actualShotsToFireNow - 1;
+    slotState.burstRemaining = followUps;
+    slotState.burstTimer = 1;
+    slotFreeBurstShots.set(slotState, followUps);
+    slotBurstInterval.set(slotState, 1);
+    slotBurstJitter.set(slotState, 0.06);
   } else {
     slotFreeBurstShots.set(slotState, 0);
+    slotBurstInterval.delete(slotState);
+    slotBurstJitter.delete(slotState);
   }
 
   return true;
@@ -828,7 +1029,31 @@ function handleMutantActive(
           emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
           break;
         }
-        if (curWep && !curWep.cursed) {
+        if (curWep && curWep.cursed) {
+          // Authentic NT: Robot CAN eat a cursed weapon, taking 7 HP CURSE damage & consuming it!
+          player.weapons[0] = surviving;
+          player.weapons[1] = null;
+          player.activeSlot = 0;
+          emitEvent(state, { type: 'sfx', sound: 'sndSwapCursed', x: player.x, y: player.y });
+          emitEvent(state, {
+            type: 'sfx',
+            sound: hasTB ? 'sndRobotEatUpg' : 'sndRobotEat',
+            x: player.x,
+            y: player.y,
+          });
+          emitEvent(state, {
+            type: 'pickup_text',
+            x: player.x,
+            y: player.y - 12,
+            text: 'CURSED!',
+            color: '#cc55ff',
+          });
+          applyDamageToPlayer(state, 7, 'CURSE', 'sprCursedChest', rng, {
+            ignoreIframes: true,
+            bypassShield: true,
+          });
+          player.activeCooldown = 14;
+        } else if (curWep) {
           player.weapons[0] = surviving;
           player.weapons[1] = null;
           player.activeSlot = 0;
@@ -838,7 +1063,14 @@ function handleMutantActive(
             healPlayer(state, hpGain);
           } else {
             const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
-            addAmmoToPool(state, ammoType, AMMO_PICKUP_AMOUNT[ammoType] * (hasTB ? 2 : 1));
+            const gained = addAmmoToPool(state, ammoType, AMMO_PICKUP_AMOUNT[ammoType] * (hasTB ? 2 : 1));
+            emitEvent(state, {
+              type: 'pickup_text',
+              x: player.x,
+              y: player.y - 12,
+              text: gained > 0 ? `+${gained} ${ammoType.toUpperCase()}` : `${ammoType.toUpperCase()} FULL`,
+              color: '#ffe066',
+            });
           }
           emitEvent(state, {
             type: 'sfx',
@@ -882,10 +1114,30 @@ function handleMutantActive(
         const activeSlot = player.activeSlot;
         const otherSlot: 0 | 1 = activeSlot === 0 ? 1 : 0;
         const cur = player.weapons[activeSlot];
+        if (cur && cur.cursed) {
+          emitEvent(state, { type: 'sfx', sound: 'sndSwapCursed', x: player.x, y: player.y });
+          emitEvent(state, {
+            type: 'pickup_text',
+            x: player.x,
+            y: player.y - 12,
+            text: 'CURSED!',
+            color: '#cc55ff',
+          });
+          player.activeCooldown = 8;
+          break;
+        }
         if (cur && !cur.cursed) {
           const wepDef = getWeaponDef(cur.weaponId);
           const surviving = player.weapons[otherSlot];
           const throwingLastSword = !surviving && cur.weaponId === 'chicken_sword';
+          // Prevent infinite solo chicken_sword dupe/spam while a thrown sword is already in flight!
+          if (
+            throwingLastSword &&
+            state.projectiles.some((p) => p.kind === 'thrown_weapon' && p.weaponId === 'chicken_sword')
+          ) {
+            emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
+            break;
+          }
           const levelScaledDmg = Math.max(20, 14 + player.level * 4 + wepDef.tier * 2);
 
           state.projectiles.push({
@@ -916,11 +1168,17 @@ function handleMutantActive(
             player.weapons[1] = null;
             player.activeSlot = 0;
           } else {
-            player.weapons[0] = createWeaponSlot('chicken_sword');
+            const backup = createWeaponSlot('chicken_sword');
+            if (throwingLastSword) {
+              // Lock swing/re-throw while solo thrown sword is airborne
+              backup.reloadTicks = 28;
+              backup.maxReloadTicks = 28;
+            }
+            player.weapons[0] = backup;
             player.weapons[1] = null;
             player.activeSlot = 0;
           }
-          player.activeCooldown = throwingLastSword ? 24 : 10;
+          player.activeCooldown = throwingLastSword ? 30 : 10;
           emitEvent(state, { type: 'sfx', sound: 'sndChickenThrow', x: player.x, y: player.y });
         }
       }
@@ -970,8 +1228,11 @@ function handleMutantActive(
     }
 
     case 'horror': {
+      let firingBeam = false;
       if (input.activeHeld || input.activePressed) {
         if (player.rads > 0) {
+          firingBeam = true;
+          const prevBeamTicks = player.radBeamTicks;
           player.radBeamTicks += hasTB ? 2 : 1;
           if (state.tick % 2 === 0) {
             player.rads = Math.max(0, player.rads - 1);
@@ -1001,8 +1262,12 @@ function handleMutantActive(
             sprite: 'sprHorrorBullet',
             hitIds: [],
           });
-          // Throne Butt: sustained beam heals +1 HP every 60 ramp ticks
-          if (hasTB && player.radBeamTicks > 0 && player.radBeamTicks % 60 === 0 && player.hp < player.maxHp) {
+          // Throne Butt: threshold crossing guarantees healing every 60 ramp ticks even if radBeamTicks starts odd!
+          if (
+            hasTB &&
+            Math.floor(player.radBeamTicks / 60) > Math.floor(prevBeamTicks / 60) &&
+            player.hp < player.maxHp
+          ) {
             healPlayer(state, 1);
           }
           if (state.tick % 6 === 0) {
@@ -1019,40 +1284,68 @@ function handleMutantActive(
       } else {
         player.radBeamTicks = Math.max(0, player.radBeamTicks - 2);
       }
+      player.radBeamActive = firingBeam;
       break;
     }
 
     case 'rogue': {
-      if (input.activePressed && player.activeCooldown <= 0) {
+      // Authentic NT hold-to-drag Portal Strike targeting with delayed rolling blasts!
+      const superStrike = hasUltra(player, 'rogue_a');
+      const blastRadius = superStrike ? 46 : hasTB ? 38 : 30;
+
+      if (player.portalStrikeAim?.active) {
+        const aim = player.portalStrikeAim;
+        if (input.activeHeld) {
+          const dragDx = input.aimWorldX - aim.x;
+          const dragDy = input.aimWorldY - aim.y;
+          if (dragDx * dragDx + dragDy * dragDy >= 64) {
+            aim.angle = Math.atan2(dragDy, dragDx);
+          } else {
+            const pDx = aim.x - player.x;
+            const pDy = aim.y - player.y;
+            if (pDx * pDx + pDy * pDy > 1) {
+              aim.angle = Math.atan2(pDy, pDx);
+            }
+          }
+        } else {
+          // Released RMB -> launch rolling delayed carpet along dragged vector!
+          player.portalStrikeAim = null;
+          if (player.portalStrikes > 0) {
+            player.portalStrikes -= 1;
+            player.activeCooldown = 16;
+            queueRoguePortalStrike(state, aim.x, aim.y, aim.angle, hasTB);
+          }
+        }
+      } else if (input.activePressed && player.activeCooldown <= 0) {
         if (player.portalStrikes > 0) {
-          player.portalStrikes -= 1;
-          player.activeCooldown = 16;
-          const superStrike = hasUltra(player, 'rogue_a');
-          const blastCount = superStrike ? 6 : hasTB ? 5 : 4;
-          const blastRadius = superStrike ? 46 : hasTB ? 38 : 30;
-          const blastDamage = superStrike ? 54 : hasTB ? 42 : 34;
-
-          const baseDist = Math.min(120, Math.hypot(input.aimWorldX - player.x, input.aimWorldY - player.y));
-          const startX = player.x + Math.cos(aimAngle) * Math.max(24, baseDist * 0.65);
-          const startY = player.y + Math.sin(aimAngle) * Math.max(24, baseDist * 0.65);
-          const ts = state.map.tileSize || 16;
-          const minX = ts * 2.5;
-          const minY = ts * 2.5;
-          const maxX = state.map.width * ts - ts * 2.5;
-          const maxY = state.map.height * ts - ts * 2.5;
-
-          for (let b = 0; b < blastCount; b++) {
-            const bx = Math.max(minX, Math.min(maxX, startX + Math.cos(aimAngle) * (b * 24)));
-            const by = Math.max(minY, Math.min(maxY, startY + Math.sin(aimAngle) * (b * 24)));
-            spawnExplosion(state, bx, by, blastRadius, blastDamage, 'player', rng, {
-              carveWalls: true,
-              clearsProjectiles: true,
-              isRogue: true,
-              selfDamage: true,
-              cause: 'PORTAL STRIKE',
-              killerSprite: 'sprRogueExplosion',
-              sound: b === 0 ? (hasTB ? 'sndPortalStrikeFireButt' : 'sndPortalStrikeFire') : '',
-            });
+          if (input.activeHeld) {
+            // Enter hold-to-drag aiming mode anchored at cursor (clamped to 180px, zero instant self-detonation!)
+            const cursorDist = Math.hypot(input.aimWorldX - player.x, input.aimWorldY - player.y);
+            const anchorX =
+              cursorDist > 180
+                ? player.x + ((input.aimWorldX - player.x) / cursorDist) * 180
+                : input.aimWorldX;
+            const anchorY =
+              cursorDist > 180
+                ? player.y + ((input.aimWorldY - player.y) / cursorDist) * 180
+                : input.aimWorldY;
+            player.portalStrikeAim = {
+              x: anchorX,
+              y: anchorY,
+              angle: aimAngle,
+              active: true,
+            };
+            emitEvent(state, { type: 'sfx', sound: 'sndRogueAim', x: player.x, y: player.y });
+          } else {
+            // Single-tick quick tap: launch delayed rolling blasts forward past safe standoff!
+            player.portalStrikes -= 1;
+            player.activeCooldown = 16;
+            const cursorDist = Math.hypot(input.aimWorldX - player.x, input.aimWorldY - player.y);
+            const safeStandoff = blastRadius + player.radius + 14;
+            const launchDist = Math.max(safeStandoff, Math.min(140, cursorDist));
+            const startX = player.x + Math.cos(aimAngle) * launchDist;
+            const startY = player.y + Math.sin(aimAngle) * launchDist;
+            queueRoguePortalStrike(state, startX, startY, aimAngle, hasTB);
           }
         } else {
           emitEvent(state, { type: 'sfx', sound: 'sndPortalStrikeEmpty', x: player.x, y: player.y });
@@ -1145,15 +1438,67 @@ function stepSnareTrapsAndFriendlies(state: SimState, rng: SeededRng): void {
         if (u.hp <= 0) state.enemies.splice(i, 1);
       }
     } else if (u.defId === 'rebel_ally') {
-      // Follow player gently, shoot nearest visible enemy
+      // Follow player gently, separate from sibling allies (no 1-pixel stacking!), and seek LOS to enemies!
+      let steerX = 0;
+      let steerY = 0;
+
+      // 1. Separation force from other Rebel Allies
+      for (let j = 0; j < state.enemies.length; j++) {
+        const other = state.enemies[j]!;
+        if (other === u || !other.friendly || other.defId !== 'rebel_ally' || other.hp <= 0) continue;
+        const sdx = u.x - other.x;
+        const sdy = u.y - other.y;
+        const sDistSq = sdx * sdx + sdy * sdy;
+        if (sDistSq < 20 * 20) {
+          if (sDistSq < 0.01) {
+            const tieAng = ((u.id * 2.39996) % (Math.PI * 2));
+            steerX += Math.cos(tieAng) * 1.4;
+            steerY += Math.sin(tieAng) * 1.4;
+          } else {
+            const sDist = Math.sqrt(sDistSq);
+            const push = ((20 - sDist) / 20) * 1.5;
+            steerX += (sdx / sDist) * push;
+            steerY += (sdy / sDist) * push;
+          }
+        }
+      }
+
+      // 2. Follow player if far away, OR seek LOS to nearby enemy when player stands still
       const pdx = player.x - u.x;
       const pdy = player.y - u.y;
       const pDist = Math.hypot(pdx, pdy);
+      const hasTargetLos = target ? hasLineOfSight(state.map, u.x, u.y, target.x, target.y) : false;
+
       if (pDist > 42) {
-        const mv = moveCircleWithSlide(state.map, u.x, u.y, (pdx / pDist) * 2.0, (pdy / pDist) * 2.0, u.radius);
+        steerX += (pdx / pDist) * 2.0;
+        steerY += (pdy / pDist) * 2.0;
+      } else if (target && !hasTargetLos && pDist < 110) {
+        const tdx = target.x - u.x;
+        const tdy = target.y - u.y;
+        const tDist = Math.hypot(tdx, tdy) || 1;
+        // Strafe-advance around corners to open LOS
+        const flankSign = (u.id & 1) === 0 ? 1 : -1;
+        const txDir = tdx / tDist;
+        const tyDir = tdy / tDist;
+        steerX += (txDir * 0.72 - tyDir * 0.45 * flankSign) * 1.8;
+        steerY += (tyDir * 0.72 + txDir * 0.45 * flankSign) * 1.8;
+      }
+
+      const steerLen = Math.hypot(steerX, steerY);
+      if (steerLen > 0.08) {
+        const stepSpd = Math.min(2.2, steerLen);
+        const mv = moveCircleWithSlide(
+          state.map,
+          u.x,
+          u.y,
+          (steerX / steerLen) * stepSpd,
+          (steerY / steerLen) * stepSpd,
+          u.radius,
+        );
         u.x = mv.x;
         u.y = mv.y;
       }
+
       if (target) {
         const dx = target.x - u.x;
         const dy = target.y - u.y;
@@ -1336,9 +1681,24 @@ export function stepPlayerAndCombat(
     // Chicken headless countdown (dies when it reaches 0!)
     if (player.mutant === 'chicken' && player.headlessTicks > 0) {
       player.headlessTicks -= 1;
+      if (player.headlessTicks > 0 && player.headlessTicks % 10 === 0) {
+        emitEvent(state, {
+          type: 'sfx',
+          sound: 'sndChickenHeadlessLoop',
+          x: player.x,
+          y: player.y,
+          volume: 0.7,
+        });
+      }
       if (player.headlessTicks <= 0) {
         player.alive = false;
         state.phase = 'game_over';
+        if (!player.lastDamageCause) {
+          player.lastDamageCause = 'BLED OUT HEADLESS';
+        }
+        if (!player.lastKillerSprite) {
+          player.lastKillerSprite = 'sprMutant9Dead';
+        }
         emitEvent(state, {
           type: 'sfx',
           sound: MUTANTS.chicken.sounds.dead,
@@ -1347,8 +1707,8 @@ export function stepPlayerAndCombat(
         });
         emitEvent(state, {
           type: 'player_died',
-          cause: 'BLED OUT HEADLESS',
-          killerSprite: 'sprMutant9Dead',
+          cause: player.lastDamageCause,
+          killerSprite: player.lastKillerSprite,
           areaCode: state.areaCode,
           loop: state.loop,
           kills: state.stats.kills,
@@ -1365,13 +1725,16 @@ export function stepPlayerAndCombat(
       player.facing = aimDx >= 0 ? 1 : -1;
     }
 
-    // Weapon swap (Q)
+    // Weapon swap (Q) — 15 authentic NT weapon-class sndSwap* triggers!
     if (input.swapPressed && player.weapons[1] !== null) {
       player.activeSlot = player.activeSlot === 0 ? 1 : 0;
       const swappedSlot = player.weapons[player.activeSlot];
+      const swapSound = swappedSlot
+        ? swapSoundForWeapon(getWeaponDef(swappedSlot.weaponId), swappedSlot.cursed)
+        : 'sndSwapPistol';
       emitEvent(state, {
         type: 'sfx',
-        sound: swappedSlot?.cursed ? 'sndSwapCursed' : 'sndSwapPistol',
+        sound: swapSound,
         x: player.x,
         y: player.y,
       });
@@ -1392,11 +1755,27 @@ export function stepPlayerAndCombat(
       });
     }
 
-    // Tick weapon reloads, kick recovery, and active bursts on BOTH slots
+    // Tick weapon reloads, reload-complete SFX, kick recovery, and active/Pop-Pop bursts on BOTH slots
+    const hasLaserBrain = hasMutation(player, 'laser_brain');
     for (let s = 0; s < 2; s++) {
       const slot = player.weapons[s];
       if (!slot) continue;
-      if (slot.reloadTicks > 0) slot.reloadTicks -= 1;
+      if (slot.reloadTicks > 0) {
+        slot.reloadTicks -= 1;
+        if (slot.reloadTicks === 0 && slot.maxReloadTicks >= 12) {
+          const reloadSfx = reloadCompleteSoundForWeapon(getWeaponDef(slot.weaponId), hasLaserBrain);
+          if (reloadSfx) {
+            emitEvent(state, {
+              type: 'sfx',
+              sound: reloadSfx,
+              x: player.x,
+              y: player.y,
+              pitchJitter: 0.06,
+              volume: 0.48,
+            });
+          }
+        }
+      }
       if (slot.kickOffset > 0) {
         slot.kickOffset *= 0.7;
         if (slot.kickOffset < 0.1) slot.kickOffset = 0;
@@ -1425,21 +1804,26 @@ export function stepPlayerAndCombat(
             if (radCost > 0) {
               player.rads = Math.max(0, player.rads - radCost);
             }
-            spawnWeaponShot(state, slot, wep, player.aimAngle, rng);
+            const jitterRange = slotBurstJitter.get(slot) ?? 0;
+            const jitter = jitterRange > 0 ? rng.range(-jitterRange, jitterRange) : 0;
+            spawnWeaponShot(state, slot, wep, player.aimAngle + jitter, rng);
             slot.burstRemaining -= 1;
-            slot.burstTimer = Math.max(1, wep.burstIntervalTicks);
+            const nextInterval = slotBurstInterval.get(slot) ?? Math.max(1, wep.burstIntervalTicks);
+            slot.burstTimer = Math.max(1, nextInterval);
           }
         }
       }
     }
 
-    // Mutant Active Abilities (RMB)
+    // Mutant Active Abilities (RMB) + pending Rogue rolling Portal Strike carpet
     handleMutantActive(state, input, player.aimAngle, rng);
+    stepPendingPortalStrikes(state, rng);
 
-    // Movement calculation
+    // Movement calculation with Vlambeer-snappy accel/friction & biome terrain traction (Extra Feet immunity!)
     let moveDx = 0;
     let moveDy = 0;
     const baseSpeed = getPlayerMoveSpeed(player);
+    const hasExtraFeet = hasMutation(player, 'extra_feet');
 
     if (player.rolling) {
       const rollSpeed = baseSpeed * 1.7;
@@ -1454,21 +1838,83 @@ export function stepPlayerAndCombat(
       moveDy = 0;
     } else {
       const len = Math.hypot(input.moveX, input.moveY);
+      const isIce = !hasExtraFeet && state.biome === 'frozen_city';
+      const isSticky =
+        !hasExtraFeet &&
+        (state.biome === 'caves' || state.biome === 'cursed_caves' || state.biome === 'oasis');
+      const accel = isIce ? 0.28 : isSticky ? 0.65 : 0.78;
+      const friction = isIce ? 0.86 : 0.55;
+      const terrainSpeedMult = isSticky ? 0.84 : 1.0;
+
       if (len > 0.01) {
         const clamped = Math.min(1, len);
         const speedMult = player.shielding && hasUltra(player, 'crystal_b') ? 0.45 : 1.0;
-        moveDx = (input.moveX / len) * clamped * baseSpeed * speedMult;
-        moveDy = (input.moveY / len) * clamped * baseSpeed * speedMult;
+        const targetVx = (input.moveX / len) * clamped * baseSpeed * speedMult * terrainSpeedMult;
+        const targetVy = (input.moveY / len) * clamped * baseSpeed * speedMult * terrainSpeedMult;
+        moveDx = player.vx + (targetVx - player.vx) * accel;
+        moveDy = player.vy + (targetVy - player.vy) * accel;
+      } else {
+        moveDx = player.vx * friction;
+        moveDy = player.vy * friction;
+        if (moveDx * moveDx + moveDy * moveDy < 0.04) {
+          moveDx = 0;
+          moveDy = 0;
+        }
       }
     }
 
     if (moveDx !== 0 || moveDy !== 0) {
-      const mv = moveCircleWithSlide(state.map, player.x, player.y, moveDx, moveDy, player.radius);
+      // Build solid prop AABBs (cars, pillars, generators, statues, barrels) with spawn/overlap unstuck safety!
+      let solidPropBoxes: SolidBox[] | undefined;
+      if (!state.portal.entered) {
+        for (let i = 0; i < state.props.length; i++) {
+          const prop = state.props[i]!;
+          if (!prop.solid || prop.hp <= 0 || prop.opened) continue;
+          const half = Math.max(4, prop.radius * 0.8);
+          const bx0 = prop.x - half;
+          const by0 = prop.y - half;
+          const bx1 = prop.x + half;
+          const by1 = prop.y + half;
+          // Unstuck safety: if player already overlaps this prop, skip it so player can cleanly walk free
+          const nearX = player.x < bx0 ? bx0 : player.x > bx1 ? bx1 : player.x;
+          const nearY = player.y < by0 ? by0 : player.y > by1 ? by1 : player.y;
+          const ovDx = player.x - nearX;
+          const ovDy = player.y - nearY;
+          if (ovDx * ovDx + ovDy * ovDy < player.radius * player.radius) {
+            continue;
+          }
+          if (!solidPropBoxes) solidPropBoxes = [];
+          solidPropBoxes.push({ x: bx0, y: by0, w: half * 2, h: half * 2 });
+        }
+      }
+
+      const mv = moveCircleWithSlide(
+        state.map,
+        player.x,
+        player.y,
+        moveDx,
+        moveDy,
+        player.radius,
+        solidPropBoxes,
+      );
       player.vx = mv.x - player.x;
       player.vy = mv.y - player.y;
       player.x = mv.x;
       player.y = mv.y;
       player.animFrame = (player.animFrame + 0.35) % 8;
+
+      // Biome & mutant-specific footstep SFX while walking
+      const movedSq = player.vx * player.vx + player.vy * player.vy;
+      if (!player.rolling && !player.shielding && movedSq > 1.4 && state.tick % 9 === 0) {
+        emitEvent(state, {
+          type: 'sfx',
+          sound: footstepSoundForBiome(state.biome, player.mutant, state.tick),
+          x: player.x,
+          y: player.y,
+          pitchJitter: 0.08,
+          volume: 0.3,
+        });
+      }
 
       // Hammerhead: pushing into a wall for 0.5s (15 ticks) carves through!
       if (mv.hitWall && hasMutation(player, 'hammerhead') && player.hammerheadTicks > 0) {
@@ -1499,7 +1945,8 @@ export function stepPlayerAndCombat(
       tryFireWeaponSlot(state, player.activeSlot, player.aimAngle, input.firePressed, rng);
     }
 
-    // Gamma Guts: grounded active enemies touching player take contact damage on first contact frame!
+    // Gamma Guts: per-enemy 4-tick cadence (never skipped due to bullet hurtFlashTicks!)
+    // Cleanly finishes weak <=12 HP non-boss contact foes (1 HP Maggots, 7 HP Rats, 9 HP Scarier-Face Freaks) before contact damage!
     if (hasMutation(player, 'gamma_guts')) {
       for (let i = state.enemies.length - 1; i >= 0; i--) {
         const e = state.enemies[i]!;
@@ -1509,24 +1956,40 @@ export function stepPlayerAndCombat(
           e.elevated ||
           e.invulnerable ||
           e.aiState === 'sleep' ||
-          e.aiState === 'disguised' ||
-          e.hurtFlashTicks > 0
+          e.aiState === 'disguised'
         ) {
           continue;
         }
+        const lastTick = gammaGutsLastTick.get(e);
+        if (lastTick !== undefined && state.tick >= lastTick && state.tick - lastTick < 4) {
+          continue;
+        }
         if (circleOverlap(player.x, player.y, player.radius + 2, e.x, e.y, e.radius)) {
+          gammaGutsLastTick.set(e, state.tick);
           applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng);
+          if (
+            !e.isBoss &&
+            e.hp > 0 &&
+            e.hp <= 6 &&
+            e.contactDamage > 0 &&
+            circleOverlap(player.x, player.y, player.radius, e.x, e.y, e.radius)
+          ) {
+            applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng);
+          }
         }
       }
     }
 
     // Collect pickups & open chests
     collectPickupsAndChests(state, input, rng);
+  } else {
+    // Still resolve in-flight Rogue Portal Strikes even if Rogue died mid-call
+    stepPendingPortalStrikes(state, rng);
   }
 
   // 2. Step snare traps & friendly allies
   stepSnareTrapsAndFriendlies(state, rng);
 
-  // 3. Step all projectiles with swept collision
-  stepProjectiles(state, rng);
+  // 3. Step all projectiles with swept collision (pass cursor for Nuke steering)
+  stepProjectiles(state, rng, input.aimWorldX, input.aimWorldY);
 }

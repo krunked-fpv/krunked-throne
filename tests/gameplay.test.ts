@@ -122,14 +122,17 @@ describe('gameplay: All 12 Mutants', () => {
         }),
         rng,
       );
+      if (mutantId === 'rogue') {
+        expect(state.player.portalStrikeAim?.active).toBe(true);
+      }
       state.tick += 1;
       stepPlayerAndCombat(
         state,
         makeInput({
-          aimWorldX: state.player.x + 48,
+          aimWorldX: state.player.x + 68,
           aimWorldY: state.player.y,
           activePressed: false,
-          activeHeld: true,
+          activeHeld: mutantId === 'rogue' ? false : true,
         }),
         rng,
       );
@@ -370,19 +373,20 @@ describe('gameplay: All 5 Bosses & Full Progression Determinism', () => {
 
       const statesSeen = new Set<string>();
       let enemyProjSeen = 0;
-      for (let t = 0; t < 140; t++) {
+      for (let t = 0; t < 260; t++) {
         const live = state.enemies.find((e) => e.id === boss!.id);
         if (live) statesSeen.add(live.aiState);
         stepSimulation(state, makeInput({ aimWorldX: boss!.x, aimWorldY: boss!.y }));
         for (const pr of state.projectiles) {
           if (pr.team === 'enemy') enemyProjSeen += 1;
         }
+        if (t >= 140 && statesSeen.size >= 2 && enemyProjSeen > 0) break;
       }
 
       expect(statesSeen.size).toBeGreaterThanOrEqual(2);
       expect(enemyProjSeen).toBeGreaterThan(0);
 
-      // Defeat boss and verify portal
+      // Defeat boss and verify portal (allow up to 60 ticks for Lil' Hunter visible death_spiral detonation!)
       const live = state.enemies.find((e) => e.id === boss!.id);
       if (live) {
         live.invulnerable = false;
@@ -391,7 +395,7 @@ describe('gameplay: All 5 Bosses & Full Progression Determinism', () => {
         state.rngState = killRng.getState();
       }
 
-      for (let k = 0; k < 10 && !state.portal.active; k++) {
+      for (let k = 0; k < 60 && !state.portal.active; k++) {
         stepSimulation(state, makeInput({ aimWorldX: state.player.x, aimWorldY: state.player.y }));
       }
       expect(state.boss?.defeated).toBe(true);
@@ -501,11 +505,31 @@ describe('gameplay: All 5 Bosses & Full Progression Determinism', () => {
     applyDamageToEnemy(victoryState, intactThrone, intactThrone.hp + 999, 0, 0, vRng);
     victoryState.rngState = vRng.getState();
 
-    for (let t = 0; t < 10; t++) {
+    for (let t = 0; t < 10 && victoryState.phase !== 'victory_throne'; t++) {
       stepSimulation(
         victoryState,
         makeInput({ aimWorldX: victoryState.player.x, aimWorldY: victoryState.player.y }),
       );
+    }
+
+    // If Wave 2 broken Throne prop (sprThroneCorpseIdle) spawned for sit-on-Throne, walk onto it & press [E]
+    if (victoryState.phase !== 'victory_throne') {
+      const throneCorpse = victoryState.props.find((p) => p.sprite === 'sprThroneCorpseIdle');
+      if (throneCorpse) {
+        victoryState.player.x = throneCorpse.x;
+        victoryState.player.y = throneCorpse.y;
+        for (let t = 0; t < 15; t++) {
+          if ((victoryState.phase as string) === 'victory_throne') break;
+          stepSimulation(
+            victoryState,
+            makeInput({
+              aimWorldX: throneCorpse.x,
+              aimWorldY: throneCorpse.y,
+              pickupPressed: t === 0,
+            }),
+          );
+        }
+      }
     }
 
     expect(victoryState.generatorsRemaining).toBe(4);

@@ -108,6 +108,9 @@ export function stepCorpses(state: SimState): void {
 
   for (let i = state.corpses.length - 1; i >= 0; i--) {
     const c = state.corpses[i]!;
+    c.prevX = c.x;
+    c.prevY = c.y;
+
     if (c.baked) {
       if (!c.explodable) {
         state.corpses.splice(i, 1);
@@ -115,6 +118,11 @@ export function stepCorpses(state: SimState): void {
         bakedCount += 1;
       }
       continue;
+    }
+
+    // Advance death animation smoothly from white-flash frame 0 to resting corpse frame 5
+    if (c.frame < 5) {
+      c.frame = Math.min(5, c.frame + 0.4);
     }
 
     const radius = Math.max(3, Math.min(8, c.size * 0.4));
@@ -174,22 +182,26 @@ export function stepCorpses(state: SimState): void {
     if (c.vx * c.vx + c.vy * c.vy < 0.04) {
       c.vx = 0;
       c.vy = 0;
-      c.baked = true;
-      pushDecal(state, {
-        kind: 'corpse',
-        x: c.x,
-        y: c.y,
-        angle: 0,
-        scale: 1,
-        color: '#6b1d1d',
-        sprite: c.sprite,
-        frame: c.frame,
-        facing: c.facing,
-      });
-      if (!c.explodable) {
-        state.corpses.splice(i, 1);
-      } else {
-        bakedCount += 1;
+      // Wait until the death animation reaches resting frame 5 before baking into FloorDecal
+      if (c.frame >= 5) {
+        c.frame = 5;
+        c.baked = true;
+        pushDecal(state, {
+          kind: 'corpse',
+          x: c.x,
+          y: c.y,
+          angle: 0,
+          scale: 1,
+          color: '#6b1d1d',
+          sprite: c.sprite,
+          frame: 5,
+          facing: c.facing,
+        });
+        if (!c.explodable) {
+          state.corpses.splice(i, 1);
+        } else {
+          bakedCount += 1;
+        }
       }
     }
   }
@@ -307,6 +319,8 @@ export function stepPickups(state: SimState): void {
 
   for (let i = state.pickups.length - 1; i >= 0; i--) {
     const pk = state.pickups[i]!;
+    pk.prevX = pk.x;
+    pk.prevY = pk.y;
     pk.animFrame = (pk.animFrame + 0.25) % 8;
 
     // Non-weapon drops expire if they carry a positive finite lifeTicks timer
@@ -333,7 +347,7 @@ export function stepPickups(state: SimState): void {
         }
       } else {
         const isRad = pk.kind === 'rad' || pk.kind === 'big_rad';
-        const horrorBeaming = isRad && player.mutant === 'horror' && player.radBeamTicks > 0;
+        const horrorBeaming = isRad && player.mutant === 'horror' && Boolean(player.radBeamActive);
         const hpFull = pk.kind === 'hp' && player.hp >= player.maxHp && player.headlessTicks === 0;
         const strikeCap = player.ultra === 'rogue_a' ? 6 : 3;
         const strikesFull = pk.kind === 'portal_strike' && player.portalStrikes >= strikeCap;
@@ -397,6 +411,17 @@ export function stepPortal(state: SimState): void {
   if (!portal.active) return;
 
   portal.timer += 1;
+
+  // Periodic open portal hum loop (authentic NT sndPortalLoop)
+  if (!portal.entered && portal.timer % 24 === 1) {
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndPortalLoop',
+      x: portal.x,
+      y: portal.y,
+      volume: 0.5,
+    });
+  }
 
   // 1. Carve safe radius around the portal once upon activation
   if (!portal.carved) {

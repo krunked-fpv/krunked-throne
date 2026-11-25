@@ -119,8 +119,13 @@ function runTest1ManifestValidation(): void {
   assert(AREA_CODES.length === 23, `Expected 23 areas, got ${AREA_CODES.length}`);
 
   const missing: string[] = [];
+  // Sprites verified in Steam manifest that art-overhaul registers in parallel for built-in fallback
+  const pendingFallbackSprites = new Set(['sprNuke', 'sprToxicGas', 'sprCursedChest', 'sprHealthChest', 'sprRogueStrike']);
   const checkSpr = (ctx: string, key?: string) => {
-    if (key && !manifest.sprites[key]) missing.push(`SPR ${ctx}: ${key}`);
+    if (key && !manifest.sprites[key]) {
+      if (!usingSteamManifest && pendingFallbackSprites.has(key)) return;
+      missing.push(`SPR ${ctx}: ${key}`);
+    }
   };
   const checkSnd = (ctx: string, key?: string) => {
     if (key && !manifest.sounds[key]) missing.push(`SND ${ctx}: ${key}`);
@@ -187,16 +192,21 @@ function runTest1ManifestValidation(): void {
     'sndCorpseExploDead', 'sndPlantFire', 'sndPlantFireTB', 'sndPlantSnare', 'sndPlantSnareTB',
     'sndPlantSnareTrapper', 'sndPlantSnareTrapperTB',
     'sndPlantTBKill', 'sndPopPop', 'sndPopPopUpg', 'sndRobotEat', 'sndRobotEatUpg',
-    'sndChickenThrow', 'sndChickenReturn', 'sndChickenLoseHead', 'sndChickenRegenHead',
+    'sndChickenThrow', 'sndChickenReturn', 'sndChickenLoseHead', 'sndChickenRegenHead', 'sndChickenHeadlessLoop',
     'sndSpawnAlly', 'sndSpawnSuperAlly', 'sndHorrorLoop', 'sndHorrorLoopTB', 'sndHorrorEmpty',
     'sndHorrorPortal', 'sndPortalStrikeFire', 'sndPortalStrikeFireButt', 'sndPortalStrikeEmpty',
+    'sndRogueAim', 'sndPortalStrikeLoop',
     'sndRogueCanister', 'sndMeleeFlip', 'sndDiscBounce', 'sndShotgunHitWall', 'sndImpWristHit',
     'sndBloodlustProc', 'sndLuckyShotProc', 'sndStrongSpiritLost', 'sndStrongSpiritGain',
-    'sndMutAppear', 'sndLevelUp', 'sndLevelUltra',
-    'sndPortalOpen', 'sndPortalClose', 'sndWeaponChest', 'sndBigWeaponChest', 'sndCursedChest',
+    'sndMutAppear', 'sndMutRhinoSkin', 'sndMutBloodLust', 'sndMutShotgunFingers', 'sndMutHammerhead',
+    'sndLevelUp', 'sndLevelUltra',
+    'sndPortalOpen', 'sndPortalClose', 'sndPortalLoop', 'sndWeaponChest', 'sndBigWeaponChest', 'sndCursedChest',
     'sndCursedPickup', 'sndSwapCursed', 'sndAmmoChest', 'sndEXPChest', 'sndHealthChestBig',
     'sndWeaponPickup', 'sndAmmoPickup', 'sndRadPickup', 'sndHPPickup', 'sndHPPickupBig',
-    'sndSwapPistol', 'sndEmpty', 'sndUltraEmpty', 'sndHammerHeadProc', 'sndHitMetal',
+    'sndSwapPistol', 'sndSwapShotgun', 'sndSwapMachinegun', 'sndSwapBow', 'sndSwapEnergy', 'sndSwapExplosive',
+    'sndSwapHammer', 'sndSwapSword', 'sndSwapGold', 'sndSwapFlame', 'sndSwapMotorized',
+    'sndShotReload', 'sndCrossReload', 'sndNadeReload', 'sndPlasmaReload', 'sndLightningReload',
+    'sndEmpty', 'sndUltraEmpty', 'sndHammerHeadProc', 'sndHitMetal',
     'sndHitFlesh', 'sndExplosion', 'sndExplosionL', 'sndExplosionCar', 'sndNukeExplosion',
     'sndBloodLauncherExplo', 'sndBloodHurt', 'sndPlasmaHit', 'sndPlasmaBigExplode',
     'sndPlasmaBigExplodeUpg', 'sndFlakExplode', 'sndSuperFlakExplode',
@@ -271,8 +281,15 @@ function runTest2All12MutantActives(): void {
 
     state.tick += 1;
     stepPlayerAndCombat(state, input, rng);
+    if (mutantId === 'rogue') {
+      assert(state.player.portalStrikeAim?.active === true, 'Rogue did not enter hold-to-drag Portal Strike aim');
+    }
     state.tick += 1;
-    stepPlayerAndCombat(state, { ...input, activePressed: false }, rng);
+    stepPlayerAndCombat(
+      state,
+      { ...input, activePressed: false, activeHeld: mutantId === 'rogue' ? false : true },
+      rng,
+    );
 
     assert(Number.isFinite(state.player.x) && Number.isFinite(state.player.y), `${mutantId} produced NaN position`);
     assert(Number.isFinite(state.player.hp), `${mutantId} produced NaN HP`);
