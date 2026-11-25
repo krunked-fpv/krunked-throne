@@ -727,13 +727,13 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
       makeInput({ aimWorldX: rState.player.x + 2, aimWorldY: rState.player.y, activePressed: true, activeHeld: false }),
       rRng,
     );
-    for (let t = 0; t < 24; t++) {
+    for (let t = 0; t < 32; t++) {
       rState.tick += 1;
       stepPlayerAndCombat(rState, makeInput({ aimWorldX: rState.player.x + 2, aimWorldY: rState.player.y }), rRng);
     }
     expect(rState.player.hp).toBe(hpBeforeQuickTap);
 
-    // Hold-to-drag directly on top of Rogue & stand still through telegraph -> delayed blast CAN self-damage Rogue!
+    // Hold-to-drag directly on top of Rogue & stand still through 0.5s telegraph -> delayed blast CAN self-damage Rogue!
     rState.player.activeCooldown = 0;
     rState.events = [];
     stepPlayerAndCombat(
@@ -743,7 +743,7 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     );
     expect(rState.player.portalStrikeAim?.active).toBe(true);
     expect(rState.events.some((e) => e.type === 'sfx' && e.sound === 'sndRogueAim')).toBe(true);
-    // Release RMB -> queues rolling delayed blasts
+    // Release RMB after dragging >= 8px -> queues rolling delayed blasts (delayTicks = 15 + b * 4)
     stepPlayerAndCombat(
       rState,
       makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y, activeHeld: false }),
@@ -752,6 +752,12 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     expect(rState.player.portalStrikeAim).toBeNull();
     expect(rState.events.some((e) => e.type === 'sfx' && e.sound === 'sndPortalStrikeLoop')).toBe(true);
     for (let t = 0; t < 12; t++) {
+      rState.tick += 1;
+      stepPlayerAndCombat(rState, makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y }), rRng);
+    }
+    // Still inside ~0.5s buildup telegraph at 12 ticks (blast 0 detonates at tick 15)
+    expect(rState.player.hp).toBe(hpBeforeQuickTap);
+    for (let t = 0; t < 8; t++) {
       rState.tick += 1;
       stepPlayerAndCombat(rState, makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y }), rRng);
     }
@@ -2083,5 +2089,93 @@ describe('parity-combat: Wave 2 P0 & P1 Combat, Mutants, Cause-of-Death & Progre
     expect(pkShift.player.rads).toBe(2);
     expect(pkShift.player.weapons[1]?.weaponId).toBe('shotgun');
     expect(pkShift.pickups).toHaveLength(0);
+
+    // 9. Rogue 3-tick (90ms) close-cursor RMB click + walking away (and un-dragged safeStandoff) leaves Rogue unharmed
+    const rClick = createRunState({ mutant: 'rogue', seed: 7024 });
+    rClick.enemies = [];
+    clearBox(rClick, 12, 8);
+    const rClickRng = SeededRng.fromState(rClick.rngState);
+    const startX = rClick.player.x;
+    const startY = rClick.player.y;
+    const strikesBefore = rClick.player.portalStrikes;
+    // 3-tick (90ms) close-cursor RMB hold (<8px drag) -> release & walk left away from cursor
+    stepPlayerAndCombat(
+      rClick,
+      makeInput({ aimWorldX: startX + 3, aimWorldY: startY, activePressed: true, activeHeld: true }),
+      rClickRng,
+    );
+    for (let t = 0; t < 2; t++) {
+      rClick.tick += 1;
+      stepPlayerAndCombat(
+        rClick,
+        makeInput({ aimWorldX: startX + 4, aimWorldY: startY, activeHeld: true }),
+        rClickRng,
+      );
+    }
+    rClick.events = [];
+    rClick.tick += 1;
+    stepPlayerAndCombat(
+      rClick,
+      makeInput({ moveX: -1, aimWorldX: startX + 4, aimWorldY: startY, activeHeld: false }),
+      rClickRng,
+    );
+    expect(rClick.player.portalStrikes).toBe(strikesBefore - 1);
+    let sawFireSfx = false;
+    for (let t = 0; t < 36; t++) {
+      rClick.tick += 1;
+      rClick.events = [];
+      stepPlayerAndCombat(
+        rClick,
+        makeInput({ moveX: -1, aimWorldX: startX + 4, aimWorldY: startY }),
+        rClickRng,
+      );
+      if (rClick.events.some((e) => e.type === 'sfx' && e.sound === 'sndPortalStrikeFire')) {
+        sawFireSfx = true;
+      }
+    }
+    expect(sawFireSfx).toBe(true);
+    expect(rClick.player.hp).toBe(rClick.player.maxHp);
+
+    // Also verify un-dragged 3-tick close-cursor release while standing STILL still enforces safeStandoff!
+    rClick.player.activeCooldown = 0;
+    const standX = rClick.player.x;
+    const standY = rClick.player.y;
+    stepPlayerAndCombat(
+      rClick,
+      makeInput({ aimWorldX: standX + 2, aimWorldY: standY, activePressed: true, activeHeld: true }),
+      rClickRng,
+    );
+    for (let t = 0; t < 2; t++) {
+      rClick.tick += 1;
+      stepPlayerAndCombat(
+        rClick,
+        makeInput({ aimWorldX: standX + 3, aimWorldY: standY, activeHeld: true }),
+        rClickRng,
+      );
+    }
+    rClick.tick += 1;
+    stepPlayerAndCombat(
+      rClick,
+      makeInput({ aimWorldX: standX + 3, aimWorldY: standY, activeHeld: false }),
+      rClickRng,
+    );
+    for (let t = 0; t < 36; t++) {
+      rClick.tick += 1;
+      stepPlayerAndCombat(
+        rClick,
+        makeInput({ aimWorldX: standX + 3, aimWorldY: standY }),
+        rClickRng,
+      );
+    }
+    expect(rClick.player.hp).toBe(rClick.player.maxHp);
+
+    // 10. Crown Vault ('vault') spawns zero regular level chests (Vault supplies its own sprProtoChest)
+    const vaultState = createRunState({ mutant: 'yv', seed: 7025 });
+    grantMutationById(vaultState, 'open_mind', SeededRng.fromState(vaultState.rngState));
+    loadAreaIntoState(vaultState, 'vault', 0);
+    const regularChests = vaultState.props.filter((p) =>
+      ['weapon_chest', 'big_weapon_chest', 'ammo_chest', 'rad_canister', 'idpd_canister'].includes(p.kind),
+    );
+    expect(regularChests).toHaveLength(0);
   });
 });

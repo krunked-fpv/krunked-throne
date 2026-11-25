@@ -69,6 +69,9 @@ const pendingPortalStrikes = new WeakMap<
   { mapRef: WorldMap; blasts: PendingPortalBlast[] }
 >();
 
+// Tracks whether Rogue dragged >= 8px during hold-to-drag Portal Strike aiming
+const rogueAimDragged = new WeakMap<SimState, boolean>();
+
 function getPendingPortalBlasts(state: SimState): PendingPortalBlast[] {
   let rec = pendingPortalStrikes.get(state);
   if (!rec || rec.mapRef !== state.map) {
@@ -106,7 +109,7 @@ function queueRoguePortalStrike(
       y: by,
       radius: blastRadius,
       damage: blastDamage,
-      delayTicks: 6 + b * 4,
+      delayTicks: 15 + b * 4,
       hasTB,
       isFirst: b === 0,
     });
@@ -1296,11 +1299,13 @@ function handleMutantActive(
 
       if (player.portalStrikeAim?.active) {
         const aim = player.portalStrikeAim;
+        const dragDx = input.aimWorldX - aim.x;
+        const dragDy = input.aimWorldY - aim.y;
+        const dragDistSq = dragDx * dragDx + dragDy * dragDy;
         if (input.activeHeld) {
-          const dragDx = input.aimWorldX - aim.x;
-          const dragDy = input.aimWorldY - aim.y;
-          if (dragDx * dragDx + dragDy * dragDy >= 64) {
+          if (dragDistSq >= 64) {
             aim.angle = Math.atan2(dragDy, dragDx);
+            rogueAimDragged.set(state, true);
           } else {
             const pDx = aim.x - player.x;
             const pDy = aim.y - player.y;
@@ -1309,12 +1314,30 @@ function handleMutantActive(
             }
           }
         } else {
-          // Released RMB -> launch rolling delayed carpet along dragged vector!
+          // Released RMB -> launch rolling delayed carpet along dragged vector (or past safe standoff if un-dragged)!
+          const wasDragged = Boolean(rogueAimDragged.get(state)) || dragDistSq >= 64;
+          rogueAimDragged.delete(state);
           player.portalStrikeAim = null;
           if (player.portalStrikes > 0) {
             player.portalStrikes -= 1;
             player.activeCooldown = 16;
-            queueRoguePortalStrike(state, aim.x, aim.y, aim.angle, hasTB);
+            let startX = aim.x;
+            let startY = aim.y;
+            let launchAngle = dragDistSq >= 64 ? Math.atan2(dragDy, dragDx) : aim.angle;
+            if (!wasDragged) {
+              const safeStandoff = blastRadius + player.radius + 14;
+              const relDx = aim.x - player.x;
+              const relDy = aim.y - player.y;
+              const relDist = Math.hypot(relDx, relDy);
+              if (relDist < safeStandoff) {
+                if (relDist > 1) {
+                  launchAngle = Math.atan2(relDy, relDx);
+                }
+                startX = player.x + Math.cos(launchAngle) * safeStandoff;
+                startY = player.y + Math.sin(launchAngle) * safeStandoff;
+              }
+            }
+            queueRoguePortalStrike(state, startX, startY, launchAngle, hasTB);
           }
         }
       } else if (input.activePressed && player.activeCooldown <= 0) {
@@ -1336,6 +1359,7 @@ function handleMutantActive(
               angle: aimAngle,
               active: true,
             };
+            rogueAimDragged.set(state, false);
             emitEvent(state, { type: 'sfx', sound: 'sndRogueAim', x: player.x, y: player.y });
           } else {
             // Single-tick quick tap: launch delayed rolling blasts forward past safe standoff!

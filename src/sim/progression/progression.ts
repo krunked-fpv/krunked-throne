@@ -334,7 +334,7 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
   const cursedChests = state.crown === 'curses' || state.biome === 'cursed_caves';
   const lifeHealthChests = state.crown === 'life' && player.hp < player.maxHp;
 
-  if (!isBossArena && state.areaCode !== '7-3') {
+  if (!isBossArena && state.areaCode !== '7-3' && state.areaCode !== 'vault') {
     const pos1 = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 96, true, rng);
     if (state.crown === 'love') {
       state.props.push({
