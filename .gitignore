@@ -33,3 +33,4 @@ Thumbs.db
 *.md
 !README.md
 dna/
+export-dna.ts
