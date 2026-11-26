@@ -32,6 +32,10 @@ export interface GamepadVibrationActuatorLike {
   ) => Promise<string> | void;
 }
 
+export interface GamepadHapticActuatorLike {
+  pulse?: (value: number, duration: number) => Promise<boolean> | void;
+}
+
 export interface GamepadLike {
   readonly index: number;
   readonly id: string;
@@ -40,18 +44,61 @@ export interface GamepadLike {
   readonly axes: readonly number[];
   readonly buttons: readonly (GamepadButtonLike | undefined)[];
   readonly vibrationActuator?: GamepadVibrationActuatorLike | null;
+  readonly hapticActuators?: readonly GamepadHapticActuatorLike[] | null;
 }
+
+export type GamepadFamily = 'xbox' | 'playstation' | 'nintendo' | 'tesla' | 'generic';
 
 export type GamepadProfileKind =
   | 'standard'
   | 'linux-xpad'
+  | 'xbox-bt-hid'
   | 'sony-hid'
+  | 'nintendo-hid'
+  | 'logitech-dinput'
   | 'generic-nonstandard';
+
+export interface GamepadGlyphSet {
+  family: GamepadFamily;
+  familyLabel: string;
+  confirm: string;
+  back: string;
+  pickup: string;
+  swap: string;
+  fire: string;
+  active: string;
+  prevTab: string;
+  nextTab: string;
+  pause: string;
+  retry: string;
+}
+
+export interface GamepadDisconnectInfo {
+  padIndex: number;
+  padName: string | null;
+  family: GamepadFamily;
+}
+
+export interface GamepadDebugSnapshot {
+  connected: boolean;
+  padIndex: number | null;
+  padName: string | null;
+  family: GamepadFamily;
+  profile: GamepadProfileKind | null;
+  lx: number;
+  ly: number;
+  rx: number;
+  ry: number;
+  lt: boolean;
+  rt: boolean;
+  activeButtonCount: number;
+}
 
 export interface GamepadPollResult {
   connected: boolean;
   padIndex: number | null;
   padName: string | null;
+  family: GamepadFamily;
   profile: GamepadProfileKind | null;
   hadActivity: boolean;
   moveX: number;
@@ -134,6 +181,7 @@ interface PadCalibration {
   rtResting: number;
   hasHatAxis9: boolean;
   hasPairedHat67: boolean;
+  hasPairedHat45: boolean;
 }
 
 interface NormalizedPadState {
@@ -367,12 +415,178 @@ export function applyControllerAimAssist(
   };
 }
 
+const GAMEPAD_GLYPHS: Record<GamepadFamily, GamepadGlyphSet> = {
+  xbox: {
+    family: 'xbox',
+    familyLabel: 'XBOX',
+    confirm: 'A',
+    back: 'B',
+    pickup: 'X',
+    swap: 'Y',
+    fire: 'RT',
+    active: 'LT',
+    prevTab: 'LB',
+    nextTab: 'RB',
+    pause: 'START',
+    retry: 'BACK',
+  },
+  playstation: {
+    family: 'playstation',
+    familyLabel: 'PLAYSTATION',
+    confirm: 'X',
+    back: 'O',
+    pickup: 'SQ',
+    swap: 'TRI',
+    fire: 'R2',
+    active: 'L2',
+    prevTab: 'L1',
+    nextTab: 'R1',
+    pause: 'OPT',
+    retry: 'SHARE',
+  },
+  nintendo: {
+    family: 'nintendo',
+    familyLabel: 'NINTENDO',
+    confirm: 'B',
+    back: 'A',
+    pickup: 'Y',
+    swap: 'X',
+    fire: 'ZR',
+    active: 'ZL',
+    prevTab: 'L',
+    nextTab: 'R',
+    pause: '+',
+    retry: '-',
+  },
+  tesla: {
+    family: 'tesla',
+    familyLabel: 'TESLA PAD',
+    confirm: 'A',
+    back: 'B',
+    pickup: 'X',
+    swap: 'Y',
+    fire: 'RT',
+    active: 'LT',
+    prevTab: 'LB',
+    nextTab: 'RB',
+    pause: 'START',
+    retry: 'BACK',
+  },
+  generic: {
+    family: 'generic',
+    familyLabel: 'GAMEPAD',
+    confirm: 'A',
+    back: 'B',
+    pickup: 'X',
+    swap: 'Y',
+    fire: 'RT',
+    active: 'LT',
+    prevTab: 'LB',
+    nextTab: 'RB',
+    pause: 'START',
+    retry: 'BACK',
+  },
+};
+
+const PLAYSTATION_EXPLICIT_RE = /054c|dualshock|dualsense|playstation|ps4|ps5/i;
+const NINTENDO_ID_RE = /057e|nintendo|switch|pro controller|joy-con|joycon/i;
+const XBOX_FAMILY_ID_RE = /045e|xbox|x-box|xinput|xpad|elite|backbone|kishi/i;
+const XBOX_BT_VENDOR_RE = /045e|xbox|x-box|xinput|xpad/i;
+const TESLA_BRAND_ID_RE = /tesla|jowua/i;
+const WIRELESS_CONTROLLER_RE = /wireless controller/i;
+const PHANTOM_HID_ID_RE =
+  /space navigator|3dconnexion|rgb|aura|corsair.*lighting|headset|audio|touchscreen|touchpad|mouse|keyboard/i;
+const EXPLICIT_GAMEPAD_ID_RE = /gamepad|controller|joystick|xbox|dualshock|dualsense/i;
+
+/**
+ * Classifies a connected controller into its physical button-label family so HUD/menu
+ * glyphs match the controller in the player's hands (including PlayStation/Nintendo/Xbox
+ * pads plugged into a Tesla MCU browser).
+ */
+export function detectGamepadFamily(id: string, userAgent?: string): GamepadFamily {
+  const safeId = id ?? '';
+  if (PLAYSTATION_EXPLICIT_RE.test(safeId)) {
+    return 'playstation';
+  }
+  if (NINTENDO_ID_RE.test(safeId)) {
+    return 'nintendo';
+  }
+  if (XBOX_FAMILY_ID_RE.test(safeId)) {
+    return 'xbox';
+  }
+  if (TESLA_BRAND_ID_RE.test(safeId)) {
+    return 'tesla';
+  }
+  if (WIRELESS_CONTROLLER_RE.test(safeId)) {
+    return 'playstation';
+  }
+
+  const ua =
+    userAgent !== undefined
+      ? userAgent
+      : typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string'
+        ? navigator.userAgent
+        : '';
+  if (/tesla\//i.test(ua)) {
+    return 'tesla';
+  }
+  return 'generic';
+}
+
+/**
+ * Returns the pure-ASCII uppercase button glyph set for a controller family
+ * (safe for pixel bitmap fonts without Unicode symbols or `&`).
+ */
+export function getGamepadGlyphs(family: GamepadFamily): GamepadGlyphSet {
+  return { ...(GAMEPAD_GLYPHS[family] ?? GAMEPAD_GLYPHS.generic) };
+}
+
+/**
+ * Filters out non-gamepad virtual/HID devices (3D mice, RGB controllers, headsets,
+ * touchpads, keyboards, volume knobs) that Tesla/Linux/Windows browsers sometimes expose
+ * in `navigator.getGamepads()`.
+ */
+export function isPhantomGamepad(pad: GamepadLike): boolean {
+  const buttonCount = pad.buttons?.length ?? 0;
+  const axisCount = pad.axes?.length ?? 0;
+  if (buttonCount < 4 && axisCount < 2) {
+    return true;
+  }
+  const id = pad.id ?? '';
+  if (PHANTOM_HID_ID_RE.test(id) && !EXPLICIT_GAMEPAD_ID_RE.test(id)) {
+    return true;
+  }
+  return false;
+}
+
 function isSonyPadId(id: string): boolean {
-  return /054c|dualshock|dualsense|playstation|wireless controller|ps4|ps5/i.test(id);
+  if (PLAYSTATION_EXPLICIT_RE.test(id)) return true;
+  return (
+    WIRELESS_CONTROLLER_RE.test(id) &&
+    !NINTENDO_ID_RE.test(id) &&
+    !XBOX_FAMILY_ID_RE.test(id) &&
+    !TESLA_BRAND_ID_RE.test(id)
+  );
+}
+
+function isNintendoPadId(id: string): boolean {
+  return NINTENDO_ID_RE.test(id);
+}
+
+function isXboxBtVendorId(id: string): boolean {
+  return XBOX_BT_VENDOR_RE.test(id);
+}
+
+function isLogitechDInputId(id: string): boolean {
+  return (
+    /046d|logitech/i.test(id) &&
+    /c216|c218|c219|dual action|rumblepad|f310|f710/i.test(id) &&
+    !/c21d|c21f/i.test(id)
+  );
 }
 
 function isXboxOrLinuxXpadId(id: string): boolean {
-  return /045e|xbox|x-box|xpad|8bitdo|logitech.*f310|gamepad/i.test(id);
+  return /045e|xbox|x-box|xinput|xpad|8bitdo|logitech.*f310|gamepad/i.test(id);
 }
 
 function normalizeTriggerAxis(rawValue: number, resting: number): number {
@@ -393,6 +607,10 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
   const a = (idx: number): number => (idx < len && Number.isFinite(axes[idx]) ? axes[idx]! : 0);
 
   const sony = isSonyPadId(pad.id);
+  const nintendo = isNintendoPadId(pad.id);
+  const xboxBtVendor = isXboxBtVendorId(pad.id);
+  const logitechDInput = isLogitechDInputId(pad.id);
+
   const a2Neg = len > 2 && a(2) < -0.75;
   const a3Neg = len > 3 && a(3) < -0.75;
   const a4Neg = len > 4 && a(4) < -0.75;
@@ -400,16 +618,90 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
 
   const hasHatAxis9 = len >= 10;
   const hat9LooksActive = len >= 10 && Math.abs(a(9)) > 1.05;
-  let rxAxis = 2;
-  let ryAxis = 3;
+  let rxAxis = len > 2 ? 2 : 0;
+  let ryAxis = len > 3 ? 3 : 1;
   let ltAxis: number | null = null;
   let rtAxis: number | null = null;
   let ltResting = 0;
   let rtResting = 0;
   let profile: GamepadProfileKind = 'generic-nonstandard';
+  let hasPairedHat45 = false;
+  let hasPairedHat67: boolean | null = null;
 
-  if (a2Neg && a5Neg) {
-    // Classic Linux evdev / Tesla xpad layout:
+  if (nintendo) {
+    // Nintendo Switch Pro / Joy-Con non-standard HID (digital ZL/ZR on buttons 6/7)
+    profile = 'nintendo-hid';
+    rxAxis = len > 2 ? 2 : 0;
+    ryAxis =
+      len >= 10 && Math.abs(a(5)) > 0.12 && Math.abs(a(5)) > Math.abs(a(3)) + 0.08
+        ? 5
+        : len > 3
+          ? 3
+          : 1;
+    hasPairedHat67 = len >= 8 && !hat9LooksActive && (len < 10 || Math.abs(a(9)) < 0.05);
+  } else if (xboxBtVendor && pad.buttons.length >= 15) {
+    // Xbox One S / Series X|S Bluetooth HID (Linux hid-microsoft / Tesla / Android)
+    profile = 'xbox-bt-hid';
+    if (a2Neg && a5Neg) {
+      ltAxis = 2;
+      rtAxis = 5;
+      ltResting = a(2);
+      rtResting = a(5);
+      rxAxis = 3;
+      ryAxis = 4;
+    } else if (a4Neg && a5Neg && len >= 6) {
+      ltAxis = 4;
+      rtAxis = 5;
+      ltResting = a(4);
+      rtResting = a(5);
+      rxAxis = 2;
+      ryAxis = 3;
+    } else if (a2Neg && len >= 5) {
+      ltAxis = 2;
+      ltResting = a(2);
+      rxAxis = 3;
+      ryAxis = 4;
+      if (len >= 6) {
+        rtAxis = 5;
+        rtResting = a(5) < -0.5 ? a(5) : 0;
+      }
+    } else if (a4Neg && len >= 6) {
+      ltAxis = 4;
+      ltResting = a(4);
+      rtAxis = 5;
+      rtResting = a(5) < -0.5 ? a(5) : 0;
+      rxAxis = 2;
+      ryAxis = 3;
+    } else if (a5Neg && len >= 6) {
+      if (hasHatAxis9) {
+        ltAxis = 4;
+        ltResting = a(4) < -0.5 ? a(4) : 0;
+        rtAxis = 5;
+        rtResting = a(5);
+        rxAxis = 2;
+        ryAxis = 3;
+      } else {
+        ltAxis = 2;
+        ltResting = a(2) < -0.5 ? a(2) : 0;
+        rtAxis = 5;
+        rtResting = a(5);
+        rxAxis = 3;
+        ryAxis = 4;
+      }
+    } else {
+      rxAxis = len > 2 ? 2 : 0;
+      ryAxis = len > 3 ? 3 : 1;
+    }
+    hasPairedHat67 = len >= 8 && !hat9LooksActive && (len < 10 || Math.abs(a(9)) < 0.05);
+  } else if (logitechDInput && !(a2Neg && a5Neg)) {
+    // Logitech F310 / F710 / Dual Action / RumblePad DirectInput D-Mode
+    profile = 'logitech-dinput';
+    rxAxis = len > 2 ? 2 : 0;
+    ryAxis = len > 3 ? 3 : 1;
+    hasPairedHat45 = len >= 6 && !hat9LooksActive && (len < 10 || Math.abs(a(9)) < 0.05);
+    hasPairedHat67 = false;
+  } else if (a2Neg && a5Neg) {
+    // Classic Linux evdev / Tesla xpad layout (also Logitech F310/F710 in X-Mode):
     // 0=LX, 1=LY, 2=LT(-1..1), 3=RX, 4=RY, 5=RT(-1..1), [6=HatX, 7=HatY]
     profile = sony ? 'sony-hid' : 'linux-xpad';
     ltAxis = 2;
@@ -492,15 +784,17 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
   }
 
   // Paired D-pad hat axes (6, 7) on Linux evdev (only if not trigger/stick axes and resting near 0)
-  const hasPairedHat67 =
-    len >= 8 &&
-    rxAxis !== 6 &&
-    ryAxis !== 6 &&
-    ltAxis !== 6 &&
-    rtAxis !== 6 &&
-    Math.abs(a(6)) < 0.75 &&
-    Math.abs(a(7)) < 0.75 &&
-    !hat9LooksActive;
+  const resolvedHasPairedHat67 =
+    hasPairedHat67 !== null
+      ? hasPairedHat67
+      : len >= 8 &&
+        rxAxis !== 6 &&
+        ryAxis !== 6 &&
+        ltAxis !== 6 &&
+        rtAxis !== 6 &&
+        Math.abs(a(6)) < 0.75 &&
+        Math.abs(a(7)) < 0.75 &&
+        !hat9LooksActive;
 
   return {
     padId: pad.id,
@@ -512,7 +806,8 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
     ltResting,
     rtResting,
     hasHatAxis9,
-    hasPairedHat67,
+    hasPairedHat67: resolvedHasPairedHat67,
+    hasPairedHat45,
   };
 }
 
@@ -529,11 +824,14 @@ function calibrateNonStandardPad(pad: GamepadLike): PadCalibration {
 export class GamepadManager {
   private readonly getPadsFn: () => readonly (GamepadLike | null | undefined)[];
   private readonly nowMsFn: () => number;
+  private readonly userAgent?: string;
 
   private activePadIndex: number | null = null;
   private activePadName: string | null = null;
+  private activeFamily: GamepadFamily = 'generic';
   private activeProfile: GamepadProfileKind | null = null;
   private calibrations = new Map<number, PadCalibration>();
+  private lastDebugSnapshot: GamepadDebugSnapshot = this.makeEmptyDebugSnapshot();
 
   private aimDirX = 1;
   private aimDirY = 0;
@@ -554,13 +852,48 @@ export class GamepadManager {
 
   private listenersAttached = false;
   private onConnectCallback?: (pad: GamepadLike) => void;
+  private onDisconnectCallback?: (info: GamepadDisconnectInfo) => void;
+
+  private makeEmptyDebugSnapshot(): GamepadDebugSnapshot {
+    return {
+      connected: false,
+      padIndex: null,
+      padName: null,
+      family: 'generic',
+      profile: null,
+      lx: 0,
+      ly: 0,
+      rx: 0,
+      ry: 0,
+      lt: false,
+      rt: false,
+      activeButtonCount: 0,
+    };
+  }
+
   private boundOnConnected = (e: Event) => {
     const gp = (e as GamepadEvent).gamepad as GamepadLike | undefined;
-    if (!gp) return;
+    if (!gp || isPhantomGamepad(gp)) return;
     this.calibrations.delete(gp.index);
     if (this.activePadIndex === null) {
       this.activePadIndex = gp.index;
       this.activePadName = gp.id;
+      this.activeFamily = detectGamepadFamily(gp.id, this.userAgent);
+      this.activeProfile = gp.mapping === 'standard' ? 'standard' : null;
+      this.lastDebugSnapshot = {
+        connected: true,
+        padIndex: this.activePadIndex,
+        padName: this.activePadName,
+        family: this.activeFamily,
+        profile: this.activeProfile,
+        lx: 0,
+        ly: 0,
+        rx: 0,
+        ry: 0,
+        lt: false,
+        rt: false,
+        activeButtonCount: 0,
+      };
     }
     this.onConnectCallback?.(gp);
   };
@@ -569,10 +902,18 @@ export class GamepadManager {
     if (!gp) return;
     this.calibrations.delete(gp.index);
     if (this.activePadIndex === gp.index) {
+      const info: GamepadDisconnectInfo = {
+        padIndex: this.activePadIndex,
+        padName: this.activePadName,
+        family: this.activeFamily,
+      };
       this.activePadIndex = null;
       this.activePadName = null;
+      this.activeFamily = 'generic';
       this.activeProfile = null;
       this.prevState = null;
+      this.lastDebugSnapshot = this.makeEmptyDebugSnapshot();
+      this.onDisconnectCallback?.(info);
     }
   };
 
@@ -580,6 +921,8 @@ export class GamepadManager {
     getGamepads?: () => readonly (GamepadLike | null | undefined)[];
     nowMs?: () => number;
     onConnect?: (pad: GamepadLike) => void;
+    onDisconnect?: (info: GamepadDisconnectInfo) => void;
+    userAgent?: string;
   }) {
     this.getPadsFn =
       opts?.getGamepads ??
@@ -597,6 +940,8 @@ export class GamepadManager {
       opts?.nowMs ??
       (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.onConnectCallback = opts?.onConnect;
+    this.onDisconnectCallback = opts?.onDisconnect;
+    this.userAgent = opts?.userAgent;
   }
 
   attachListeners(): void {
@@ -634,14 +979,20 @@ export class GamepadManager {
     connected: boolean;
     padIndex: number | null;
     padName: string | null;
+    family: GamepadFamily;
     profile: GamepadProfileKind | null;
   } {
     return {
       connected: this.activePadIndex !== null,
       padIndex: this.activePadIndex,
       padName: this.activePadName,
+      family: this.activeFamily,
       profile: this.activeProfile,
     };
+  }
+
+  getRawDebugState(): GamepadDebugSnapshot {
+    return { ...this.lastDebugSnapshot };
   }
 
   resetState(): void {
@@ -658,7 +1009,13 @@ export class GamepadManager {
     if (existing && existing.padId === pad.id) {
       // If pad booted cold with all-zero axes (ltAxis/rtAxis unresolved) and any axis 2..5
       // later settles to -1.0, recalibrate immediately so triggers never lock R-stick!
-      if (existing.ltAxis === null && existing.rtAxis === null) {
+      // Skip digital-trigger profiles (nintendo-hid, logitech-dinput) so stick/hat -1 never corrupts them.
+      if (
+        existing.profile !== 'nintendo-hid' &&
+        existing.profile !== 'logitech-dinput' &&
+        existing.ltAxis === null &&
+        existing.rtAxis === null
+      ) {
         const limit = Math.min(5, pad.axes.length - 1);
         for (let i = 2; i <= limit; i++) {
           const v = pad.axes[i];
@@ -707,6 +1064,8 @@ export class GamepadManager {
   private readPadState(pad: GamepadLike): {
     state: NormalizedPadState;
     profile: GamepadProfileKind;
+    hasRightStick: boolean;
+    activeButtonCount: number;
   } {
     const btn = (i: number): boolean => buttonIsPressed(pad.buttons[i]);
     const axis = (i: number): number => {
@@ -714,11 +1073,25 @@ export class GamepadManager {
       return typeof v === 'number' && Number.isFinite(v) ? v : 0;
     };
 
+    let activeButtonCount = 0;
+    for (let i = 0; i < pad.buttons.length; i++) {
+      const b = pad.buttons[i];
+      if (
+        buttonIsPressed(b) ||
+        (pad.mapping === 'standard' &&
+          (i === 6 || i === 7) &&
+          (b?.value ?? 0) > TRIGGER_PRESS_THRESHOLD)
+      ) {
+        activeButtonCount++;
+      }
+    }
+
     if (pad.mapping === 'standard') {
+      const hasRightStick = pad.axes.length >= 4;
       const lx = axis(0);
       const ly = axis(1);
-      const rx = axis(2);
-      const ry = axis(3);
+      const rx = hasRightStick ? axis(2) : 0;
+      const ry = hasRightStick ? axis(3) : 0;
 
       const dpadUp = btn(12);
       const dpadDown = btn(13);
@@ -758,6 +1131,8 @@ export class GamepadManager {
 
       return {
         profile: 'standard',
+        hasRightStick,
+        activeButtonCount,
         state: {
           lx,
           ly,
@@ -782,18 +1157,44 @@ export class GamepadManager {
       };
     }
 
-    // Non-standard / Tesla Chromium / Linux-evdev fallback mapper
+    // Non-standard / Tesla Chromium / Linux-evdev / HID fallback mapper
     const cal = this.getCalibration(pad);
+
+    // Switch Pro 10-axis HID can report right-stick Y on axes[5] instead of axes[3]
+    if (cal.profile === 'nintendo-hid' && pad.axes.length >= 10) {
+      const a3 = Math.abs(axis(3));
+      const a5 = Math.abs(axis(5));
+      if (a5 > 0.12 && a5 > a3 + 0.08) {
+        cal.ryAxis = 5;
+      } else if (a3 > 0.12 && a3 > a5 + 0.08) {
+        cal.ryAxis = 3;
+      }
+    }
+
+    const hasRightStick = cal.rxAxis !== 0 || cal.ryAxis !== 1;
     const lx = axis(0);
     const ly = axis(1);
-    const rx = axis(cal.rxAxis);
-    const ry = axis(cal.ryAxis);
+    const rx = hasRightStick ? axis(cal.rxAxis) : 0;
+    const ry = hasRightStick ? axis(cal.ryAxis) : 0;
 
-    // Combine D-pad sources: standard buttons 12..15, paired hat (6,7), single POV hat axis (9)
-    let dpadUp = btn(12);
-    let dpadDown = btn(13);
-    let dpadLeft = btn(14);
-    let dpadRight = btn(15);
+    // Combine D-pad sources: standard buttons 12..15 (where applicable), paired hat (4/5 or 6/7), single POV hat axis (9)
+    const allowButtons12To15Dpad =
+      cal.profile === 'generic-nonstandard' ||
+      cal.profile === 'linux-xpad' ||
+      (cal.profile === 'nintendo-hid' && !cal.hasHatAxis9 && !cal.hasPairedHat67);
+    let dpadUp = allowButtons12To15Dpad ? btn(12) : false;
+    let dpadDown = allowButtons12To15Dpad ? btn(13) : false;
+    let dpadLeft = allowButtons12To15Dpad ? btn(14) : false;
+    let dpadRight = allowButtons12To15Dpad ? btn(15) : false;
+
+    if (cal.hasPairedHat45) {
+      const hx = axis(4);
+      const hy = axis(5);
+      if (hx < -0.5) dpadLeft = true;
+      if (hx > 0.5) dpadRight = true;
+      if (hy < -0.5) dpadUp = true;
+      if (hy > 0.5) dpadDown = true;
+    }
 
     if (cal.hasPairedHat67) {
       const hx = axis(6);
@@ -836,6 +1237,46 @@ export class GamepadManager {
       btnRB = btn(5);
       btnLT = ltAxisNorm > TRIGGER_PRESS_THRESHOLD || btn(6);
       btnRT = rtAxisNorm > TRIGGER_PRESS_THRESHOLD || btn(7);
+      btnBack = btn(8);
+      btnStart = btn(9);
+    } else if (cal.profile === 'xbox-bt-hid') {
+      // Xbox One S / Series X|S Bluetooth HID (Linux hid-microsoft / Tesla / Android):
+      // 0=A, 1=B, 3=X, 4=Y, 6=LB, 7=RB, 10=Back/View, 11=Start/Menu; triggers on axes 2/5 or 4/5 or btn 8/9 fallback
+      btnA = btn(0);
+      btnB = btn(1);
+      btnX = btn(3);
+      btnY = btn(4);
+      btnLB = btn(6);
+      btnRB = btn(7);
+      btnLT = ltAxisNorm > TRIGGER_PRESS_THRESHOLD || btn(8);
+      btnRT = rtAxisNorm > TRIGGER_PRESS_THRESHOLD || btn(9);
+      btnBack = btn(10);
+      btnStart = btn(11);
+    } else if (cal.profile === 'nintendo-hid') {
+      // Nintendo Switch Pro / Joy-Con non-standard HID:
+      // 0=B(confirm south), 1=A(back east), 2=Y(pickup west), 3=X(swap north),
+      // 4=L(LB), 5=R(RB), 6=ZL(LT), 7=ZR(RT), 8=Minus(Back), 9=Plus(Start)
+      btnA = btn(0);
+      btnB = btn(1);
+      btnX = btn(2);
+      btnY = btn(3);
+      btnLB = btn(4);
+      btnRB = btn(5);
+      btnLT = btn(6) || ltAxisNorm > TRIGGER_PRESS_THRESHOLD;
+      btnRT = btn(7) || rtAxisNorm > TRIGGER_PRESS_THRESHOLD;
+      btnBack = btn(8);
+      btnStart = btn(9);
+    } else if (cal.profile === 'logitech-dinput') {
+      // Logitech F310 / F710 / Dual Action / RumblePad DirectInput D-mode:
+      // 0=X, 1=A, 2=B, 3=Y, 4=LB, 5=RB, 6=LT, 7=RT, 8=Back, 9=Start
+      btnX = btn(0);
+      btnA = btn(1);
+      btnB = btn(2);
+      btnY = btn(3);
+      btnLB = btn(4);
+      btnRB = btn(5);
+      btnLT = btn(6);
+      btnRT = btn(7);
       btnBack = btn(8);
       btnStart = btn(9);
     } else if (cal.profile === 'linux-xpad' && cal.ltAxis !== null && cal.rtAxis !== null && pad.buttons.length <= 12) {
@@ -883,6 +1324,8 @@ export class GamepadManager {
 
     return {
       profile: cal.profile,
+      hasRightStick,
+      activeButtonCount,
       state: {
         lx,
         ly,
@@ -909,23 +1352,58 @@ export class GamepadManager {
 
   private selectActivePad(
     rawPads: readonly (GamepadLike | null | undefined)[],
-  ): { pad: GamepadLike; state: NormalizedPadState; profile: GamepadProfileKind } | null {
+  ): {
+    pad: GamepadLike;
+    state: NormalizedPadState;
+    profile: GamepadProfileKind;
+    hasRightStick: boolean;
+    activeButtonCount: number;
+  } | null {
     const connectedPads: Array<{
       pad: GamepadLike;
       state: NormalizedPadState;
       profile: GamepadProfileKind;
+      hasRightStick: boolean;
+      activeButtonCount: number;
     }> = [];
 
     for (let i = 0; i < rawPads.length; i++) {
       const p = rawPads[i];
-      if (!p || !p.connected) continue;
+      if (!p || !p.connected || isPhantomGamepad(p)) continue;
       const read = this.readPadState(p);
-      connectedPads.push({ pad: p, state: read.state, profile: read.profile });
+      connectedPads.push({
+        pad: p,
+        state: read.state,
+        profile: read.profile,
+        hasRightStick: read.hasRightStick,
+        activeButtonCount: read.activeButtonCount,
+      });
+    }
+
+    // Detect active pad disappearing from getGamepads() (deduplicated with gamepaddisconnected)
+    if (
+      this.activePadIndex !== null &&
+      !connectedPads.some((c) => c.pad.index === this.activePadIndex)
+    ) {
+      const info: GamepadDisconnectInfo = {
+        padIndex: this.activePadIndex,
+        padName: this.activePadName,
+        family: this.activeFamily,
+      };
+      this.calibrations.delete(this.activePadIndex);
+      this.activePadIndex = null;
+      this.activePadName = null;
+      this.activeFamily = 'generic';
+      this.activeProfile = null;
+      this.prevState = null;
+      this.lastDebugSnapshot = this.makeEmptyDebugSnapshot();
+      this.onDisconnectCallback?.(info);
     }
 
     if (connectedPads.length === 0) {
       this.activePadIndex = null;
       this.activePadName = null;
+      this.activeFamily = 'generic';
       this.activeProfile = null;
       this.prevState = null;
       return null;
@@ -952,6 +1430,7 @@ export class GamepadManager {
 
     this.activePadIndex = chosen.pad.index;
     this.activePadName = chosen.pad.id;
+    this.activeFamily = detectGamepadFamily(chosen.pad.id, this.userAgent);
     this.activeProfile = chosen.profile;
     return chosen;
   }
@@ -980,6 +1459,7 @@ export class GamepadManager {
       connected: false,
       padIndex: null,
       padName: null,
+      family: 'generic',
       profile: null,
       hadActivity: false,
       moveX: 0,
@@ -1012,6 +1492,7 @@ export class GamepadManager {
     const chosen = this.selectActivePad(rawPads);
     if (!chosen) {
       this.resetState();
+      this.lastDebugSnapshot = this.makeEmptyDebugSnapshot();
       return empty;
     }
 
@@ -1033,13 +1514,20 @@ export class GamepadManager {
       moveY /= moveMag;
     }
 
-    // Twin-stick aim persistence: update direction when right stick pushed, KEEP last direction on release
+    // Twin-stick aim persistence: update direction when right stick pushed, KEEP last direction on release.
+    // On single-stick / D-pad-only retro pads (!hasRightStick), aim tracks movement direction smoothly.
     const aimActive = aimStick.magnitude > 0;
     if (aimActive) {
       const aLen = Math.hypot(aimStick.x, aimStick.y);
       if (aLen > 1e-5) {
         this.aimDirX = aimStick.x / aLen;
         this.aimDirY = aimStick.y / aLen;
+      }
+    } else if (!chosen.hasRightStick && moveMag > 0.2) {
+      const mLen = Math.hypot(moveX, moveY);
+      if (mLen > 1e-5) {
+        this.aimDirX = moveX / mLen;
+        this.aimDirY = moveY / mLen;
       }
     }
 
@@ -1092,11 +1580,26 @@ export class GamepadManager {
       activeHeld;
 
     this.prevState = cur;
+    this.lastDebugSnapshot = {
+      connected: true,
+      padIndex: chosen.pad.index,
+      padName: chosen.pad.id,
+      family: this.activeFamily,
+      profile: chosen.profile,
+      lx: cur.lx,
+      ly: cur.ly,
+      rx: cur.rx,
+      ry: cur.ry,
+      lt: cur.btnLT,
+      rt: cur.btnRT,
+      activeButtonCount: chosen.activeButtonCount,
+    };
 
     return {
       connected: true,
       padIndex: chosen.pad.index,
       padName: chosen.pad.id,
+      family: this.activeFamily,
       profile: chosen.profile,
       hadActivity,
       moveX,
@@ -1128,7 +1631,9 @@ export class GamepadManager {
 
   /**
    * Triggers safe, feature-detected dual-rumble haptic feedback on the active gamepad.
-   * Silently no-ops on Tesla Chromium or any browser without `vibrationActuator.playEffect`.
+   * Uses Chromium `vibrationActuator.playEffect('dual-rumble', ...)` first and falls back
+   * to Firefox/Safari `hapticActuators[0].pulse(strength, duration)` when absent.
+   * Silently no-ops on Tesla Chromium or any unsupported browser without throwing.
    */
   rumble(specOrPreset: RumblePreset | RumbleSpec): boolean {
     if (!this.rumbleEnabled || this.activePadIndex === null) return false;
@@ -1153,29 +1658,46 @@ export class GamepadManager {
     }
     if (!activePad) return false;
 
+    const duration = Math.max(15, Math.min(500, Math.round(spec.durationMs)));
+    const weakMagnitude = clamp(spec.weakMagnitude, 0, 1);
+    const strongMagnitude = clamp(spec.strongMagnitude, 0, 1);
+
     const actuator = activePad.vibrationActuator;
-    if (!actuator || typeof actuator.playEffect !== 'function') {
-      return false;
+    if (actuator && typeof actuator.playEffect === 'function') {
+      try {
+        const maybePromise = actuator.playEffect('dual-rumble', {
+          startDelay: 0,
+          duration,
+          weakMagnitude,
+          strongMagnitude,
+        });
+        if (maybePromise && typeof (maybePromise as Promise<unknown>).catch === 'function') {
+          void (maybePromise as Promise<unknown>).catch(() => {});
+        }
+        this.rumbleBusyUntilMs = nowMs + duration * 0.8;
+        this.rumbleActivePriority = priority;
+        return true;
+      } catch {
+        // Fall through to hapticActuators fallback if available
+      }
     }
 
-    try {
-      const duration = Math.max(15, Math.min(500, Math.round(spec.durationMs)));
-      const weakMagnitude = clamp(spec.weakMagnitude, 0, 1);
-      const strongMagnitude = clamp(spec.strongMagnitude, 0, 1);
-      const maybePromise = actuator.playEffect('dual-rumble', {
-        startDelay: 0,
-        duration,
-        weakMagnitude,
-        strongMagnitude,
-      });
-      if (maybePromise && typeof (maybePromise as Promise<unknown>).catch === 'function') {
-        void (maybePromise as Promise<unknown>).catch(() => {});
+    const haptic = activePad.hapticActuators?.[0];
+    if (haptic && typeof haptic.pulse === 'function') {
+      try {
+        const strength = clamp(Math.max(strongMagnitude, weakMagnitude), 0, 1);
+        const maybePromise = haptic.pulse(strength, duration);
+        if (maybePromise && typeof (maybePromise as Promise<unknown>).catch === 'function') {
+          void (maybePromise as Promise<unknown>).catch(() => {});
+        }
+        this.rumbleBusyUntilMs = nowMs + duration * 0.8;
+        this.rumbleActivePriority = priority;
+        return true;
+      } catch {
+        return false;
       }
-      this.rumbleBusyUntilMs = nowMs + duration * 0.8;
-      this.rumbleActivePriority = priority;
-      return true;
-    } catch {
-      return false;
     }
+
+    return false;
   }
 }
