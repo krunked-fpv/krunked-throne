@@ -32,3 +32,4 @@ Thumbs.db
 !.env.example
 *.md
 !README.md
+dna/
