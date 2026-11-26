@@ -2,6 +2,7 @@ import {
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH_4_3,
   type ControlSettings,
+  type GamepadFamily,
   type InputDeviceMode,
   type InputFrame,
   type KeyBindings,
@@ -12,14 +13,22 @@ import {
   DEFAULT_CONTROL_SETTINGS,
   GamepadManager,
   applyControllerAimAssist,
+  detectGamepadFamily,
   type AimAssistEnemy,
+  type GamepadDebugSnapshot,
+  type GamepadDisconnectInfo,
   type GamepadLike,
   type GamepadPollResult,
   type GamepadProfileKind,
   type RumblePreset,
   type RumbleSpec,
 } from './gamepad';
-import { TouchControlsManager } from './touch-controls';
+import {
+  TouchControlsManager,
+  detectMobileOrTouchEnvironment,
+  triggerTouchHaptic,
+  type TouchEnvironmentLike,
+} from './touch-controls';
 
 export const DEFAULT_KEYBINDINGS: KeyBindings = {
   up: 'KeyW',
@@ -69,9 +78,21 @@ export interface InputManagerOptions {
   getGamepads?: () => readonly (GamepadLike | null | undefined)[];
   nowMs?: () => number;
   onUserInteraction?: (mode: InputDeviceMode) => void;
+  touchEnv?: TouchEnvironmentLike;
+  userAgent?: string;
+  onGamepadConnect?: (info: { padIndex: number; padName: string | null; family: GamepadFamily }) => void;
+  onGamepadDisconnect?: (info: GamepadDisconnectInfo) => void;
 }
 
 const TOUCH_COMPAT_MOUSE_WINDOW_MS = 450;
+
+const TOUCH_HAPTIC_PATTERNS: Partial<Record<RumblePreset, number | readonly number[]>> = {
+  hurt: 28,
+  explosion: 35,
+  death: [45, 30, 65],
+  fire_heavy: 14,
+  parry: 16,
+};
 
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
@@ -121,8 +142,17 @@ export class InputManager {
   private readonly touch: TouchControlsManager;
   private readonly nowMsFn: () => number;
   private readonly onUserInteraction?: (mode: InputDeviceMode) => void;
+  private readonly touchEnv?: TouchEnvironmentLike;
+  private readonly onGamepadConnect?: (info: {
+    padIndex: number;
+    padName: string | null;
+    family: GamepadFamily;
+  }) => void;
+  private readonly onGamepadDisconnect?: (info: GamepadDisconnectInfo) => void;
 
   private canvas: HTMLCanvasElement | null = null;
+  private touchCaptureParent: HTMLElement | null = null;
+  private coarseMediaQuery: MediaQueryList | null = null;
   private logicalWidth = LOGICAL_WIDTH_4_3;
   private logicalHeight = LOGICAL_HEIGHT;
   private gameplayActive = false;
@@ -187,6 +217,11 @@ export class InputManager {
   private boundTouchStart = (e: TouchEvent) => this.onTouchStart(e);
   private boundTouchMove = (e: TouchEvent) => this.onTouchMove(e);
   private boundTouchEnd = (e: TouchEvent) => this.onTouchEnd(e);
+  private boundParentPointerDown = (e: PointerEvent) => this.onParentPointerDown(e);
+  private boundParentTouchStart = (e: TouchEvent) => this.onParentTouchStart(e);
+  private boundParentTouchMove = (e: TouchEvent) => this.onParentTouchMove(e);
+  private boundParentTouchEnd = (e: TouchEvent) => this.onParentTouchEnd(e);
+  private boundCoarseMediaChange = (e: MediaQueryListEvent) => this.onCoarseMediaChange(e);
   private boundMouseMove = (e: MouseEvent) => this.onMouseMove(e);
   private boundMouseDown = (e: MouseEvent) => this.onMouseDown(e);
   private boundMouseUp = (e: MouseEvent) => this.onMouseUp(e);
@@ -204,16 +239,38 @@ export class InputManager {
       options.nowMs ??
       (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.onUserInteraction = options.onUserInteraction;
+    this.touchEnv = options.touchEnv;
+    this.onGamepadConnect = options.onGamepadConnect;
+    this.onGamepadDisconnect = options.onGamepadDisconnect;
 
     this.gamepad = new GamepadManager({
       getGamepads: options.getGamepads,
       nowMs: this.nowMsFn,
-      onConnect: () => {
+      userAgent: options.userAgent,
+      onConnect: (pad) => {
         this.onUserInteraction?.('gamepad');
+        const family = detectGamepadFamily(pad.id, options.userAgent);
+        this.onGamepadConnect?.({
+          padIndex: pad.index,
+          padName: pad.id || null,
+          family,
+        });
+      },
+      onDisconnect: (info) => {
+        this.onGamepadDisconnect?.(info);
       },
     });
     this.gamepad.applySettings(this.controlSettings);
     this.touch = new TouchControlsManager();
+
+    // Auto-sense genuine touch-only environments (phones/tablets/Tesla) while strictly keeping
+    // desktop PCs, touchscreen laptops, and headless Node in 'kbm' mode (zero audio unlock here).
+    if (
+      detectMobileOrTouchEnvironment(this.touchEnv) &&
+      this.controlSettings.touchMode !== 'off'
+    ) {
+      this.deviceMode = 'touch';
+    }
   }
 
   setKeybinds(keybinds: KeyBindings): void {
@@ -253,9 +310,14 @@ export class InputManager {
     connected: boolean;
     padIndex: number | null;
     padName: string | null;
+    family: GamepadFamily;
     profile: GamepadProfileKind | null;
   } {
     return this.gamepad.getConnectedInfo();
+  }
+
+  getGamepadDebugState(): GamepadDebugSnapshot {
+    return this.gamepad.getRawDebugState();
   }
 
   getTouchManager(): TouchControlsManager {
@@ -325,6 +387,14 @@ export class InputManager {
     this.pointerLogicalX = this.logicalWidth * 0.5;
     this.pointerLogicalY = this.logicalHeight * 0.5;
 
+    if (
+      this.deviceMode === 'kbm' &&
+      this.controlSettings.touchMode !== 'off' &&
+      detectMobileOrTouchEnvironment(this.touchEnv)
+    ) {
+      this.deviceMode = 'touch';
+    }
+
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.boundKeyDown);
       window.addEventListener('keyup', this.boundKeyUp);
@@ -334,6 +404,22 @@ export class InputManager {
       window.addEventListener('mousemove', this.boundMouseMove);
       window.addEventListener('mouseup', this.boundMouseUp);
       window.addEventListener('blur', this.boundBlur);
+
+      if (typeof window.matchMedia === 'function') {
+        try {
+          const mql = window.matchMedia('(pointer: coarse) and (hover: none)');
+          if (mql) {
+            this.coarseMediaQuery = mql;
+            if (typeof mql.addEventListener === 'function') {
+              mql.addEventListener('change', this.boundCoarseMediaChange);
+            } else if (typeof mql.addListener === 'function') {
+              mql.addListener(this.boundCoarseMediaChange);
+            }
+          }
+        } catch {
+          // Ignore unsupported/mock matchMedia implementations
+        }
+      }
     }
 
     canvas.addEventListener('pointerdown', this.boundPointerDown);
@@ -344,6 +430,18 @@ export class InputManager {
     canvas.addEventListener('mousedown', this.boundMouseDown);
     canvas.addEventListener('wheel', this.boundWheel, { passive: false });
     canvas.addEventListener('contextmenu', this.boundContextMenu);
+
+    // Letterbox-safe touch capture on parent (#app) so thumbs landing in dark side/bottom margins
+    // during gameplay still drive movement/aim cleanly on ultrawide phones & Tesla displays.
+    const parent = canvas.parentElement;
+    if (parent && typeof parent.addEventListener === 'function') {
+      this.touchCaptureParent = parent;
+      parent.addEventListener('pointerdown', this.boundParentPointerDown);
+      parent.addEventListener('touchstart', this.boundParentTouchStart, { passive: false });
+      parent.addEventListener('touchmove', this.boundParentTouchMove, { passive: false });
+      parent.addEventListener('touchend', this.boundParentTouchEnd, { passive: false });
+      parent.addEventListener('touchcancel', this.boundParentTouchEnd, { passive: false });
+    }
 
     this.gamepad.attachListeners();
     this.attached = true;
@@ -361,6 +459,26 @@ export class InputManager {
       window.removeEventListener('mouseup', this.boundMouseUp);
       window.removeEventListener('blur', this.boundBlur);
     }
+    if (this.coarseMediaQuery) {
+      try {
+        if (typeof this.coarseMediaQuery.removeEventListener === 'function') {
+          this.coarseMediaQuery.removeEventListener('change', this.boundCoarseMediaChange);
+        } else if (typeof this.coarseMediaQuery.removeListener === 'function') {
+          this.coarseMediaQuery.removeListener(this.boundCoarseMediaChange);
+        }
+      } catch {
+        // Ignore cleanup errors on synthetic MediaQueryList mocks
+      }
+      this.coarseMediaQuery = null;
+    }
+    if (this.touchCaptureParent && typeof this.touchCaptureParent.removeEventListener === 'function') {
+      this.touchCaptureParent.removeEventListener('pointerdown', this.boundParentPointerDown);
+      this.touchCaptureParent.removeEventListener('touchstart', this.boundParentTouchStart);
+      this.touchCaptureParent.removeEventListener('touchmove', this.boundParentTouchMove);
+      this.touchCaptureParent.removeEventListener('touchend', this.boundParentTouchEnd);
+      this.touchCaptureParent.removeEventListener('touchcancel', this.boundParentTouchEnd);
+    }
+    this.touchCaptureParent = null;
     if (this.canvas) {
       this.canvas.removeEventListener('pointerdown', this.boundPointerDown);
       this.canvas.removeEventListener('touchstart', this.boundTouchStart);
@@ -422,6 +540,39 @@ export class InputManager {
   rumble(specOrPreset: RumblePreset | RumbleSpec): boolean {
     if (this.deviceMode !== 'gamepad') return false;
     return this.gamepad.rumble(specOrPreset);
+  }
+
+  triggerTouchHapticForPreset(preset: RumblePreset): boolean {
+    if (this.deviceMode !== 'touch' || !this.controlSettings.gamepadRumble) {
+      return false;
+    }
+    const pattern = TOUCH_HAPTIC_PATTERNS[preset];
+    if (pattern === undefined) return false;
+    return triggerTouchHaptic(pattern, this.controlSettings.gamepadRumble);
+  }
+
+  /**
+   * Triggers a clear tactile test pulse on the connected gamepad (bypassing active
+   * deviceMode so mouse clicks on the Options status card still rumble the pad),
+   * or falls back to mobile micro-haptics when in touch mode.
+   */
+  testRumble(): boolean {
+    if (!this.controlSettings.gamepadRumble) {
+      return false;
+    }
+    if (this.gamepad.getConnectedInfo().connected) {
+      const rumbled = this.gamepad.rumble({
+        durationMs: 140,
+        weakMagnitude: 0.45,
+        strongMagnitude: 0.65,
+        priority: 10,
+      });
+      if (rumbled) return true;
+    }
+    if (this.deviceMode === 'touch') {
+      return triggerTouchHaptic(35, this.controlSettings.gamepadRumble);
+    }
+    return false;
   }
 
   // --------------------------------------------------------------------------
@@ -825,6 +976,77 @@ export class InputManager {
     }
   }
 
+  private onCoarseMediaChange(e: MediaQueryListEvent): void {
+    if (e.matches) {
+      if (this.controlSettings.touchMode !== 'off' && this.deviceMode === 'kbm') {
+        this.deviceMode = 'touch';
+      }
+    } else if (this.deviceMode === 'touch') {
+      this.touch.clearAllTouches();
+      this.activeMenuTouchPointerId = null;
+      this.deviceMode = 'kbm';
+    }
+  }
+
+  private onParentPointerDown(e: PointerEvent): void {
+    if (!this.gameplayActive) return;
+    if (e.target === this.canvas) return;
+    if (e.pointerType !== 'touch') return;
+    if (this.controlSettings.touchMode === 'off') return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    const pos = this.mapClientEvent(e.clientX, e.clientY);
+    this.lastPointerTouchMs = this.nowMsFn();
+    this.lastAnyTouchMs = this.lastPointerTouchMs;
+    this.simulateTouchStartLogical(e.pointerId, pos.x, pos.y);
+  }
+
+  private onParentTouchStart(e: TouchEvent): void {
+    if (!this.gameplayActive) return;
+    if (e.target === this.canvas) return;
+    if (this.controlSettings.touchMode === 'off') return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    const now = this.nowMsFn();
+    this.lastAnyTouchMs = now;
+    if (now - this.lastPointerTouchMs < 25) {
+      return;
+    }
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i]!;
+      const pos = this.mapClientEvent(t.clientX, t.clientY);
+      this.simulateTouchStartLogical(10000 + t.identifier, pos.x, pos.y);
+    }
+  }
+
+  private onParentTouchMove(e: TouchEvent): void {
+    if (!this.gameplayActive) return;
+    if (e.target === this.canvas) return;
+    if (this.controlSettings.touchMode === 'off') return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    const now = this.nowMsFn();
+    this.lastAnyTouchMs = now;
+    if (now - this.lastPointerTouchMs < 25) {
+      return;
+    }
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i]!;
+      const pos = this.mapClientEvent(t.clientX, t.clientY);
+      this.simulateTouchMoveLogical(10000 + t.identifier, pos.x, pos.y);
+    }
+  }
+
+  private onParentTouchEnd(e: TouchEvent): void {
+    if (e.target === this.canvas) return;
+    const now = this.nowMsFn();
+    this.lastAnyTouchMs = now;
+    if (now - this.lastPointerTouchMs < 25) {
+      return;
+    }
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i]!;
+      this.simulateTouchEnd(10000 + t.identifier);
+    }
+  }
+
   private onMouseMove(e: MouseEvent): void {
     if (!this.canvas || isTouchSynthesizedMouseEvent(e)) return;
     const now = this.nowMsFn();
@@ -955,9 +1177,24 @@ export class InputManager {
     if (this.isTouchOverlayVisible()) {
       const aimStick = this.touch.getAimStickState();
       const aimDir = this.touch.getLastAimDirection();
+      let dirX = aimDir.x;
+      let dirY = aimDir.y;
+      if (this.controlSettings.gamepadAimAssist && simContext?.enemies) {
+        const assisted = applyControllerAimAssist(
+          interpPlayerX,
+          interpPlayerY,
+          dirX,
+          dirY,
+          simContext.enemies,
+          simContext.map ?? null,
+          { enabled: true },
+        );
+        dirX = assisted.dirX;
+        dirY = assisted.dirY;
+      }
       const lookDist = 72 + (aimStick.active ? aimStick.magnitude : 0) * 26;
-      const aimWorldX = interpPlayerX + aimDir.x * lookDist;
-      const aimWorldY = interpPlayerY + aimDir.y * lookDist;
+      const aimWorldX = interpPlayerX + dirX * lookDist;
+      const aimWorldY = interpPlayerY + dirY * lookDist;
       const scr = camera.worldToScreen(aimWorldX, aimWorldY);
       this.pointerLogicalX = clamp(scr.x, 0, camera.viewportWidth);
       this.pointerLogicalY = clamp(scr.y, 0, camera.viewportHeight);
@@ -1050,9 +1287,24 @@ export class InputManager {
       playerWorldX !== undefined &&
       playerWorldY !== undefined
     ) {
+      let dirX = touchSample.aimDirX;
+      let dirY = touchSample.aimDirY;
+      if (this.controlSettings.gamepadAimAssist && simContext?.enemies) {
+        const assisted = applyControllerAimAssist(
+          playerWorldX,
+          playerWorldY,
+          dirX,
+          dirY,
+          simContext.enemies,
+          simContext.map ?? null,
+          { enabled: true },
+        );
+        dirX = assisted.dirX;
+        dirY = assisted.dirY;
+      }
       const lookDist = 72 + touchSample.aimMagnitude * 26;
-      aimWorldX = playerWorldX + touchSample.aimDirX * lookDist;
-      aimWorldY = playerWorldY + touchSample.aimDirY * lookDist;
+      aimWorldX = playerWorldX + dirX * lookDist;
+      aimWorldY = playerWorldY + dirY * lookDist;
       const scr = camera.worldToScreen(aimWorldX, aimWorldY);
       this.pointerLogicalX = clamp(scr.x, 0, camera.viewportWidth);
       this.pointerLogicalY = clamp(scr.y, 0, camera.viewportHeight);

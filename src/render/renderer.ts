@@ -9,6 +9,7 @@ import {
   type CasingEntity,
   type CorpseEntity,
   type EnemyEntity,
+  type GamepadFamily,
   type PickupEntity,
   type PlayerState,
   type ProjectileEntity,
@@ -19,6 +20,7 @@ import {
   type WorldMap,
 } from '@/contracts';
 import type { AssetBundle } from '@/assets';
+import { getGamepadGlyphs } from '@/input';
 import {
   BIOME_FALLBACK_PALETTES,
   BIOME_SPRITE_NUMBER,
@@ -1404,6 +1406,7 @@ export class GameRenderer {
     interpAlpha: number = 1,
     cursorScreen?: { x: number; y: number },
     inputMode: RenderInputDeviceMode = 'kbm',
+    gamepadFamily: GamepadFamily = 'generic',
   ): void {
     const w = settings.widescreen ? LOGICAL_WIDTH_16_9 : LOGICAL_WIDTH_4_3;
     const h = LOGICAL_HEIGHT;
@@ -1644,8 +1647,8 @@ export class GameRenderer {
     this.renderFloatingTexts(ctx, state, viewLeft, viewTop, w);
 
     // Nearby weapon & interactable prop prompts in world space (adaptive KBM/gamepad/touch)
-    this.renderNearbyWeaponPrompt(ctx, state, playerX, playerY, inputMode, viewTop);
-    this.renderNearbyPropPrompt(ctx, state, playerX, playerY, inputMode, viewTop);
+    this.renderNearbyWeaponPrompt(ctx, state, playerX, playerY, inputMode, viewTop, gamepadFamily);
+    this.renderNearbyPropPrompt(ctx, state, playerX, playerY, inputMode, viewTop, gamepadFamily);
 
     ctx.restore();
 
@@ -1671,10 +1674,14 @@ export class GameRenderer {
     this.renderScreenEffects(ctx, state, w, h);
 
     // ------------------------------------------------------------------------
-    // LAYER 7: Crosshair (sprCrosshair + dynamic hit-confirm & recoil bloom)
+    // LAYER 7: Crosshair (sprCrosshair for KBM/Gamepad, subtle translucent aim reticle for Touch)
     // ------------------------------------------------------------------------
-    if (cursorScreen && inputMode !== 'touch') {
-      this.renderCrosshair(ctx, cursorScreen.x, cursorScreen.y, settings.crosshairStyle);
+    if (cursorScreen) {
+      if (inputMode === 'touch') {
+        this.renderTouchAimReticle(ctx, cursorScreen.x, cursorScreen.y);
+      } else {
+        this.renderCrosshair(ctx, cursorScreen.x, cursorScreen.y, settings.crosshairStyle);
+      }
     }
   }
 
@@ -4536,6 +4543,7 @@ export class GameRenderer {
     playerY: number,
     inputMode: RenderInputDeviceMode = 'kbm',
     viewTop: number = 0,
+    gamepadFamily: GamepadFamily = 'generic',
   ): void {
     if (!state.player.alive || state.phase !== 'playing') return;
     let nearest: PickupEntity | null = null;
@@ -4553,9 +4561,10 @@ export class GameRenderer {
     }
     if (!nearest || !nearest.weaponId) return;
     const label = resolveWeaponLabel(nearest.weaponId, this.data);
+    const pickupGlyph = getGamepadGlyphs(gamepadFamily).pickup;
     const promptPrefix =
       inputMode === 'gamepad'
-        ? '@b[X]@w '
+        ? `@b[${pickupGlyph}]@w `
         : inputMode === 'touch'
           ? '@yUSE@w '
           : '@y[E]@w ';
@@ -4595,6 +4604,7 @@ export class GameRenderer {
     playerY: number,
     inputMode: RenderInputDeviceMode = 'kbm',
     viewTop: number = 0,
+    gamepadFamily: GamepadFamily = 'generic',
   ): void {
     if (!state.player.alive || state.phase !== 'playing') return;
     let nearest: PropEntity | null = null;
@@ -4614,9 +4624,10 @@ export class GameRenderer {
 
     const raw = nearest.interactPrompt.trim();
     const cleaned = raw.replace(/^\[E\]\s*/i, '');
+    const pickupGlyph = getGamepadGlyphs(gamepadFamily).pickup;
     const prefix =
       inputMode === 'gamepad'
-        ? '@b[X]@w '
+        ? `@b[${pickupGlyph}]@w `
         : inputMode === 'touch'
           ? '@yUSE@w '
           : '@y[E]@w ';
@@ -4647,6 +4658,48 @@ export class GameRenderer {
       outline: false,
       shadow: true,
     });
+  }
+
+  /**
+   * Sleek translucent aim reticle rendered during active touch twin-stick play so
+   * mobile players see exact shot alignment without an opaque desktop cursor.
+   */
+  renderTouchAimReticle(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    screenX: number,
+    screenY: number,
+  ): void {
+    const sx = Math.round(screenX);
+    const sy = Math.round(screenY);
+    const r = Math.round(5 + this.crosshairRecoil * 0.45);
+    const hitBoost = this.crosshairHitTicks > 0 ? 0.24 : 0;
+    const baseAlpha = Math.min(0.75, 0.48 + hitBoost);
+
+    ctx.save();
+    // Subtle dark outer halo for contrast on bright desert/snow floors
+    ctx.globalAlpha = baseAlpha * 0.55;
+    ctx.fillStyle = '#0c0814';
+    drawPixelRing(ctx, sx, sy, r + 1, 1);
+
+    // Thin 1px translucent gold-white pixel ring
+    ctx.globalAlpha = baseAlpha;
+    ctx.fillStyle = this.crosshairHitTicks > 0 ? '#ffe047' : '#fff3cc';
+    drawPixelRing(ctx, sx, sy, r, 1);
+
+    // Subtle short directional ticks outside the ring (N/S/E/W)
+    ctx.globalAlpha = baseAlpha * 0.92;
+    ctx.fillStyle = '#ffe89c';
+    ctx.fillRect(sx, sy - r - 3, 1, 2);
+    ctx.fillRect(sx, sy + r + 2, 1, 2);
+    ctx.fillRect(sx - r - 3, sy, 2, 1);
+    ctx.fillRect(sx + r + 2, sy, 2, 1);
+
+    // Tiny center dot
+    ctx.globalAlpha = Math.min(0.85, baseAlpha + 0.14);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(sx, sy, 1, 1);
+
+    ctx.restore();
   }
 
   renderCrosshair(

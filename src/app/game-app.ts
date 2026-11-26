@@ -8,6 +8,7 @@ import {
   type BossId,
   type CrownId,
   type DebugBridge,
+  type GamepadFamily,
   type GameScreen,
   type InputDeviceMode,
   type InputFrame,
@@ -33,7 +34,13 @@ import {
   type AssetBundle,
 } from '@/assets';
 import { AudioEngine } from '@/audio';
-import { InputManager, clientToLogicalCanvas } from '@/input';
+import {
+  InputManager,
+  clientToLogicalCanvas,
+  getGamepadGlyphs,
+  type GamepadDisconnectInfo,
+  type RumblePreset,
+} from '@/input';
 import { GameRenderer } from '@/render';
 import { stepSimulation, warpToArea } from '@/sim/ai';
 import { createRunState, populateAreaEntities, spawnBossEntity } from '@/sim/entities';
@@ -204,6 +211,11 @@ export class GameApp {
   private lastPickerOpenMs = 0;
   private fileInputEl: HTMLInputElement | null = null;
 
+  // Non-blocking pixel controller toast banner (connect / disconnect / rumble test)
+  private controllerToastText = '';
+  private controllerToastUntilSec = 0;
+  private controllerToastAccent = '#52e864';
+
   // Audio unlock resilience across mouse, touch, keyboard, and gamepad
   private audioUnlockDone = false;
   private audioUnlockInFlight = false;
@@ -266,6 +278,8 @@ export class GameApp {
     this.input = new InputManager(save.keybinds, {
       controls: save.controls,
       onUserInteraction: () => this.tryUnlockAudio(),
+      onGamepadConnect: (info) => this.handleGamepadConnected(info),
+      onGamepadDisconnect: (info) => this.handleGamepadDisconnected(info),
     });
     this.renderer = new GameRenderer(this.bundle, this.dataProvider);
     this.hud = new HudRenderer(this.bundle, this.dataProvider);
@@ -540,12 +554,15 @@ export class GameApp {
       // Capture high-Hz (60/120 FPS) gamepad button taps even on frames without a 30 Hz sim step
       if (this.simAccumulator < SIM_DT) {
         this.input.pollGamepad();
+        if (this.screen !== 'playing') {
+          screenTransitioned = true;
+        }
       }
 
       let stepsThisFrame = 0;
       const maxCatchupSteps = 4;
 
-      while (this.simAccumulator >= SIM_DT && stepsThisFrame < maxCatchupSteps) {
+      while (this.screen === 'playing' && this.simAccumulator >= SIM_DT && stepsThisFrame < maxCatchupSteps) {
         let inputFrame: InputFrame;
         if (this.simState.hitstopTicks > 0) {
           // During hitstop freeze, preserve buffered fire/active/swap/pickup presses while honoring immediate pause
@@ -559,6 +576,10 @@ export class GameApp {
             this.syncMusicRouting();
             break;
           }
+          if (this.screen !== 'playing') {
+            screenTransitioned = true;
+            break;
+          }
           inputFrame = { ...DEFAULT_IDLE_INPUT };
         } else {
           inputFrame = this.input.consumeSimInput(
@@ -567,6 +588,11 @@ export class GameApp {
             this.simState.player.y,
             { enemies: this.simState.enemies, map: this.simState.map },
           );
+
+          if (this.screen !== 'playing') {
+            screenTransitioned = true;
+            break;
+          }
 
           if (inputFrame.pausePressed) {
             this.screen = 'paused';
@@ -669,6 +695,8 @@ export class GameApp {
       gamepadConnected: gpInfo.connected,
       gamepadName: gpInfo.padName,
       gamepadProfile: gpInfo.profile,
+      gamepadFamily: gpInfo.family,
+      gamepadDebug: this.input.getGamepadDebugState(),
     };
 
     // Ensure hit regions are populated for this screen before sampling menu input
@@ -711,7 +739,14 @@ export class GameApp {
       const latestGp = this.input.getGamepadInfo();
       const curInputMode = this.input.getInputMode();
       if (this.simState && this.shouldRenderWorldBehindScreen(this.screen)) {
-        this.renderWorldWithMode(this.simState, latestSave.render, 1, undefined, curInputMode);
+        this.renderWorldWithMode(
+          this.simState,
+          latestSave.render,
+          1,
+          undefined,
+          curInputMode,
+          latestGp.family,
+        );
         if (this.shouldRenderHudBehindScreen(this.screen)) {
           this.renderHudWithMode(
             this.simState,
@@ -719,6 +754,7 @@ export class GameApp {
             curSize.width,
             curSize.height,
             curInputMode,
+            latestGp.family,
           );
         }
       } else if (this.screen === 'mutation_select' || this.screen === 'ultra_select') {
@@ -743,7 +779,10 @@ export class GameApp {
         gamepadConnected: latestGp.connected,
         gamepadName: latestGp.padName,
         gamepadProfile: latestGp.profile,
+        gamepadFamily: latestGp.family,
+        gamepadDebug: this.input.getGamepadDebugState(),
       });
+      this.renderControllerToast(curSize.width, false);
     }
     this.recordRenderedFrame(nowMs);
   }
@@ -754,16 +793,17 @@ export class GameApp {
     interpAlpha: number,
     pointerLogical: { x: number; y: number } | undefined,
     inputMode: InputDeviceMode,
+    gamepadFamily: GamepadFamily = 'generic',
   ): void {
-    const fn = this.renderer.renderWorld as (
-      ctx: CanvasRenderingContext2D,
-      state: SimState,
-      settings: RenderSettings,
-      interpAlpha: number,
-      pointerLogical?: { x: number; y: number },
-      inputMode?: InputDeviceMode,
-    ) => void;
-    fn.call(this.renderer, this.ctx, state, renderSettings, interpAlpha, pointerLogical, inputMode);
+    this.renderer.renderWorld(
+      this.ctx,
+      state,
+      renderSettings,
+      interpAlpha,
+      pointerLogical,
+      inputMode,
+      gamepadFamily,
+    );
   }
 
   private renderHudWithMode(
@@ -772,8 +812,9 @@ export class GameApp {
     width: number,
     height: number,
     inputMode: InputDeviceMode,
+    gamepadFamily: GamepadFamily = 'generic',
   ): void {
-    const hudCtx: HudRenderContext & { inputMode?: InputDeviceMode } = {
+    const hudCtx: HudRenderContext = {
       state,
       camera: this.renderer.getCamera(),
       renderSettings,
@@ -781,6 +822,7 @@ export class GameApp {
       width,
       height,
       inputMode,
+      gamepadFamily,
     };
     this.hud.render(this.ctx, hudCtx);
   }
@@ -825,8 +867,9 @@ export class GameApp {
     height: number,
   ): void {
     const inputMode = this.input.getInputMode();
-    this.renderWorldWithMode(state, renderSettings, interpAlpha, pointer, inputMode);
-    this.renderHudWithMode(state, renderSettings, width, height, inputMode);
+    const gpFamily = this.input.getGamepadInfo().family;
+    this.renderWorldWithMode(state, renderSettings, interpAlpha, pointer, inputMode, gpFamily);
+    this.renderHudWithMode(state, renderSettings, width, height, inputMode, gpFamily);
     // Strict visibility rule: renders ZERO pixels unless active touch mode is enabled
     this.input.renderTouchOverlay(
       this.ctx,
@@ -835,6 +878,73 @@ export class GameApp {
       this.hasNearbyInteractable(state),
       this.timeSec,
     );
+    this.renderControllerToast(width, true);
+  }
+
+  private formatControllerLabel(family: GamepadFamily): string {
+    const label = getGamepadGlyphs(family).familyLabel;
+    return family === 'tesla' || family === 'generic' ? label : `${label} CONTROLLER`;
+  }
+
+  private showControllerToast(text: string, durationSec: number, accent = '#52e864'): void {
+    this.controllerToastText = text;
+    this.controllerToastUntilSec = this.timeSec + durationSec;
+    this.controllerToastAccent = accent;
+  }
+
+  private handleGamepadConnected(info: {
+    padIndex: number;
+    padName: string | null;
+    family: GamepadFamily;
+  }): void {
+    const label = this.formatControllerLabel(info.family);
+    this.showControllerToast(`@g${label} CONNECTED`, 2.6, '#52e864');
+  }
+
+  private handleGamepadDisconnected(info: GamepadDisconnectInfo): void {
+    const label = this.formatControllerLabel(info.family);
+    if (this.screen === 'playing') {
+      this.screen = 'paused';
+      this.input.setGameplayActive(false);
+      this.audio.setPaused(true);
+      this.simAccumulator = 0;
+      this.presentationDt = 0;
+      this.input.clearMenuLatches();
+      this.syncMusicRouting();
+      this.showControllerToast(`@y${label} DISCONNECTED - PAUSED`, 3.6, '#ffe047');
+    } else {
+      this.showControllerToast(`@y${label} DISCONNECTED`, 2.5, '#ffe047');
+    }
+  }
+
+  private renderControllerToast(width: number, isGameplay: boolean): void {
+    if (!this.controllerToastText || this.timeSec >= this.controllerToastUntilSec) return;
+    const remaining = this.controllerToastUntilSec - this.timeSec;
+    const fadeAlpha = remaining < 0.35 ? Math.max(0, remaining / 0.35) : 1;
+    const fonts = this.renderer.getFontRenderer();
+    const measured = fonts.measure(this.controllerToastText, 'fntSmall');
+    const pillW = Math.min(width - 12, measured.width + 14);
+    const pillH = 13;
+    const px = Math.round((width - pillW) * 0.5);
+    const py = isGameplay ? 38 : 6;
+
+    this.ctx.save();
+    this.ctx.globalAlpha = fadeAlpha;
+    this.ctx.fillStyle = 'rgba(10, 8, 18, 0.90)';
+    this.ctx.fillRect(px, py, pillW, pillH);
+    this.ctx.fillStyle = this.controllerToastAccent;
+    this.ctx.fillRect(px, py, pillW, 1);
+    this.ctx.fillRect(px, py + pillH - 1, pillW, 1);
+    this.ctx.fillRect(px, py, 1, pillH);
+    this.ctx.fillRect(px + pillW - 1, py, 1, pillH);
+    this.ctx.fillRect(px + 2, py + 2, 2, pillH - 4);
+    fonts.draw(this.ctx, this.controllerToastText, Math.round(width * 0.5) + 1, py + 4, 'fntSmall', {
+      align: 'center',
+      baseline: 'top',
+      maxWidth: pillW - 10,
+      shadow: true,
+    });
+    this.ctx.restore();
   }
 
   private shouldRenderHudBehindScreen(screen: GameScreen): boolean {
@@ -994,34 +1104,42 @@ export class GameApp {
   }
 
   private triggerRumbleForEvents(events: readonly SimEvent[]): void {
-    if (this.input.getInputMode() !== 'gamepad') return;
+    const mode = this.input.getInputMode();
+    if (mode !== 'gamepad' && mode !== 'touch') return;
+    const pulse = (preset: RumblePreset): void => {
+      if (mode === 'gamepad') {
+        this.input.rumble(preset);
+      } else {
+        this.input.triggerTouchHapticForPreset(preset);
+      }
+    };
     for (let i = 0; i < events.length; i++) {
       const ev = events[i] as SimEvent | { type: string; killed?: boolean; speed?: number };
       if (ev.type === 'player_died') {
-        this.input.rumble('death');
+        pulse('death');
       } else if (ev.type === 'sfx') {
         const s = (ev as Extract<SimEvent, { type: 'sfx' }>).sound;
         if (s === 'sndExplosion') {
-          this.input.rumble('explosion');
+          pulse('explosion');
         } else if (s.startsWith('sndMutant') && s.endsWith('Hurt')) {
-          this.input.rumble('hurt');
-        } else if (s.endsWith('Die') || s === 'sndEnemyDie') {
+          pulse('hurt');
+        } else if (mode === 'gamepad' && (s.endsWith('Die') || s === 'sndEnemyDie')) {
           this.input.rumble('kill');
         }
       } else if (ev.type === 'shake') {
         const sh = ev as Extract<SimEvent, { type: 'shake' }>;
         if (sh.trauma >= 0.48) {
-          this.input.rumble('explosion');
+          pulse('explosion');
         } else if ((sh.kick ?? 0) >= 3.5 || sh.trauma >= 0.24) {
-          this.input.rumble('fire_heavy');
-        } else if ((sh.kick ?? 0) > 0 || sh.trauma >= 0.08) {
+          pulse('fire_heavy');
+        } else if (mode === 'gamepad' && ((sh.kick ?? 0) > 0 || sh.trauma >= 0.08)) {
           this.input.rumble('fire_light');
         }
       } else if (ev.type === 'melee_deflect') {
-        this.input.rumble('parry');
-      } else if (ev.type === 'hit_confirm' && (ev as { killed?: boolean }).killed) {
+        pulse('parry');
+      } else if (mode === 'gamepad' && ev.type === 'hit_confirm' && (ev as { killed?: boolean }).killed) {
         this.input.rumble('kill');
-      } else if (ev.type === 'corpse_impact') {
+      } else if (mode === 'gamepad' && ev.type === 'corpse_impact') {
         this.input.rumble('fire_light');
       }
     }
@@ -1406,6 +1524,17 @@ export class GameApp {
         break;
       }
 
+      case 'test_rumble': {
+        const ctrl = this.saveManager.getData().controls;
+        if (!ctrl.gamepadRumble) {
+          this.showControllerToast('@dENABLE RUMBLE TO TEST', 2.0, '#78708a');
+        } else {
+          this.input.testRumble();
+          this.showControllerToast('@gRUMBLE TEST', 2.0, '#52e864');
+        }
+        break;
+      }
+
       case 'begin_rebind': {
         this.rebindingField = action.field;
         this.input.beginKeyCapture();
@@ -1639,6 +1768,7 @@ export class GameApp {
         const boss = st?.boss;
         const bossId = boss && !boss.defeated ? boss.bossId : null;
         const targetFps: TargetFps = save.render.targetFps ?? (save.render.classic30Fps ? 30 : 120);
+        const gpInfo = this.input.getGamepadInfo();
         return {
           fps: this.measuredFps,
           targetFps,
@@ -1685,8 +1815,10 @@ export class GameApp {
           canvasHeight: LOGICAL_HEIGHT,
           consoleErrors: [...this.consoleErrors],
           inputMode: this.input.getInputMode(),
-          gamepadConnected: this.input.getGamepadInfo().connected,
-          gamepadName: this.input.getGamepadInfo().padName,
+          gamepadConnected: gpInfo.connected,
+          gamepadName: gpInfo.padName,
+          gamepadFamily: gpInfo.family,
+          gamepadProfile: gpInfo.profile,
           touchOverlayVisible: this.input.isTouchOverlayVisible(),
         };
       },

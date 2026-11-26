@@ -911,6 +911,8 @@ export interface KeyBindings {
 
 export type InputDeviceMode = 'kbm' | 'gamepad' | 'touch';
 
+export type GamepadFamily = 'xbox' | 'playstation' | 'nintendo' | 'tesla' | 'generic';
+
 export type TouchControlsMode = 'auto' | 'off';
 
 export interface ControlSettings {
@@ -1005,6 +1007,8 @@ export interface PlaytestTelemetry {
   inputMode?: InputDeviceMode;
   gamepadConnected?: boolean;
   gamepadName?: string | null;
+  gamepadFamily?: GamepadFamily;
+  gamepadProfile?: string | null;
   touchOverlayVisible?: boolean;
 }
 

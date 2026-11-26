@@ -2,6 +2,7 @@ import type {
   AudioSettings,
   ControlSettings,
   CrownId,
+  GamepadFamily,
   GameScreen,
   InputDeviceMode,
   KeyBindings,
@@ -19,6 +20,8 @@ import type { AssetBundle } from '@/assets';
 import {
   MAX_GAMEPAD_DEADZONE,
   MIN_GAMEPAD_DEADZONE,
+  getGamepadGlyphs,
+  type GamepadDebugSnapshot,
   type MenuInputSnapshot,
 } from '@/input';
 import { BitmapFontRenderer, wrapMarkupText } from '@/render/bitmap-font';
@@ -90,6 +93,7 @@ export type MenuAction =
   | { type: 'update_audio'; partial: Partial<AudioSettings> }
   | { type: 'update_render'; partial: Partial<RenderSettings> }
   | { type: 'update_controls'; partial: Partial<ControlSettings> }
+  | { type: 'test_rumble' }
   | { type: 'begin_rebind'; field: keyof KeyBindings }
   | { type: 'cancel_rebind' }
   | { type: 'rebind_key'; field: keyof KeyBindings; code: string }
@@ -117,6 +121,8 @@ export interface MenuRenderContext {
   gamepadConnected?: boolean;
   gamepadName?: string | null;
   gamepadProfile?: string | null;
+  gamepadFamily?: GamepadFamily;
+  gamepadDebug?: GamepadDebugSnapshot;
 }
 
 export type OptionsTab = 'general' | 'controls' | 'keybinds';
@@ -674,7 +680,7 @@ export class MenuSystem {
         if (input.nextTab) {
           actions.push({ type: 'cycle_crown', crown: this.cycleCrownFrom(ctx.save.selectedCrown, 1) });
         }
-        if (input.secondary) {
+        if (input.secondary && hasGold) {
           actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
         }
 
@@ -976,6 +982,11 @@ export class MenuSystem {
     }
 
     if (this.optionsTab === 'controls') {
+      if (input.tertiary) {
+        actions.push({ type: 'test_rumble' });
+        actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        return;
+      }
       const count = CONTROLS_OPTION_COUNT;
       if (input.navUp) {
         this.focusedIndex = (this.focusedIndex - 1 + count) % count;
@@ -1643,6 +1654,8 @@ export class MenuSystem {
       );
     }
 
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
+
     // Best run footer
     if (save.totalRuns > 0) {
       const best =
@@ -1653,7 +1666,7 @@ export class MenuSystem {
     } else if (mctx.inputMode === 'gamepad' || mctx.gamepadConnected) {
       this.fonts.draw(
         ctx,
-        '@gCONTROLLER READY  @d[LS/DPAD] MOVE  [A] SELECT',
+        `@g${g.familyLabel} READY  @d[LS/DPAD] MOVE  [${g.confirm}] SELECT`,
         cx,
         196,
         'fntSmall',
@@ -1663,7 +1676,7 @@ export class MenuSystem {
 
     // Subtle top-right connected controller badge when active
     if (mctx.gamepadConnected) {
-      this.fonts.draw(ctx, '@gPAD READY', width - 6, 5, 'fntSmall', {
+      this.fonts.draw(ctx, `@g${g.familyLabel} READY`, width - 6, 5, 'fntSmall', {
         align: 'right',
         outline: true,
       });
@@ -2185,14 +2198,15 @@ export class MenuSystem {
     // 5. Header & Top-Left Back button
     const inActions = this.campfireRow === 'actions';
     const inputMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     this.drawButton(
       ctx,
       'camp_back',
       4,
       2,
-      44,
+      48,
       13,
-      inputMode === 'gamepad' ? 'BACK [B]' : 'BACK',
+      inputMode === 'gamepad' ? `BACK [${g.back}]` : 'BACK',
       () => ({ type: 'open_screen', screen: 'title' }),
       {
         font: 'fntSmall',
@@ -2280,7 +2294,7 @@ export class MenuSystem {
     const goX = goldX + goldW + gap;
     const goLabel =
       inputMode === 'gamepad'
-        ? '@gGO! [A]'
+        ? `@gGO! [${g.confirm}]`
         : inputMode === 'touch'
           ? '@gGO!'
           : '@gGO! [ENTER]';
@@ -2385,7 +2399,7 @@ export class MenuSystem {
     // Active mutant short name & adaptive input hint under strip
     const campHint =
       inputMode === 'gamepad'
-        ? `@y[A] @w${selected.name}  @d[LB]SKIN [RB]CRN [Y]GOLD [UP]BAR`
+        ? `@y[${g.confirm}] @w${selected.name}  @d[${g.prevTab}]SKIN [${g.nextTab}]CRN [${g.swap}]GOLD [UP]BAR`
         : inputMode === 'touch'
           ? `@w${selected.name}  @dTAP MUTANT OR GO TO PLAY`
           : `@y< A / D > @w${selected.name}  @d(UP/DOWN LOADOUT - ENTER PLAY)`;
@@ -2420,9 +2434,10 @@ export class MenuSystem {
       outline: true,
     });
     const mutInputMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const mutPrompt =
       mutInputMode === 'gamepad'
-        ? '@dCHOOSE ONE  ([LS/DPAD] BROWSE  [A] PICK)'
+        ? `@dCHOOSE ONE  ([LS/DPAD] BROWSE  [${g.confirm}] PICK)`
         : mutInputMode === 'touch'
           ? '@dTAP A MUTATION TO SELECT'
           : list.length <= 1
@@ -2690,9 +2705,10 @@ export class MenuSystem {
     }
 
     const uInput = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const uPrompt =
       uInput === 'gamepad'
-        ? '@d[L/R] BROWSE  [A] CONFIRM ULTRA'
+        ? `@d[L/R] BROWSE  [${g.confirm}] CONFIRM ULTRA`
         : uInput === 'touch'
           ? '@dTAP AN ULTRA CARD TO EVOLVE'
           : '@dCLICK OR KEYS 1-2 / ENTER TO EVOLVE';
@@ -2769,9 +2785,10 @@ export class MenuSystem {
       { accent: '#ffe047', focused: this.focusedIndex === 1, font: 'fntSmall' },
     );
     const pauseMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const restartLabel =
       pauseMode === 'gamepad'
-        ? 'RESTART [BACK]'
+        ? `RESTART [${g.retry}]`
         : pauseMode === 'touch'
           ? 'RESTART'
           : 'RESTART [R]';
@@ -2994,6 +3011,7 @@ export class MenuSystem {
   ): void {
     const { width, height, save, returnScreenFromOptions, rebindingField } = mctx;
     const inputMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const cx = Math.round(width * 0.5);
 
     ctx.fillStyle = OPAQUE_MENU_BACKDROP;
@@ -3014,9 +3032,9 @@ export class MenuSystem {
       'opt_back',
       px + 6,
       modalY + 5,
-      48,
+      50,
       15,
-      inputMode === 'gamepad' ? 'BACK [B]' : 'BACK',
+      inputMode === 'gamepad' ? `BACK [${g.back}]` : 'BACK',
       () => ({
         type: 'open_screen',
         screen: returnScreenFromOptions,
@@ -3031,7 +3049,7 @@ export class MenuSystem {
     });
 
     if (inputMode === 'gamepad') {
-      this.fonts.draw(ctx, '@d[LB/RB]', px + panelW - 8, modalY + 9, 'fntSmall', {
+      this.fonts.draw(ctx, `@d[${g.prevTab}/${g.nextTab}]`, px + panelW - 8, modalY + 9, 'fntSmall', {
         align: 'right',
         outline: true,
       });
@@ -3263,7 +3281,7 @@ export class MenuSystem {
 
       const genFooter =
         inputMode === 'gamepad'
-          ? '@d[UP/DN] SELECT  [L/R] SLIDER  [A] TOGGLE  [B] BACK'
+          ? `@d[UP/DN] SELECT  [L/R] SLIDER  [${g.confirm}] TOGGLE  [${g.back}] BACK`
           : '@dCLICK, DRAG, OR ARROWS - SETTINGS AUTO-SAVE';
       this.fonts.draw(ctx, genFooter, cx, modalY + panelH - 12, 'fntSmall', { align: 'center' });
     } else if (this.optionsTab === 'controls') {
@@ -3337,8 +3355,8 @@ export class MenuSystem {
         contentW,
         18,
         ctrl.touchMode === 'auto'
-          ? 'TOUCH CONTROLS: @gAUTO (TOUCH ONLY)'
-          : 'TOUCH CONTROLS: @dOFF',
+          ? 'TOUCH STICKS: @gAUTO (TOUCH ONLY)'
+          : 'TOUCH STICKS: @dOFF',
         () => ({
           type: 'update_controls',
           partial: { touchMode: ctrl.touchMode === 'auto' ? 'off' : 'auto' },
@@ -3349,54 +3367,134 @@ export class MenuSystem {
           focused: this.focusedIndex === 3,
         },
       );
-      y += 24;
+      y += 23;
 
-      // Live PC / Tesla Controller Status & Compact Legend Card
-      const boxH = 54;
-      ctx.fillStyle = 'rgba(12, 10, 18, 0.85)';
+      // Live PC / Tesla / Console Controller Status, Mini Stick/Trigger Telemetry & Dynamic Legend Card
+      const boxH = 58;
+      const canTestRumble = Boolean(mctx.gamepadConnected || inputMode === 'touch');
+      const cardHovered = canTestRumble && this.hoveredId === 'opt_ctrl_pad_status';
+      ctx.fillStyle = cardHovered ? 'rgba(26, 22, 38, 0.92)' : 'rgba(12, 10, 18, 0.85)';
       ctx.fillRect(contentX, y, contentW, boxH);
-      drawPixelBorder(ctx, contentX, y, contentW, boxH, mctx.gamepadConnected ? '#52e864' : '#4a4358', 1);
+      drawPixelBorder(
+        ctx,
+        contentX,
+        y,
+        contentW,
+        boxH,
+        cardHovered ? '#ffe047' : mctx.gamepadConnected ? '#52e864' : '#4a4358',
+        1,
+      );
+
+      if (canTestRumble) {
+        this.regions.push({
+          id: 'opt_ctrl_pad_status',
+          x: contentX,
+          y,
+          w: contentW,
+          h: boxH,
+          onActivate: () => ({ type: 'test_rumble' }),
+        });
+      }
 
       const rawName = (mctx.gamepadName ?? '').trim().toUpperCase();
-      const shortName = rawName.length > 26 ? `${rawName.slice(0, 25)}.` : rawName;
+      const shortName = rawName.length > 20 ? `${rawName.slice(0, 19)}.` : rawName;
       const profileTag =
         mctx.gamepadProfile === 'standard'
           ? 'STD'
-          : mctx.gamepadProfile === 'linux-xpad' || mctx.gamepadProfile === 'sony-hid'
-            ? 'EVDEV'
-            : mctx.gamepadProfile
-              ? 'COMPAT'
-              : '';
+          : mctx.gamepadProfile === 'linux-xpad'
+            ? 'XPAD'
+            : mctx.gamepadProfile === 'xbox-bt-hid'
+              ? 'BT-HID'
+              : mctx.gamepadProfile === 'sony-hid'
+                ? 'SONY'
+                : mctx.gamepadProfile === 'nintendo-hid'
+                  ? 'NSW'
+                  : mctx.gamepadProfile === 'logitech-dinput'
+                    ? 'DINPUT'
+                    : mctx.gamepadProfile
+                      ? 'COMPAT'
+                      : '';
       const padLine = mctx.gamepadConnected
-        ? `@gCONNECTED: @w${shortName || 'CONTROLLER'} @d(${profileTag})`
+        ? `@g${g.familyLabel}: @w${shortName || 'CONNECTED'}${profileTag ? ` @d(${profileTag})` : ''}`
         : '@dNO CONTROLLER DETECTED - PRESS ANY PAD BUTTON';
-      this.fonts.draw(ctx, padLine, cx, y + 7, 'fntSmall', {
+      this.fonts.draw(ctx, padLine, cx, y + 5, 'fntSmall', {
         align: 'center',
         maxWidth: contentW - 10,
         outline: true,
       });
 
+      // Live crisp mini stick-dot pads (LS / RS) + LT / RT trigger bars inside left/right corners
+      const dbg = mctx.gamepadDebug;
+      if (mctx.gamepadConnected && dbg) {
+        const padSize = 14;
+        const padY = y + 20;
+        const clampUnit = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
+
+        // Left Stick micro-pad + LT bar
+        const lsX = contentX + 5;
+        ctx.fillStyle = '#090710';
+        ctx.fillRect(lsX, padY, padSize, padSize);
+        drawPixelBorder(ctx, lsX, padY, padSize, padSize, '#504866', 1);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+        ctx.fillRect(lsX + 6, padY + 6, 2, 2);
+        const lDotX = Math.round(lsX + 6 + clampUnit(dbg.lx) * 5);
+        const lDotY = Math.round(padY + 6 + clampUnit(dbg.ly) * 5);
+        ctx.fillStyle = '#52e864';
+        ctx.fillRect(lDotX, lDotY, 2, 2);
+
+        const ltX = lsX + padSize + 2;
+        ctx.fillStyle = dbg.lt ? '#52a8ff' : '#242032';
+        ctx.fillRect(ltX, padY, 3, padSize);
+        drawPixelBorder(ctx, ltX, padY, 3, padSize, dbg.lt ? '#a6dcff' : '#4a4358', 1);
+
+        // Right Stick micro-pad + RT bar
+        const rsX = contentX + contentW - 5 - padSize;
+        const rtX = rsX - 5;
+        ctx.fillStyle = dbg.rt ? '#ff6a38' : '#242032';
+        ctx.fillRect(rtX, padY, 3, padSize);
+        drawPixelBorder(ctx, rtX, padY, 3, padSize, dbg.rt ? '#ffb48a' : '#4a4358', 1);
+
+        ctx.fillStyle = '#090710';
+        ctx.fillRect(rsX, padY, padSize, padSize);
+        drawPixelBorder(ctx, rsX, padY, padSize, padSize, '#504866', 1);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+        ctx.fillRect(rsX + 6, padY + 6, 2, 2);
+        const rDotX = Math.round(rsX + 6 + clampUnit(dbg.rx) * 5);
+        const rDotY = Math.round(padY + 6 + clampUnit(dbg.ry) * 5);
+        ctx.fillStyle = '#ffe047';
+        ctx.fillRect(rDotX, rDotY, 2, 2);
+      }
+
       this.fonts.draw(
         ctx,
-        '@yLS@w MOVE  @yRS@w AIM  @yRT/RB@w FIRE  @yLT/LB@w ACT',
+        `@yLS@w MOVE @yRS@w AIM @y${g.fire}/${g.nextTab}@w FIRE @y${g.active}/${g.prevTab}@w ACT`,
         cx,
-        y + 24,
+        y + 19,
         'fntSmall',
         { align: 'center', outline: true },
       );
       this.fonts.draw(
         ctx,
-        '@yY@w SWAP  @yA/X@w USE  @ySTART@w PAUSE  @yBACK@w RETRY',
+        `@y${g.swap}@w SWAP @y${g.confirm}/${g.pickup}@w USE @y${g.pause}@w PAUSE @y${g.retry}@w RETRY`,
         cx,
-        y + 38,
+        y + 31,
         'fntSmall',
         { align: 'center', outline: true },
       );
 
-      // Fixed "PC & TESLA" -> "PC / TESLA" (Steam fntSmall garbles '&'!)
+      const rumbleLine = mctx.gamepadConnected
+        ? `@b[${g.pickup}] TEST RUMBLE  @d(CLICK CARD)`
+        : inputMode === 'touch'
+          ? '@bTAP CARD TO TEST HAPTICS'
+          : '@dXBOX / PLAYSTATION / NINTENDO / TESLA READY';
+      this.fonts.draw(ctx, rumbleLine, cx, y + 45, 'fntSmall', {
+        align: 'center',
+        outline: mctx.gamepadConnected,
+      });
+
       const ctrlFooter =
         inputMode === 'gamepad'
-          ? '@d[LB/RB] TABS  [L/R] ADJUST  [A] TOGGLE  [B] BACK'
+          ? `@d[${g.prevTab}/${g.nextTab}] TABS  [L/R] ADJUST  [${g.confirm}] TOGGLE  [${g.back}] BACK`
           : '@dPC / TESLA GAMEPAD + TOUCH AUTO-DETECT';
       this.fonts.draw(ctx, ctrlFooter, cx, modalY + panelH - 12, 'fntSmall', {
         align: 'center',
@@ -3801,11 +3899,12 @@ export class MenuSystem {
 
     // Bottom buttons: RETRY & CAMPFIRE
     const endMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const retryBtnLabel =
       endMode === 'gamepad'
         ? victory
-          ? 'NEW RUN [BACK]'
-          : 'RETRY [BACK]'
+          ? `NEW RUN [${g.retry}]`
+          : `RETRY [${g.retry}]`
         : endMode === 'touch'
           ? victory
             ? 'NEW RUN'
@@ -3813,7 +3912,7 @@ export class MenuSystem {
           : victory
             ? 'NEW RUN [R]'
             : 'RETRY [R]';
-    const campBtnLabel = endMode === 'gamepad' ? 'CAMPFIRE [B]' : 'CAMPFIRE';
+    const campBtnLabel = endMode === 'gamepad' ? `CAMPFIRE [${g.back}]` : 'CAMPFIRE';
 
     const btnY = cardY + cardH + 10;
     const btnW = 104;

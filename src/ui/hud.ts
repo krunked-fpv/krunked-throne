@@ -1,5 +1,6 @@
-import type { AmmoType, RenderSettings, SimState } from '@/contracts';
+import type { AmmoType, GamepadFamily, RenderSettings, SimState } from '@/contracts';
 import type { AssetBundle } from '@/assets';
+import { getGamepadGlyphs } from '@/input';
 import { BitmapFontRenderer } from '@/render/bitmap-font';
 import type { CameraController } from '@/render/camera';
 import { SpriteRenderer } from '@/render/sprites';
@@ -36,6 +37,7 @@ export interface HudRenderContext {
   width: number;
   height: number;
   inputMode?: HudInputDeviceMode;
+  gamepadFamily?: GamepadFamily;
 }
 
 const AMMO_TYPE_ACCENT: Record<AmmoType, string> = {
@@ -307,6 +309,7 @@ export class HudRenderer {
   ): void {
     const { state, camera, renderSettings, fps, width, height } = hud;
     const inputMode: HudInputDeviceMode = hud.inputMode ?? 'kbm';
+    const gamepadFamily: GamepadFamily = hud.gamepadFamily ?? 'generic';
     ctx.imageSmoothingEnabled = false;
 
     // Match authentic Nuclear Throne: hide normal HUD during active Boss Intro splash
@@ -316,7 +319,7 @@ export class HudRenderer {
     }
 
     this.renderTopLeftVitals(ctx, state);
-    this.renderWeaponsAndAmmo(ctx, state, width, inputMode);
+    this.renderWeaponsAndAmmo(ctx, state, width, inputMode, gamepadFamily);
     this.renderTopRightStats(ctx, state, renderSettings, fps, width);
     this.renderMutationIcons(ctx, state);
     this.renderOffscreenChestIndicators(ctx, state, camera, width, height);
@@ -561,6 +564,7 @@ export class HudRenderer {
     state: SimState,
     width: number,
     inputMode: HudInputDeviceMode,
+    gamepadFamily: GamepadFamily = 'generic',
   ): void {
     const player = state.player;
     const activeSlot = player.weapons[player.activeSlot];
@@ -660,7 +664,13 @@ export class HudRenderer {
       const secDef = this.data.getWeapon(secondarySlot.weaponId);
       const secAccent = AMMO_TYPE_ACCENT[secDef?.ammoType ?? 'melee'] ?? '#8a8e9e';
       const showSwapBadge = inputMode !== 'touch';
-      const badgeReserveW = showSwapBadge ? 10 : 0;
+      const swapKey =
+        inputMode === 'gamepad' ? getGamepadGlyphs(gamepadFamily).swap : 'Q';
+      const measuredSwap = showSwapBadge
+        ? this.fonts.measure(swapKey, 'fntSmall')
+        : { width: 0, height: 0 };
+      const swapTagW = showSwapBadge ? Math.max(9, measuredSwap.width + 4) : 0;
+      const badgeReserveW = showSwapBadge ? swapTagW + 1 : 0;
 
       ctx.fillStyle = 'rgba(10, 8, 16, 0.58)';
       ctx.fillRect(boxX, boxY, boxW, boxH);
@@ -717,8 +727,7 @@ export class HudRenderer {
 
       // Dedicated swap key badge tucked cleanly in top-right corner outside barrel clip region
       if (showSwapBadge) {
-        const swapKey = inputMode === 'gamepad' ? 'Y' : 'Q';
-        const tagW = 9;
+        const tagW = swapTagW;
         const tagH = 8;
         const tagX = boxX + boxW - tagW - 1;
         const tagY = boxY + 1;
@@ -727,7 +736,7 @@ export class HudRenderer {
         ctx.fillStyle = 'rgba(130, 126, 152, 0.45)';
         ctx.fillRect(tagX, tagY, 1, tagH);
         ctx.fillRect(tagX, tagY + tagH - 1, tagW, 1);
-        this.fonts.draw(ctx, swapKey, tagX + Math.floor(tagW / 2) + 1, tagY + 1, 'fntSmall', {
+        this.fonts.draw(ctx, swapKey, tagX + Math.ceil(tagW / 2), tagY + 1, 'fntSmall', {
           align: 'center',
           color: inputMode === 'gamepad' ? '#ffe047' : '#c8cde0',
           shadow: true,
