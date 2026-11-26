@@ -782,7 +782,7 @@ export class GameApp {
         gamepadFamily: latestGp.family,
         gamepadDebug: this.input.getGamepadDebugState(),
       });
-      this.renderControllerToast(curSize.width, false);
+      this.renderControllerToast(curSize.width, curSize.height, false);
     }
     this.recordRenderedFrame(nowMs);
   }
@@ -878,7 +878,7 @@ export class GameApp {
       this.hasNearbyInteractable(state),
       this.timeSec,
     );
-    this.renderControllerToast(width, true);
+    this.renderControllerToast(width, height, true);
   }
 
   private formatControllerLabel(family: GamepadFamily): string {
@@ -917,16 +917,17 @@ export class GameApp {
     }
   }
 
-  private renderControllerToast(width: number, isGameplay: boolean): void {
+  private renderControllerToast(width: number, height: number, isGameplay: boolean): void {
     if (!this.controllerToastText || this.timeSec >= this.controllerToastUntilSec) return;
     const remaining = this.controllerToastUntilSec - this.timeSec;
     const fadeAlpha = remaining < 0.35 ? Math.max(0, remaining / 0.35) : 1;
     const fonts = this.renderer.getFontRenderer();
     const measured = fonts.measure(this.controllerToastText, 'fntSmall');
     const pillW = Math.min(width - 12, measured.width + 14);
-    const pillH = 13;
+    const pillH = this.screen === 'options' ? 11 : 13;
     const px = Math.round((width - pillW) * 0.5);
-    const py = isGameplay ? 38 : 6;
+    const py = this.screen === 'options' ? height - pillH - 1 : isGameplay ? 38 : 6;
+    const textOffsetY = this.screen === 'options' ? 3 : 4;
 
     this.ctx.save();
     this.ctx.globalAlpha = fadeAlpha;
@@ -938,7 +939,7 @@ export class GameApp {
     this.ctx.fillRect(px, py, 1, pillH);
     this.ctx.fillRect(px + pillW - 1, py, 1, pillH);
     this.ctx.fillRect(px + 2, py + 2, 2, pillH - 4);
-    fonts.draw(this.ctx, this.controllerToastText, Math.round(width * 0.5) + 1, py + 4, 'fntSmall', {
+    fonts.draw(this.ctx, this.controllerToastText, Math.round(width * 0.5) + 1, py + textOffsetY, 'fntSmall', {
       align: 'center',
       baseline: 'top',
       maxWidth: pillW - 10,

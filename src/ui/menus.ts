@@ -3397,7 +3397,7 @@ export class MenuSystem {
       }
 
       const rawName = (mctx.gamepadName ?? '').trim().toUpperCase();
-      const shortName = rawName.length > 20 ? `${rawName.slice(0, 19)}.` : rawName;
+      const shortName = rawName.length > 20 ? `${rawName.slice(0, 19).trimEnd()}.` : rawName;
       const profileTag =
         mctx.gamepadProfile === 'standard'
           ? 'STD'
