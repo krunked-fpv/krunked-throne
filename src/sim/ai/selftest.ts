@@ -119,17 +119,23 @@ function runTest1AllBiomesAndLoopPopulation(): void {
     { code: '7-1', loop: 0, expectMinHostiles: 5 },
     { code: '7-3', loop: 0, expectBoss: 'nuclear_throne', expectMinHostiles: 1 },
     { code: '0-1', loop: 0, expectBoss: 'throne_ii', expectMinHostiles: 1 },
-    { code: 'vault', loop: 0, expectMinHostiles: 1 },
+    { code: 'vault', loop: 0, expectMinHostiles: 0 },
+    { code: '$$$', loop: 0, expectMinHostiles: 0 },
     { code: '1-?', loop: 0, expectMinHostiles: 3 },
-    { code: '2-?', loop: 0, expectMinHostiles: 3 },
+    { code: '2-?', loop: 0, expectMinHostiles: 5 },
     { code: '3-?', loop: 0, expectMinHostiles: 3 },
     { code: '4-?', loop: 0, expectMinHostiles: 3 },
     { code: '5-?', loop: 0, expectMinHostiles: 3 },
     { code: 'hq-1', loop: 0, expectMinHostiles: 4 },
-    // Loop 1 across biomes!
+    { code: 'hq-2', loop: 1, expectMinHostiles: 4 },
+    { code: 'hq-3', loop: 1, expectBoss: 'captain', expectMinHostiles: 1 },
+    // Loop 1 across biomes including Loop 1+ bosses!
     { code: '1-1', loop: 1, expectMinHostiles: 6 },
+    { code: '2-1', loop: 1, expectBoss: 'mom', expectMinHostiles: 6 },
     { code: '3-3', loop: 1, expectBoss: 'big_dog', expectMinHostiles: 8 },
+    { code: '4-1', loop: 1, expectBoss: 'hyper_crystal', expectMinHostiles: 6 },
     { code: '5-3', loop: 1, expectBoss: 'lil_hunter', expectMinHostiles: 8 },
+    { code: '6-1', loop: 1, expectBoss: 'technomancer', expectMinHostiles: 6 },
     { code: '7-3', loop: 1, expectBoss: 'nuclear_throne', expectMinHostiles: 1 },
     { code: '0-1', loop: 1, expectBoss: 'throne_ii', expectMinHostiles: 1 },
   ];
@@ -151,6 +157,14 @@ function runTest1AllBiomesAndLoopPopulation(): void {
       state.levelStartEnemyCount === hostiles.length,
       `${tc.code}@L${tc.loop}: levelStartEnemyCount (${state.levelStartEnemyCount}) !== hostiles (${hostiles.length})`,
     );
+
+    if (tc.code === 'vault') {
+      const statues = state.props.filter((p) => p.kind === 'vault_statue');
+      assert(statues.length === 2, `vault expected 2 dormant vault_statue props, got ${statues.length}`);
+    }
+    if (tc.code === '$$$') {
+      assert(hostiles.length === 0, `$$$ Crib must have 0 enemies, got ${hostiles.length}`);
+    }
 
     if (tc.expectBoss) {
       assert(
@@ -176,35 +190,41 @@ function runTest1AllBiomesAndLoopPopulation(): void {
   }
 
   console.log(
-    `[PASS 1/5] All 7 biomes + 0-1 + vault + secrets + Loop 1 populated safely (${testAreas.length} areas, ${totalEnemiesChecked} enemies, ${totalPropsChecked} props, 0 in solid walls, 0 NaNs, all >=96px away)`,
+    `[PASS 1/5] All biomes + 0-1 + vault + $$$ + hq-1..3 + secrets + Loop 1 populated safely (${testAreas.length} areas, ${totalEnemiesChecked} enemies, ${totalPropsChecked} props, 0 in solid walls, 0 NaNs, all >=96px away)`,
   );
 }
 
 /**
- * TEST 2: All 5 Bosses (big_bandit, big_dog, lil_hunter, nuclear_throne, throne_ii)
- * spawn, execute multi-phase AI attacks across 180 ticks without errors/NaNs, take damage,
- * and cleanly open the next-area portal on defeat (including 7-3 generators -> 0-1 Throne II -> Loop 1-1!).
+ * TEST 2: All 9 Bosses (big_bandit, big_dog, lil_hunter, nuclear_throne, throne_ii,
+ * mom, hyper_crystal, technomancer, captain) spawn, execute multi-phase AI across 180 ticks,
+ * take damage, and cleanly complete their defeat outcome (portal or Captain victory)!
  */
-function runTest2AllFiveBossesAndLoopChain(): void {
-  const bossAreaMap: Partial<Record<BossId, { area: AreaCode; nextArea: AreaCode; nextLoop: number }>> = {
-    big_bandit: { area: '1-3', nextArea: '2-1', nextLoop: 0 },
-    big_dog: { area: '3-3', nextArea: '4-1', nextLoop: 0 },
-    lil_hunter: { area: '5-3', nextArea: '6-1', nextLoop: 0 },
-    nuclear_throne: { area: '7-3', nextArea: '0-1', nextLoop: 0 },
-    throne_ii: { area: '0-1', nextArea: '1-1', nextLoop: 1 },
+function runTest2AllNineBossesAndLoopChain(): void {
+  const bossAreaMap: Record<
+    BossId,
+    { area: AreaCode; loop: number; nextArea?: AreaCode; nextLoop?: number; victory?: boolean }
+  > = {
+    big_bandit: { area: '1-3', loop: 0, nextArea: '2-1', nextLoop: 0 },
+    big_dog: { area: '3-3', loop: 0, nextArea: '4-1', nextLoop: 0 },
+    lil_hunter: { area: '5-3', loop: 0, nextArea: '6-1', nextLoop: 0 },
+    nuclear_throne: { area: '7-3', loop: 0, nextArea: '0-1', nextLoop: 0 },
+    throne_ii: { area: '0-1', loop: 0, nextArea: '1-1', nextLoop: 1 },
+    mom: { area: '2-1', loop: 1, nextArea: '3-1', nextLoop: 1 },
+    hyper_crystal: { area: '4-1', loop: 1, nextArea: '5-1', nextLoop: 1 },
+    technomancer: { area: '6-1', loop: 1, nextArea: '7-1', nextLoop: 1 },
+    captain: { area: 'hq-3', loop: 1, victory: true },
   };
   assert(BOSS_IDS.length === 9, `Expected 9 BOSS_IDS, got ${BOSS_IDS.length}`);
 
   const bossSummary: string[] = [];
 
   for (const bossId of BOSS_IDS) {
-    const cfg = bossAreaMap[bossId];
-    if (!cfg) continue; // Wave 2B: mom, hyper_crystal, technomancer, captain AI added in Wave 2B
+    const cfg = bossAreaMap[bossId]!;
     const state = createRunState({ mutant: 'crystal', seed: 5000 + bossId.length });
     state.player.godMode = true;
-    warpToArea(state, cfg.area, 0);
+    warpToArea(state, cfg.area, cfg.loop);
 
-    // Clear non-boss enemies so boss defeat cleanly tests portal open invariant
+    // Clear non-boss enemies so boss defeat cleanly tests portal open / victory invariant
     state.enemies = state.enemies.filter((e) => e.isBoss);
     let boss = state.enemies.find((e) => e.bossId === bossId);
     if (!boss) {
@@ -214,9 +234,9 @@ function runTest2AllFiveBossesAndLoopChain(): void {
     }
     assert(boss && state.boss?.bossId === bossId, `Failed to spawn boss ${bossId}`);
 
-    // Poke sleeping bosses (Big Dog, Nuclear Throne) so they wake and exercise all attack phases!
+    // Poke sleeping/passive bosses (Big Dog, Nuclear Throne, Captain) so they wake and exercise all attack phases!
     const wakeRng = SeededRng.fromState(state.rngState);
-    if (bossId === 'big_dog' || bossId === 'nuclear_throne') {
+    if (bossId === 'big_dog' || bossId === 'nuclear_throne' || bossId === 'captain') {
       applyDamageToEnemy(state, boss, 5, 0, 0, wakeRng);
     }
     state.rngState = wakeRng.getState();
@@ -237,6 +257,7 @@ function runTest2AllFiveBossesAndLoopChain(): void {
 
     const observedStates = new Set<string>();
     let totalEnemyProjectilesSeen = 0;
+    let totalBossActivitySeen = 0;
     let damagedDuringFight = false;
     const preHp = boss.hp;
 
@@ -268,6 +289,13 @@ function runTest2AllFiveBossesAndLoopChain(): void {
       for (const pr of state.projectiles) {
         if (pr.team === 'enemy') totalEnemyProjectilesSeen += 1;
       }
+      if (
+        bossId === 'technomancer' &&
+        (state.enemies.some((e) => e.defId === 'turret') ||
+          state.props.some((p) => p.kind === 'necro_revive_area'))
+      ) {
+        totalBossActivitySeen += 1;
+      }
       assertAllCoordsFiniteAndWalkable(state, `boss:${bossId}@t${t}`, false);
     }
 
@@ -276,57 +304,64 @@ function runTest2AllFiveBossesAndLoopChain(): void {
       `Boss ${bossId} only exhibited ${observedStates.size} AI state(s): ${[...observedStates].join(',')}`,
     );
     assert(
-      totalEnemyProjectilesSeen > 0,
-      `Boss ${bossId} fired 0 projectiles across 180 ticks`,
+      totalEnemyProjectilesSeen > 0 || totalBossActivitySeen > 0,
+      `Boss ${bossId} produced 0 attacks/summons across 180 ticks`,
     );
 
-    // Now finish off the boss (clear invulnerability if Lil' Hunter happens to be mid-jetpack)
-    const liveBoss = state.enemies.find((e) => e.id === boss!.id);
-    if (liveBoss) {
-      liveBoss.invulnerable = false;
-      const killRng = SeededRng.fromState(state.rngState);
-      applyDamageToEnemy(state, liveBoss, liveBoss.hp + 999, 1, 0, killRng);
-      state.rngState = killRng.getState();
-      damagedDuringFight = true;
+    // Finish off all living hostiles (handles multi-station Technomancer + any boss summons!)
+    const killRng = SeededRng.fromState(state.rngState);
+    for (const e of [...state.enemies]) {
+      if (!e.friendly && e.hp > 0) {
+        e.invulnerable = false;
+        applyDamageToEnemy(state, e, e.hp + 999, 1, 0, killRng);
+        damagedDuringFight = true;
+      }
     }
+    state.rngState = killRng.getState();
     assert(damagedDuringFight, `Boss ${bossId} never took damage`);
 
-    // Step through hitstop + death resolution (incl. Lil' Hunter's visible jetpack death spiral!) so portal opens cleanly
-    for (let k = 0; k < 50 && !state.portal.active; k++) {
+    // Step through hitstop + death resolution (incl. Lil' Hunter's visible jetpack death spiral!)
+    for (let k = 0; k < 50 && !state.portal.active && state.phase === 'playing'; k++) {
       stepSimulation(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }));
     }
 
     assert(state.boss?.defeated === true, `Boss ${bossId} not marked defeated`);
-    assert(state.portal.active, `Portal did not open after defeating ${bossId}`);
-    assert(
-      state.portal.targetArea === cfg.nextArea && state.portal.nextLoop === cfg.nextLoop,
-      `Boss ${bossId} portal expected ${cfg.nextArea}@L${cfg.nextLoop}, got ${state.portal.targetArea}@L${state.portal.nextLoop}`,
-    );
-
-    // For 7-3 -> 0-1 and 0-1 -> 1-1 Loop 1, actually walk into portal and verify area transition!
-    if (bossId === 'nuclear_throne' || bossId === 'throne_ii') {
-      state.player.x = state.portal.x;
-      state.player.y = state.portal.y;
-      for (let k = 0; k < 40 && state.areaCode === cfg.area; k++) {
-        const selectIndex =
-          state.phase === 'mutation_select' || state.phase === 'ultra_select' ? 0 : undefined;
-        stepSimulation(
-          state,
-          makeInput({ aimWorldX: state.player.x, aimWorldY: state.player.y, selectIndex }),
-        );
-      }
+    if (cfg.victory) {
+      assert(state.phase === 'victory_throne', `Captain defeat did not trigger victory_throne`);
+      assert(state.endingType === 'captain', `Captain defeat did not set endingType='captain'`);
+      bossSummary.push(`${bossId}(states=${observedStates.size},END2)`);
+    } else {
+      assert(state.portal.active, `Portal did not open after defeating ${bossId}`);
       assert(
-        state.areaCode === cfg.nextArea && state.loop === cfg.nextLoop,
-        `Portal transition from ${cfg.area} failed: got ${state.areaCode}@L${state.loop}`,
+        state.portal.targetArea === cfg.nextArea && state.portal.nextLoop === cfg.nextLoop,
+        `Boss ${bossId} portal expected ${cfg.nextArea}@L${cfg.nextLoop}, got ${state.portal.targetArea}@L${state.portal.nextLoop}`,
       );
-      if (bossId === 'nuclear_throne') {
-        assert(state.boss?.bossId === 'throne_ii', 'Entering 0-1 from 7-3 did not spawn Throne II!');
-      }
-    }
 
-    bossSummary.push(
-      `${bossId}(states=${observedStates.size}${generatorsBroken ? ',gens=4->0' : ''}->${cfg.nextArea}@L${cfg.nextLoop})`,
-    );
+      // For 7-3 -> 0-1 and 0-1 -> 1-1 Loop 1, actually walk into portal and verify area transition!
+      if (bossId === 'nuclear_throne' || bossId === 'throne_ii') {
+        state.player.x = state.portal.x;
+        state.player.y = state.portal.y;
+        for (let k = 0; k < 40 && state.areaCode === cfg.area; k++) {
+          const selectIndex =
+            state.phase === 'mutation_select' || state.phase === 'ultra_select' ? 0 : undefined;
+          stepSimulation(
+            state,
+            makeInput({ aimWorldX: state.player.x, aimWorldY: state.player.y, selectIndex }),
+          );
+        }
+        assert(
+          state.areaCode === cfg.nextArea && state.loop === cfg.nextLoop,
+          `Portal transition from ${cfg.area} failed: got ${state.areaCode}@L${state.loop}`,
+        );
+        if (bossId === 'nuclear_throne') {
+          assert(state.boss?.bossId === 'throne_ii', 'Entering 0-1 from 7-3 did not spawn Throne II!');
+        }
+      }
+
+      bossSummary.push(
+        `${bossId}(states=${observedStates.size}${generatorsBroken ? ',gens=4->0' : ''}->${cfg.nextArea}@L${cfg.nextLoop})`,
+      );
+    }
   }
 
   // Verify RT-10: Nuclear Throne defeated with generators intact spawns sit-able broken Throne -> victory_throne (no 0-1 portal)
@@ -505,9 +540,9 @@ function runTest4SpecialArchetypesAndAll50Defs(): void {
   assert(state.enemies.some((e) => e.defId === 'maggot'), 'Maggot Nest death did not burst into maggots');
   assert(state.enemies.some((e) => e.defId === 'green_rat'), 'Big Rat death did not split into green rats');
 
-  // Smoke-test ALL 50 EnemyDefs in src/data/enemies.ts across 15 ticks (zero NaNs/throws!)
+  // Smoke-test ALL 72 EnemyDefs in src/data/enemies.ts across 20 ticks (zero NaNs/throws!)
   const allIds = Object.keys(ENEMIES);
-  assert(allIds.length === 50, `Expected 50 EnemyDefs, found ${allIds.length}`);
+  assert(allIds.length === 72, `Expected 72 EnemyDefs, found ${allIds.length}`);
   const smokeState = createRunState({ mutant: 'fish', seed: 9999 });
   smokeState.player.godMode = true;
   smokeState.enemies = [];
@@ -525,11 +560,11 @@ function runTest4SpecialArchetypesAndAll50Defs(): void {
   smokeState.rngState = sRng.getState();
   for (let t = 0; t < 20; t++) {
     stepSimulation(smokeState, makeInput({ aimWorldX: smokeState.player.x + 30, aimWorldY: smokeState.player.y }));
-    assertAllCoordsFiniteAndWalkable(smokeState, `all50@t${t}`, false);
+    assertAllCoordsFiniteAndWalkable(smokeState, `all72@t${t}`, false);
   }
 
   console.log(
-    `[PASS 4/5] IDPD Van+squad, Mimics, Necromancer revival, Nest/BigRat splits, Rebel Allies, and all ${allIds.length}/50 EnemyDefs executed cleanly`,
+    `[PASS 4/5] IDPD Van+squad, Mimics, Necromancer revival, Nest/BigRat splits, Rebel Allies, and all ${allIds.length}/72 EnemyDefs executed cleanly`,
   );
 }
 
@@ -586,7 +621,7 @@ function runTest5PurityAndManifestKeys(): void {
 }
 
 runTest1AllBiomesAndLoopPopulation();
-runTest2AllFiveBossesAndLoopChain();
+runTest2AllNineBossesAndLoopChain();
 runTest3Determinism300Ticks();
 runTest4SpecialArchetypesAndAll50Defs();
 runTest5PurityAndManifestKeys();
