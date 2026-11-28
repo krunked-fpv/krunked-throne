@@ -240,6 +240,9 @@ export class GameApp {
     }
     this.ctx = ctx;
     this.ctx.imageSmoothingEnabled = false;
+    if (this.canvas.style) {
+      this.canvas.style.imageRendering = 'pixelated';
+    }
   }
 
   async init(): Promise<void> {

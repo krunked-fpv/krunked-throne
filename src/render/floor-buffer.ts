@@ -2,6 +2,7 @@ import {
   TILE_SIZE,
   TileType,
   type AreaDef,
+  type BiomeId,
   type FloorDecal,
   type WorldMap,
 } from '@/contracts';
@@ -12,10 +13,103 @@ import {
   type UiDataProvider,
   DEFAULT_UI_DATA_PROVIDER,
 } from '@/ui/data-provider';
+import { fillPixelOval } from './glow-cache';
 import { SpriteRenderer } from './sprites';
 
 type FloorCanvas = HTMLCanvasElement | OffscreenCanvas;
 type FloorCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
+/**
+ * Exact video-matched solid continuous wall-top roof fill colors for every biome.
+ * Eliminates dark outer black voids around rooms in BOTH Steam Pack and Built-In modes.
+ */
+export const BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
+  desert: '#9b8568',
+  oasis: '#58afa9',
+  sewers: '#344030',
+  pizza_sewers: '#384434',
+  scrapyard: '#828890',
+  mansion: '#8a7e6e',
+  caves: '#44315e',
+  cursed_caves: '#3c265a',
+  frozen_city: '#9da4a6',
+  jungle: '#438428',
+  labs: '#0d1919',
+  palace: '#64282c',
+  campfire: '#8c7a5c',
+  vault: '#3d4d58',
+  hq: '#b8c2cc',
+};
+
+export function getBiomeRoofColor(biome: BiomeId): string {
+  return BIOME_ROOF_COLORS[biome] ?? BIOME_ROOF_COLORS.desert;
+}
+
+function posMod(v: number, m: number): number {
+  const r = v % m;
+  return r < 0 ? r + m : r;
+}
+
+/**
+ * Paints a seamless, world-aligned solid biome wall-top roof rectangle on the 1x pixel grid.
+ * - Oasis: subtle diagonal lighter water-sheen stripes across `#58afa9` matching 05_oasis.png.
+ * - Labs: crisp subtle 16px faint teal grid lines (`#142829`) on `#0d1919` matching 14_labs_6_1.png.
+ * - All other biomes: pure exact solid roof color extending seamlessly to screen edges.
+ */
+export function fillBiomeRoofRect(
+  ctx: FloorCtx,
+  biome: BiomeId,
+  worldX: number,
+  worldY: number,
+  w: number,
+  h: number,
+  dstX: number = worldX,
+  dstY: number = worldY,
+): void {
+  const ix = Math.round(dstX);
+  const iy = Math.round(dstY);
+  const iw = Math.round(w);
+  const ih = Math.round(h);
+  if (iw <= 0 || ih <= 0) return;
+
+  ctx.fillStyle = getBiomeRoofColor(biome);
+  ctx.fillRect(ix, iy, iw, ih);
+
+  if (biome === 'oasis') {
+    // Subtle diagonal lighter turquoise water-sheen bands (world-aligned 45deg, zero tile seams!)
+    const wx0 = Math.round(worldX);
+    const wy0 = Math.round(worldY);
+    const period = 56;
+    const bandW = 14;
+    ctx.fillStyle = '#65bcb6';
+    for (let dy = 0; dy < ih; dy++) {
+      const wy = wy0 + dy;
+      const startPhase = posMod(wx0 + wy, period);
+      let dx = startPhase < bandW ? 0 : period - startPhase;
+      while (dx < iw) {
+        const phase = posMod(wx0 + dx + wy, period);
+        const run = Math.min(bandW - phase, iw - dx);
+        if (run > 0) {
+          ctx.fillRect(ix + dx, iy + dy, run, 1);
+        }
+        dx += period - phase;
+      }
+    }
+  } else if (biome === 'labs') {
+    // Crisp subtle 16px faint teal grid lines aligned to wall-top boundaries (wx % 16 === 0, wy % 16 === 8)
+    const wx0 = Math.round(worldX);
+    const wy0 = Math.round(worldY);
+    ctx.fillStyle = '#142829';
+    const firstVx = posMod(-wx0, 16);
+    for (let dx = firstVx; dx < iw; dx += 16) {
+      ctx.fillRect(ix + dx, iy, 1, ih);
+    }
+    const firstHy = posMod(8 - wy0, 16);
+    for (let dy = firstHy; dy < ih; dy += 16) {
+      ctx.fillRect(ix, iy + dy, iw, 1);
+    }
+  }
+}
 
 function createOffscreenCanvas(w: number, h: number): FloorCanvas | null {
   if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
@@ -54,9 +148,33 @@ function isIntactSlab2x2(map: WorldMap, slabTx: number, slabTy: number): boolean
 }
 
 /**
- * Persistent offscreen level floor canvas (map.width * 16 x map.height * 16).
- * - Renders biome floor tiles (sprFloor*, sprFloor*B & sprDetail* intact variety,
- *   sprFloor*Explo strictly for wall blasts, Carpet red rug when Steam sprCarpet absent)
+ * Smooth deterministic 2D value noise (4-tile macro cell) so Frozen City ice tiles (`sprFloor5B`)
+ * form large cohesive multi-tile frozen lakes matching 13_frozen_5_3.png (~50% on 5-3, ~22% on 5-1/5-2).
+ */
+function frozenIceNoise(tx: number, ty: number, salt: number): number {
+  const cell = 4;
+  const gx = Math.floor(tx / cell);
+  const gy = Math.floor(ty / cell);
+  const fx = (tx - gx * cell) / cell;
+  const fy = (ty - gy * cell) / cell;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+
+  const v00 = (tileHash(gx, gy, salt) & 1023) / 1023;
+  const v10 = (tileHash(gx + 1, gy, salt) & 1023) / 1023;
+  const v01 = (tileHash(gx, gy + 1, salt) & 1023) / 1023;
+  const v11 = (tileHash(gx + 1, gy + 1, salt) & 1023) / 1023;
+
+  const top = v00 + (v10 - v00) * sx;
+  const bot = v01 + (v11 - v01) * sx;
+  return top + (bot - top) * sy;
+}
+
+/**
+ * Persistent 1x native-pixel offscreen level floor canvas (map.width * 16 x map.height * 16).
+ * - Fills non-walkable regions with exact continuous biome wall-top roof colors (zero black voids)
+ * - Renders biome floor tiles (sprFloor*, sprFloor*B cohesive ice lakes / floor variety, sprDetail*,
+ *   sprFloor*Explo strictly for wall blasts, crisp Palace royal crimson carpet)
  * - Permanently bakes all FloorDecals (blood, scorch, rubble, acid, settled corpses, brass casings)
  * - Incrementally refreshes newly carved floor tiles when walls are destroyed mid-level
  */
@@ -69,7 +187,7 @@ export class FloorBuffer {
   private mapWidth = 0;
   private mapHeight = 0;
   private tileSize = TILE_SIZE;
-  private pixelScale = 2;
+  private pixelScale = 1;
   private lastTiles: Uint8Array | null = null;
   private bakedDecalCount = 0;
 
@@ -124,7 +242,7 @@ export class FloorBuffer {
   }
 
   /**
-   * Rebuilds the entire persistent floor buffer for a newly entered level.
+   * Rebuilds the entire persistent 1x floor buffer for a newly entered level.
    */
   rebuild(map: WorldMap, areaDef?: AreaDef): void {
     this.mapWidth = map.width;
@@ -135,8 +253,7 @@ export class FloorBuffer {
 
     const logicalW = Math.max(1, this.mapWidth * this.tileSize);
     const logicalH = Math.max(1, this.mapHeight * this.tileSize);
-    // Use crisp 2x Hi-Bit backing scale whenever the map fits comfortably within 4096px texture bounds
-    const desiredScale = logicalW * 2 <= 4096 && logicalH * 2 <= 4096 ? 2 : 1;
+    const desiredScale = 1;
     const pixelW = logicalW * desiredScale;
     const pixelH = logicalH * desiredScale;
 
@@ -147,22 +264,17 @@ export class FloorBuffer {
         : null;
     }
 
+    this.pixelScale = 1;
     if (!this.ctx) {
-      this.pixelScale = 1;
       return;
     }
     if (typeof this.ctx.setTransform === 'function') {
-      this.pixelScale = desiredScale;
-      this.ctx.setTransform(desiredScale, 0, 0, desiredScale, 0, 0);
-    } else {
-      this.pixelScale = 1;
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     this.ctx.imageSmoothingEnabled = false;
     this.ctx.clearRect(0, 0, logicalW, logicalH);
 
-    const pal = BIOME_FALLBACK_PALETTES[map.biome] ?? BIOME_FALLBACK_PALETTES.desert;
-    this.ctx.fillStyle = pal.voidBg;
-    this.ctx.fillRect(0, 0, logicalW, logicalH);
+    fillBiomeRoofRect(this.ctx, map.biome, 0, 0, logicalW, logicalH);
 
     this.renderTileRange(map, 0, 0, map.width - 1, map.height - 1, areaDef);
   }
@@ -241,6 +353,20 @@ export class FloorBuffer {
     }
   }
 
+  private drawFallbackIceTile(ctx: FloorCtx, px: number, py: number, ts: number): void {
+    ctx.fillStyle = '#789eb7';
+    ctx.fillRect(px, py, ts, ts);
+    ctx.fillStyle = '#9ac0d8';
+    for (let dy = 0; dy < ts; dy++) {
+      for (let dx = 0; dx < ts; dx++) {
+        const band = posMod(px + dx + py + dy, 16);
+        if (band < 4 || (band >= 7 && band < 9)) {
+          ctx.fillRect(px + dx, py + dy, 1, 1);
+        }
+      }
+    }
+  }
+
   private renderTile(map: WorldMap, tx: number, ty: number, areaDef?: AreaDef): void {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -253,66 +379,73 @@ export class FloorBuffer {
     const pal = BIOME_FALLBACK_PALETTES[map.biome] ?? BIOME_FALLBACK_PALETTES.desert;
 
     if (!isWalkable(tile)) {
-      // Subtle atmospheric subterranean rock/bedrock strata instead of flat dead void!
-      ctx.fillStyle = pal.voidBg;
-      ctx.fillRect(px, py, ts, ts);
-      const vh = tileHash(tx, ty, 59);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.025)';
-      if ((vh & 3) === 0) {
-        ctx.fillRect(px + (vh % 5), py + 3 + ((vh >>> 3) % 6), 8 + (vh % 6), 2);
-      } else if ((vh & 3) === 1) {
-        ctx.fillRect(px + 1, py + 10 + ((vh >>> 4) % 4), 11, 1.5);
-      }
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-      if ((vh & 7) === 2) {
-        ctx.fillRect(px + 2 + ((vh >>> 5) % 6), py + 5 + ((vh >>> 8) % 6), 6, 2);
-      }
+      fillBiomeRoofRect(ctx, map.biome, px, py, ts, ts);
       return;
     }
 
     const variant = map.floorVariants[idx] ?? ((tx * 7 + ty * 13) & 3);
     const { floorSprite, floorAltSprite, floorExploSprite, detailSprite } = this.resolveBiomeSprites(map, areaDef);
 
-    // Draw base biome floor tile first (handles both 32x32 Steam tiles and 16x16 fallback tiles seamlessly)
-    const floorDef = this.sprites.getSprite(floorSprite);
-    let drewBase = false;
-    if (floorDef && floorDef.frames.length > 0) {
-      const f0 = floorDef.frames[0]!;
-      if (f0.targetW >= ts * 2 && f0.targetH >= ts * 2) {
-        // 32x32 Steam floor slab: sample aligned 16x16 quadrant so adjacent tiles form cohesive slabs
-        const slabTx = tx & ~1;
-        const slabTy = ty & ~1;
-        const slabVariant = map.floorVariants[slabTy * map.width + slabTx] ?? variant;
-        const subX = (tx & 1) * ts;
-        const subY = (ty & 1) * ts;
-        drewBase = this.sprites.drawSubRect(ctx, floorSprite, slabVariant, subX, subY, ts, ts, px, py, ts, ts);
-
-        // Subtle intact-floor variety using authentic Steam sprFloor*B slabs (~14% of intact 2x2 floor blocks)
-        if (
-          drewBase &&
-          tile === TileType.Floor &&
-          this.sprites.hasSprite(floorAltSprite) &&
-          isIntactSlab2x2(map, slabTx, slabTy)
-        ) {
-          const sh = tileHash(slabTx >> 1, slabTy >> 1, 7);
-          if (sh % 7 === 0) {
-            const altDef = this.sprites.getSprite(floorAltSprite);
-            if (altDef && altDef.width >= ts * 2 && altDef.height >= ts * 2) {
-              const altFrame = (sh >>> 4) % Math.max(1, altDef.frames.length);
-              ctx.save();
-              ctx.beginPath();
-              ctx.rect(px, py, ts, ts);
-              ctx.clip();
-              this.sprites.draw(ctx, floorAltSprite, slabTx * ts, slabTy * ts, {
-                frame: altFrame,
-                pixelSnap: true,
-              });
-              ctx.restore();
-            }
+    // Frozen City cohesive multi-tile ice lakes (`sprFloor5B`): ~50% of 5-3, ~22% of 5-1/5-2!
+    let drewIceLake = false;
+    if (map.biome === 'frozen_city' && tile === TileType.Floor) {
+      const salt = map.areaCode === '5-3' ? 53 : map.areaCode === '5-2' ? 52 : 51;
+      const iceVal = frozenIceNoise(tx, ty, salt);
+      const iceThreshold = map.areaCode === '5-3' ? 0.52 : 0.24;
+      if (iceVal < iceThreshold) {
+        const altDef = this.sprites.getSprite(floorAltSprite);
+        if (altDef && altDef.frames.length > 0) {
+          const af0 = altDef.frames[0]!;
+          if (af0.targetW >= ts * 2 && af0.targetH >= ts * 2) {
+            const subX = (tx & 1) * ts;
+            const subY = (ty & 1) * ts;
+            drewIceLake = this.sprites.drawSubRect(ctx, floorAltSprite, 0, subX, subY, ts, ts, px, py, ts, ts);
+          } else {
+            drewIceLake = this.sprites.draw(ctx, floorAltSprite, px, py, { frame: 0, pixelSnap: true });
           }
         }
-      } else {
-        drewBase = this.sprites.draw(ctx, floorSprite, px, py, { frame: variant, pixelSnap: true });
+        if (!drewIceLake) {
+          this.drawFallbackIceTile(ctx, px, py, ts);
+          drewIceLake = true;
+        }
+      }
+    }
+
+    // Draw base biome floor tile (handles both 32x32 slabs and 16x16 tiles seamlessly)
+    let drewBase = drewIceLake;
+    if (!drewBase) {
+      const floorDef = this.sprites.getSprite(floorSprite);
+      if (floorDef && floorDef.frames.length > 0) {
+        const f0 = floorDef.frames[0]!;
+        if (f0.targetW >= ts * 2 && f0.targetH >= ts * 2) {
+          // 32x32 floor slab: sample aligned 16x16 quadrant so adjacent tiles form cohesive slabs
+          const slabTx = tx & ~1;
+          const slabTy = ty & ~1;
+          const slabVariant = map.floorVariants[slabTy * map.width + slabTx] ?? variant;
+          const subX = (tx & 1) * ts;
+          const subY = (ty & 1) * ts;
+          drewBase = this.sprites.drawSubRect(ctx, floorSprite, slabVariant, subX, subY, ts, ts, px, py, ts, ts);
+
+          // Subtle intact-floor variety using authentic Steam sprFloor*B slabs (~14% of intact 2x2 floor blocks)
+          if (
+            drewBase &&
+            map.biome !== 'frozen_city' &&
+            tile === TileType.Floor &&
+            this.sprites.hasSprite(floorAltSprite) &&
+            isIntactSlab2x2(map, slabTx, slabTy)
+          ) {
+            const sh = tileHash(slabTx >> 1, slabTy >> 1, 7);
+            if (sh % 7 === 0) {
+              const altDef = this.sprites.getSprite(floorAltSprite);
+              if (altDef && altDef.frames.length > 0 && altDef.frames[0]!.targetW >= ts * 2 && altDef.frames[0]!.targetH >= ts * 2) {
+                const altFrame = (sh >>> 4) % Math.max(1, altDef.frames.length);
+                this.sprites.drawSubRect(ctx, floorAltSprite, altFrame, subX, subY, ts, ts, px, py, ts, ts);
+              }
+            }
+          }
+        } else {
+          drewBase = this.sprites.draw(ctx, floorSprite, px, py, { frame: variant, pixelSnap: true });
+        }
       }
     }
 
@@ -325,8 +458,8 @@ export class FloorBuffer {
       ctx.fillRect(px + sx + 1, py + sy + 1, 2, 1);
     }
 
-    // Sparse authentic Steam floor micro-details (sprDetail*) on intact non-carpet tiles
-    if (tile === TileType.Floor && this.sprites.hasSprite(detailSprite)) {
+    // Sparse authentic floor micro-details (sprDetail*) on intact non-carpet tiles
+    if (tile === TileType.Floor && !drewIceLake && this.sprites.hasSprite(detailSprite)) {
       const dh = tileHash(tx, ty, 31);
       if (dh % 11 === 0) {
         const ox = 4 + ((dh >>> 4) % 9);
@@ -348,16 +481,20 @@ export class FloorBuffer {
       if (!drewExplo) {
         ctx.fillStyle = pal.floorCracked;
         ctx.fillRect(px + 2, py + 2, ts - 4, ts - 4);
-        ctx.fillStyle = pal.voidBg;
+        ctx.fillStyle = '#141016';
         ctx.fillRect(px + 5, py + 4, 2, 6);
         ctx.fillRect(px + 7, py + 8, 4, 2);
       }
     }
 
-    // Palace / Vault Red Carpet: skip procedural carpet on 7-3 when Steam sprCarpet is available
-    // so sprCarpet renders cleanly with zero mismatched double gold borders
+    // Palace / Vault Red Carpet: skip procedural carpet on 7-3 ONLY when full-length Steam sprCarpet is loaded
     if (tile === TileType.Carpet) {
-      const useSteamThroneCarpet = map.areaCode === '7-3' && this.sprites.hasSprite('sprCarpet');
+      const carpetDef = this.sprites.getSprite('sprCarpet');
+      const useSteamThroneCarpet =
+        map.areaCode === '7-3' &&
+        this.sprites.hasSprite('sprCarpet') &&
+        carpetDef !== undefined &&
+        carpetDef.height >= 200;
       if (!useSteamThroneCarpet) {
         this.drawCarpetTile(ctx, map, tx, ty, px, py, ts);
       }
@@ -378,56 +515,39 @@ export class FloorBuffer {
     const topCarpet = ty > 0 && map.tiles[(ty - 1) * map.width + tx] === TileType.Carpet;
     const botCarpet = ty + 1 < map.height && map.tiles[(ty + 1) * map.width + tx] === TileType.Carpet;
 
-    // Rich royal Palace crimson damask carpet with braided gold filigree trim & edge shadow
-    ctx.fillStyle = '#6b1420';
+    // Authentic 1x Nuclear Throne Palace royal crimson carpet (#a01f31) + crisp 1px #d8b85c gold side trim
+    ctx.fillStyle = '#a01f31';
     ctx.fillRect(px, py, ts, ts);
-    ctx.fillStyle = '#8f1b2b';
-    ctx.fillRect(px + 0.5, py + 0.5, ts - 1, ts - 1);
 
-    // Subtle woven damask diamond motif
-    ctx.fillStyle = '#7a1624';
-    ctx.fillRect(px + 3, py + 3, 3, 3);
-    ctx.fillRect(px + 10, py + 10, 3, 3);
-    ctx.fillStyle = '#a32334';
-    ctx.fillRect(px + 4, py + 4, 1, 1);
-    ctx.fillRect(px + 11, py + 11, 1, 1);
-
-    // Braided antique gold border & dark inner piping along exposed edges
-    const drawEdge = (ex: number, ey: number, ew: number, eh: number): void => {
-      ctx.fillStyle = '#d9ad45';
-      ctx.fillRect(ex, ey, ew, eh);
-    };
     if (!leftCarpet) {
-      drawEdge(px, py, 2, ts);
-      ctx.fillStyle = '#fff0a6';
-      ctx.fillRect(px + 0.5, py, 0.5, ts);
-      ctx.fillStyle = '#470c14';
-      ctx.fillRect(px + 2, py, 1, ts);
+      ctx.fillStyle = '#d8b85c';
+      ctx.fillRect(px, py, 1, ts);
+      ctx.fillStyle = '#7a1524';
+      ctx.fillRect(px + 1, py, 1, ts);
     }
     if (!rightCarpet) {
-      drawEdge(px + ts - 2, py, 2, ts);
-      ctx.fillStyle = '#9e7422';
+      ctx.fillStyle = '#d8b85c';
       ctx.fillRect(px + ts - 1, py, 1, ts);
-      ctx.fillStyle = '#470c14';
-      ctx.fillRect(px + ts - 3, py, 1, ts);
+      ctx.fillStyle = '#7a1524';
+      ctx.fillRect(px + ts - 2, py, 1, ts);
     }
     if (!topCarpet) {
-      drawEdge(px, py, ts, 2);
-      ctx.fillStyle = '#fff0a6';
-      ctx.fillRect(px, py + 0.5, ts, 0.5);
-      ctx.fillStyle = '#470c14';
-      ctx.fillRect(px, py + 2, ts, 1);
+      ctx.fillStyle = '#d8b85c';
+      ctx.fillRect(px, py, ts, 1);
+      ctx.fillStyle = '#7a1524';
+      ctx.fillRect(px, py + 1, ts, 1);
     }
     if (!botCarpet) {
-      drawEdge(px, py + ts - 2, ts, 2);
-      ctx.fillStyle = '#470c14';
-      ctx.fillRect(px, py + ts - 3, ts, 1);
+      ctx.fillStyle = '#d8b85c';
+      ctx.fillRect(px, py + ts - 1, ts, 1);
+      ctx.fillStyle = '#7a1524';
+      ctx.fillRect(px, py + ts - 2, ts, 1);
     }
   }
 
   /**
    * Permanently bakes a battle decal (blood, scorch, rubble, acid, settled corpse, casing)
-   * into the level's persistent offscreen floor canvas.
+   * into the level's persistent 1x offscreen floor canvas on integer pixel coordinates.
    */
   bakeDecal(decal: FloorDecal): void {
     this.bakedDecalCount += 1;
@@ -461,23 +581,20 @@ export class FloorBuffer {
         const scorchSprite = decal.sprite ?? (scale >= 1.2 ? 'sprScorch' : 'sprScorchmark');
         const drew = this.sprites.draw(ctx, scorchSprite, x, y, {
           frame: decal.frame ?? 0,
-          scaleX: scale,
-          scaleY: scale,
-          alpha: 0.82,
+          scaleX: 1,
+          scaleY: 1,
+          alpha: 0.85,
           pixelSnap: true,
         });
         if (!drew) {
-          const r = Math.max(4, Math.round(10 * scale));
+          const r = Math.max(4, Math.round(9 * scale));
           ctx.save();
-          ctx.globalAlpha = 0.45;
-          ctx.fillStyle = '#2d2326';
-          ctx.fillRect(x - r - 1, y - Math.round(r * 0.75), r * 2 + 2, Math.round(r * 1.5));
-          ctx.globalAlpha = 0.65;
-          ctx.fillStyle = decal.color || '#181316';
-          ctx.fillRect(x - r, y - Math.round(r * 0.65), r * 2, Math.round(r * 1.3));
+          ctx.globalAlpha = 0.55;
+          ctx.fillStyle = '#241d22';
+          fillPixelOval(ctx, x, y, r + 1, Math.max(3, Math.round(r * 0.72)));
           ctx.globalAlpha = 0.82;
-          ctx.fillStyle = '#0c080b';
-          ctx.fillRect(x - Math.round(r * 0.55), y - Math.round(r * 0.35), Math.round(r * 1.1), Math.round(r * 0.7));
+          ctx.fillStyle = decal.color || '#141016';
+          fillPixelOval(ctx, x, y, r, Math.max(2, Math.round(r * 0.62)));
           ctx.restore();
         }
         break;
@@ -486,76 +603,68 @@ export class FloorBuffer {
       case 'blood': {
         ctx.save();
         const baseColor = decal.color || '#9e1924';
-        const r = Math.max(2, 3.4 * scale);
+        const r = Math.max(2, Math.round(3.2 * scale));
+        const ry = Math.max(1, Math.round(r * 0.68));
         const ang = decal.angle || 0;
         const cosA = Math.cos(ang);
         const sinA = Math.sin(ang);
         const seed = tileHash(x, y, Math.round(ang * 31));
 
-        // Helper for crisp organic pixel splatter blob (zero rectangular boxes!)
-        const blob = (bx: number, by: number, rx: number, ry: number): void => {
-          const iry = Math.max(1, Math.ceil(ry * 2));
-          for (let dy2 = -iry; dy2 <= iry; dy2++) {
-            const ny = dy2 / Math.max(1, iry);
-            const span = Math.sqrt(Math.max(0, 1 - ny * ny)) * rx;
-            if (span >= 0.25) {
-              ctx.fillRect(bx - span, by + dy2 * 0.5, span * 2, 0.6);
-            }
-          }
-        };
+        // Crisp 1x integer-pixel dried rim + multi-lobe blood pool (zero 0.5px subpixels!)
+        ctx.fillStyle = '#38070d';
+        ctx.globalAlpha = 0.72;
+        fillPixelOval(ctx, x, y + 1, r + 1, ry + 1);
 
-        // Dark grounded dried-edge rim
-        ctx.fillStyle = '#33070d';
-        ctx.globalAlpha = 0.62;
-        blob(x, y + 0.5, r + 1.1, r * 0.72 + 0.8);
-
-        // Multi-lobe organic splatter pool
         ctx.fillStyle = baseColor;
-        ctx.globalAlpha = 0.90;
-        blob(x, y, r, r * 0.68);
-        blob(x + cosA * (r * 0.7), y + sinA * (r * 0.55), r * 0.72, r * 0.52);
-        blob(
-          x + (((seed & 7) - 3.5) * 0.55),
-          y + ((((seed >>> 4) & 7) - 3.5) * 0.45),
-          r * 0.65,
-          r * 0.48,
+        ctx.globalAlpha = 0.92;
+        fillPixelOval(ctx, x, y, r, ry);
+        fillPixelOval(
+          ctx,
+          x + Math.round(cosA * r * 0.75),
+          y + Math.round(sinA * ry * 0.8),
+          Math.max(1, Math.round(r * 0.7)),
+          Math.max(1, Math.round(ry * 0.7)),
+        );
+        fillPixelOval(
+          ctx,
+          x + ((seed & 3) - 1),
+          y + (((seed >>> 3) & 3) - 1),
+          Math.max(1, Math.round(r * 0.6)),
+          Math.max(1, Math.round(ry * 0.6)),
         );
 
-        // Directional spray fan & tapered droplets along impact vector (Odinfall gore juice!)
-        for (let k = 1; k <= 6; k++) {
+        // Crisp 1x integer directional splatter droplets
+        for (let k = 1; k <= 5; k++) {
           const h = tileHash(x + k * 7, y - k * 5, seed);
-          const spread = ((h % 100) / 100 - 0.5) * 1.15;
-          const dist = r * 0.8 + k * 1.85 * Math.max(0.75, scale * 0.8);
-          const dx = Math.cos(ang + spread) * dist;
-          const dy = Math.sin(ang + spread) * dist;
-          const sz = k <= 2 ? 1.5 : k <= 4 ? 1 : 0.5;
+          const spread = ((h % 100) / 100 - 0.5) * 1.1;
+          const dist = r + k * 2;
+          const dx = Math.round(Math.cos(ang + spread) * dist);
+          const dy = Math.round(Math.sin(ang + spread) * dist);
+          const sz = k <= 2 ? 2 : 1;
           ctx.fillRect(x + dx, y + dy, sz, sz);
         }
-        // Subtle glossy wet crimson specular speck
-        ctx.fillStyle = '#de2e3f';
-        ctx.globalAlpha = 0.55;
-        ctx.fillRect(x - r * 0.35, y - r * 0.25, Math.max(1, r * 0.55), 0.5);
+        // Crisp 1px wet crimson highlight speck
+        ctx.fillStyle = '#d92b3d';
+        ctx.globalAlpha = 0.65;
+        ctx.fillRect(x - 1, y - 1, Math.max(1, Math.floor(r * 0.5)), 1);
         ctx.restore();
         break;
       }
 
       case 'acid': {
         ctx.save();
-        const r = Math.max(3, 5 * scale);
+        const rx = Math.max(3, Math.round(5 * scale));
+        const ry = Math.max(2, Math.round(3.2 * scale));
         ctx.fillStyle = '#205918';
-        ctx.globalAlpha = 0.65;
-        ctx.beginPath();
-        ctx.ellipse(x, y + 0.5, r + 1, r * 0.68 + 0.6, 0, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.globalAlpha = 0.75;
+        fillPixelOval(ctx, x, y + 1, rx + 1, ry + 1);
         ctx.fillStyle = decal.color || '#57c936';
-        ctx.globalAlpha = 0.72;
-        ctx.beginPath();
-        ctx.ellipse(x, y, r, r * 0.62, 0, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.globalAlpha = 0.82;
+        fillPixelOval(ctx, x, y, rx, ry);
         ctx.fillStyle = '#b4ff66';
-        ctx.globalAlpha = 0.58;
-        ctx.fillRect(x - r * 0.4, y - r * 0.2, r * 0.6, 1);
-        ctx.fillRect(x + r * 0.2, y + r * 0.15, 1, 1);
+        ctx.globalAlpha = 0.7;
+        ctx.fillRect(x - Math.max(1, Math.floor(rx * 0.4)), y - 1, Math.max(2, Math.floor(rx * 0.5)), 1);
+        ctx.fillRect(x + 1, y + 1, 1, 1);
         ctx.restore();
         break;
       }
@@ -633,7 +742,7 @@ export class FloorBuffer {
     ctx.globalAlpha = 0.42;
     ctx.fillStyle = color;
     ctx.fillRect(ix - 1, iy, 3, 2);
-    ctx.fillRect(Math.round(ix - nx * 2.5), Math.round(iy - ny * 2.5), 2, 1);
+    ctx.fillRect(Math.round(ix - nx * 2), Math.round(iy - ny * 2), 2, 1);
     ctx.restore();
   }
 }

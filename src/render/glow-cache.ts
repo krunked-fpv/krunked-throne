@@ -17,8 +17,50 @@ function createGlowSurface(w: number, h: number): GlowCanvas | null {
 }
 
 /**
+ * Crisp 1x integer-pixel filled disc (scanline spans) — zero anti-aliased blur or radial gradients.
+ */
+export function fillPixelDisc(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+): void {
+  const icx = Math.round(cx);
+  const icy = Math.round(cy);
+  const r = Math.max(1, Math.round(radius));
+  const rSq = r * r;
+  for (let dy = -r; dy <= r; dy++) {
+    const span = Math.floor(Math.sqrt(Math.max(0, rSq - dy * dy)) + 0.35);
+    ctx.fillRect(icx - span, icy + dy, span * 2 + 1, 1);
+  }
+}
+
+/**
+ * Crisp 1x integer-pixel filled oval (scanline spans) — zero subpixel anti-aliased ellipses.
+ */
+export function fillPixelOval(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+): void {
+  const icx = Math.round(cx);
+  const icy = Math.round(cy);
+  const irx = Math.max(1, Math.round(rx));
+  const iry = Math.max(1, Math.round(ry));
+  for (let dy = -iry; dy <= iry; dy++) {
+    const ny = dy / (iry + 0.35);
+    const span = Math.floor(Math.sqrt(Math.max(0, 1 - ny * ny)) * irx + 0.35);
+    if (span >= 0) {
+      ctx.fillRect(icx - span, icy + dy, span * 2 + 1, 1);
+    }
+  }
+}
+
+/**
  * Snaps an arbitrary radius into a compact set of cacheable power/tier buckets
- * so offscreen radial glow stamps achieve near-100% cache hit rates while staying crisp.
+ * so offscreen pixel-hard highlight stamps achieve near-100% cache hit rates.
  */
 export function snapGlowRadius(radius: number): number {
   const clamped = Math.max(4, Math.min(128, Math.ceil(radius)));
@@ -31,54 +73,8 @@ export function snapGlowRadius(radius: number): number {
 }
 
 /**
- * Parses a CSS hex/rgb/rgba color into RGB + alpha components so radial stamps
- * can build crisp exponential falloff stops without dark edge fringing or bloated washout.
- */
-function parseRgbaColor(color: string): { r: number; g: number; b: number; a: number } | null {
-  const trimmed = color.trim();
-  const rgbaMatch =
-    /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9]*\.?[0-9]+))?\s*\)$/i.exec(trimmed);
-  if (rgbaMatch) {
-    const r = Number(rgbaMatch[1]);
-    const g = Number(rgbaMatch[2]);
-    const b = Number(rgbaMatch[3]);
-    const a = rgbaMatch[4] !== undefined ? Number(rgbaMatch[4]) : 1;
-    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b) && Number.isFinite(a)) {
-      return { r, g, b, a: Math.max(0, Math.min(1, a)) };
-    }
-  }
-  if (trimmed.startsWith('#')) {
-    const hex = trimmed.slice(1);
-    if (hex.length === 6) {
-      const r = parseInt(hex.slice(0, 2), 16);
-      const g = parseInt(hex.slice(2, 4), 16);
-      const b = parseInt(hex.slice(4, 6), 16);
-      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
-        return { r, g, b, a: 1 };
-      }
-    } else if (hex.length === 3) {
-      const r = parseInt(hex[0]! + hex[0]!, 16);
-      const g = parseInt(hex[1]! + hex[1]!, 16);
-      const b = parseInt(hex[2]! + hex[2]!, 16);
-      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
-        return { r, g, b, a: 1 };
-      }
-    }
-  }
-  return null;
-}
-
-function toScaledAlphaColor(color: string, factor: number): string {
-  const parsed = parseRgbaColor(color);
-  if (!parsed) return factor <= 0 ? 'rgba(0, 0, 0, 0)' : color;
-  const scaled = Math.max(0, Math.min(1, parsed.a * factor));
-  return `rgba(${parsed.r}, ${parsed.g}, ${parsed.b}, ${scaled.toFixed(4)})`;
-}
-
-/**
- * High-performance offscreen radial glow sprite stamp cache.
- * Replaces expensive per-frame `ctx.createRadialGradient()` calls during intense
- * 7-3 plasma barrages and lighting passes with fast cached `ctx.drawImage()` blits.
+ * Offscreen pixel-hard disc stamp cache for crisp Nuclear Throne flat circular highlights
+ * and hard-edged darkness visibility carving (ZERO blurry radial gradient feathering).
  */
 export class GlowStampCache {
   private stamps = new Map<string, GlowCanvas>();
@@ -90,9 +86,7 @@ export class GlowStampCache {
   }
 
   /**
-   * Returns a cached offscreen radial glow stamp canvas for `(color, radius)`,
-   * lazily pre-rendering it once on first request with crisp quadratic falloff
-   * so glows stay tight and never wash out pixel art.
+   * Returns a cached offscreen crisp pixel-hard flat disc stamp for `(color, radius)`.
    */
   getGlowStamp(color: string, radius: number): GlowCanvas | null {
     const bucket = snapGlowRadius(radius);
@@ -107,15 +101,10 @@ export class GlowStampCache {
     const ctx = canvas.getContext('2d') as GlowCtx | null;
     if (!ctx) return null;
 
-    const grad = ctx.createRadialGradient(bucket, bucket, 0.5, bucket, bucket, bucket);
-    grad.addColorStop(0, color);
-    grad.addColorStop(0.36, toScaledAlphaColor(color, 0.42));
-    grad.addColorStop(0.72, toScaledAlphaColor(color, 0.11));
-    grad.addColorStop(1, toScaledAlphaColor(color, 0));
-
+    ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = color;
+    fillPixelDisc(ctx, bucket, bucket, bucket - 1);
 
     if (this.stamps.size >= this.maxEntries) {
       const oldest = this.stamps.keys().next().value;
@@ -128,8 +117,8 @@ export class GlowStampCache {
   }
 
   /**
-   * Returns a single reusable 128x128 smooth radial alpha-falloff stamp used for
-   * `destination-out` darkness carving (modulated per-light via `ctx.globalAlpha`).
+   * Returns a single reusable 128x128 hard-edged opaque pixel-stepped disc stamp
+   * for crisp `destination-out` darkness carving (zero soft gradient falloff).
    */
   getDarknessMaskStamp(): GlowCanvas | null {
     if (this.maskStamp) return this.maskStamp;
@@ -142,14 +131,10 @@ export class GlowStampCache {
     const ctx = canvas.getContext('2d') as GlowCtx | null;
     if (!ctx) return null;
 
-    const grad = ctx.createRadialGradient(r, r, Math.max(2, r * 0.16), r, r, r);
-    grad.addColorStop(0, 'rgba(0, 0, 0, 1)');
-    grad.addColorStop(0.65, 'rgba(0, 0, 0, 0.48)');
-    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
+    ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000000';
+    fillPixelDisc(ctx, r, r, r - 1);
     this.maskStamp = canvas;
     return canvas;
   }
