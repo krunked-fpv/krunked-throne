@@ -167,7 +167,13 @@ export class LightingPass {
           });
           break;
         case 'boss_orb':
-          lights.push({ x: px, y: py, radius: 36, innerRadius: 22, intensity: 1 });
+          lights.push({
+            x: px,
+            y: py,
+            radius: p.sprite === 'sprLastBall' ? 44 : 36,
+            innerRadius: p.sprite === 'sprLastBall' ? 24 : 22,
+            intensity: 1,
+          });
           break;
         case 'rocket':
         case 'nuke':
@@ -175,19 +181,30 @@ export class LightingPass {
           lights.push({ x: px, y: py, radius: 30, innerRadius: 16, intensity: 1 });
           break;
         default:
+          if (p.sprite === 'sprLastBall') {
+            lights.push({ x: px, y: py, radius: 44, innerRadius: 24, intensity: 1 });
+          } else if (p.sprite === 'sprTrapFire') {
+            lights.push({ x: px, y: py, radius: 32, innerRadius: 18, intensity: 1 });
+          } else if (p.sprite === 'sprFrogQueenBall') {
+            lights.push({ x: px, y: py, radius: 34, innerRadius: 18, intensity: 1 });
+          }
           break;
       }
     }
 
-    // 3. Props: tight small visibility circles (<= 34px outer, 20px inner) for passive crystals/torches/canisters!
+    // 3. Props: tight small visibility circles for passive landmarks & glowing setpieces
     for (let i = 0; i < state.props.length; i++) {
       const prop = state.props[i]!;
       if (prop.kind === 'rad_canister' && !prop.opened) {
         lights.push({ x: prop.x, y: prop.y, radius: 34, innerRadius: 20, intensity: 1 });
+      } else if (prop.kind === 'rad_maggot_canister' && !prop.opened) {
+        lights.push({ x: prop.x, y: prop.y, radius: 38, innerRadius: 22, intensity: 1 });
       } else if (prop.kind === 'idpd_canister' && !prop.opened) {
         lights.push({ x: prop.x, y: prop.y, radius: 32, innerRadius: 18, intensity: 1 });
       } else if (prop.kind === 'throne_generator' && prop.hp > 0) {
         lights.push({ x: prop.x, y: prop.y, radius: 34, innerRadius: 20, intensity: 1 });
+      } else if (prop.kind === 'small_generator' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y, radius: 36, innerRadius: 20, intensity: 1 });
       } else if (prop.kind === 'proto_statue') {
         const charging = prop.hp < prop.maxHp || (prop.radsStored ?? 0) > 0;
         lights.push({
@@ -197,6 +214,8 @@ export class LightingPass {
           innerRadius: charging ? 24 : 20,
           intensity: 1,
         });
+      } else if (prop.kind === 'proto_chest') {
+        lights.push({ x: prop.x, y: prop.y, radius: 34, innerRadius: 20, intensity: 1 });
       } else if (prop.kind === 'snare_trap') {
         lights.push({
           x: prop.x,
@@ -205,24 +224,55 @@ export class LightingPass {
           innerRadius: 20,
           intensity: 1,
         });
+      } else if (prop.kind === 'necro_revive_area') {
+        lights.push({ x: prop.x, y: prop.y, radius: 48, innerRadius: 28, intensity: 1 });
+      } else if (prop.kind === 'torch' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y - 3, radius: 42, innerRadius: 24, intensity: 1 });
+      } else if (prop.kind === 'chandelier' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y - 4, radius: 44, innerRadius: 24, intensity: 1 });
+      } else if (prop.kind === 'frog_egg' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y, radius: 32, innerRadius: 18, intensity: 1 });
+      } else if (prop.kind === 'fire_trap' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y, radius: 32, innerRadius: 18, intensity: 1 });
+      } else if (prop.kind === 'big_tv' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y, radius: 52, innerRadius: 28, intensity: 1 });
+      } else if (prop.kind === 'venuz_tv' && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y - 12, radius: 64, innerRadius: 34, intensity: 1 });
+      } else if ((prop.kind === 'giant_weapon_chest' || prop.kind === 'giant_ammo_chest') && !prop.opened) {
+        lights.push({ x: prop.x, y: prop.y, radius: 46, innerRadius: 24, intensity: 1 });
+      } else if ((prop.kind === 'terminal' || prop.kind === 'server') && prop.hp > 0) {
+        lights.push({ x: prop.x, y: prop.y - 2, radius: 28, innerRadius: 16, intensity: 1 });
       } else if (prop.sprite) {
         const spr = prop.sprite;
         if (
           spr === 'sprStreetLight' ||
           spr === 'sprTorch' ||
           spr === 'sprWallTorch' ||
+          spr === 'sprChandelier' ||
           spr.startsWith('sprCrystalProp') ||
           spr === 'sprMutantTube' ||
-          spr === 'sprTube'
+          spr === 'sprTube' ||
+          spr === 'sprSmallGenerator' ||
+          spr === 'sprRadChestMaggot'
         ) {
           lights.push({ x: prop.x, y: prop.y - 3, radius: 34, innerRadius: 20, intensity: 1 });
+        } else if (spr === 'sprReviveArea' || spr === 'sprNecroReviveArea' || spr === 'sprPopoReviveArea') {
+          lights.push({ x: prop.x, y: prop.y, radius: 48, innerRadius: 28, intensity: 1 });
+        } else if (spr === 'sprFrogEgg' || spr === 'sprTrap') {
+          lights.push({ x: prop.x, y: prop.y, radius: 32, innerRadius: 18, intensity: 1 });
+        } else if (spr === 'sprBigTVOn' || spr === 'sprBigTVTurnOn' || spr === 'sprVenuzTV') {
+          lights.push({ x: prop.x, y: prop.y, radius: 52, innerRadius: 28, intensity: 1 });
+        } else if (spr === 'sprGiantWepChest' || spr === 'sprGiantAmmoChest') {
+          lights.push({ x: prop.x, y: prop.y, radius: 46, innerRadius: 24, intensity: 1 });
         } else if (
           spr === 'sprPalacePillar' ||
           spr === 'sprNuclearPillar' ||
           spr === 'sprSodaMachine' ||
           spr === 'sprIceFlower' ||
           spr === 'sprIceFlowerIdle' ||
-          spr === 'sprServer'
+          spr === 'sprServer' ||
+          spr === 'sprTerminal' ||
+          spr === 'sprProtoChest'
         ) {
           lights.push({ x: prop.x, y: prop.y - 3, radius: 28, innerRadius: 16, intensity: 1 });
         } else if (spr === 'sprCampfire') {
@@ -231,7 +281,7 @@ export class LightingPass {
       }
     }
 
-    // 4. Rad pickups (subtle tiny glints — never flood the screen)
+    // 4. Rad & Cursed pickups (subtle tight glints — never flood the screen)
     for (let i = 0; i < state.pickups.length; i++) {
       const pk = state.pickups[i]!;
       if (pk.kind === 'rad' || pk.kind === 'big_rad') {
@@ -241,6 +291,24 @@ export class LightingPass {
           y: pkPos.y,
           radius: pk.kind === 'big_rad' ? 22 : 14,
           innerRadius: pk.kind === 'big_rad' ? 10 : 0,
+          intensity: 1,
+        });
+      } else if (pk.kind === 'cursed_ammo') {
+        const pkPos = lerpPos(pk.prevX ?? pk.x, pk.prevY ?? pk.y, pk.x, pk.y, alpha, 56);
+        lights.push({
+          x: pkPos.x,
+          y: pkPos.y,
+          radius: 26,
+          innerRadius: 14,
+          intensity: 1,
+        });
+      } else if (pk.cursed) {
+        const pkPos = lerpPos(pk.prevX ?? pk.x, pk.prevY ?? pk.y, pk.x, pk.y, alpha, 56);
+        lights.push({
+          x: pkPos.x,
+          y: pkPos.y,
+          radius: 22,
+          innerRadius: 10,
           intensity: 1,
         });
       }
@@ -258,13 +326,29 @@ export class LightingPass {
       });
     }
 
-    // 6. Bosses, Rebel allies, & luminous enemies (passive crystals capped <= 34!)
+    // 6. Bosses, Rebel allies, Plant saplings, & luminous enemies
     for (let i = 0; i < state.enemies.length; i++) {
       const e = state.enemies[i]!;
       const ePos = lerpPos(e.prevX, e.prevY, e.x, e.y, alpha, 56);
       const ex = ePos.x;
       const ey = ePos.y;
-      if (e.isBoss) {
+      if (e.defId === 'hyper_crystal' || e.bossId === 'hyper_crystal') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 78,
+          innerRadius: 36,
+          intensity: 1,
+        });
+      } else if (e.defId === 'captain' || e.bossId === 'captain') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 72,
+          innerRadius: 34,
+          intensity: 1,
+        });
+      } else if (e.isBoss) {
         lights.push({
           x: ex,
           y: ey,
@@ -273,7 +357,7 @@ export class LightingPass {
           intensity: 1,
         });
       } else if (e.friendly) {
-        const isSapling = e.defId === 'sapling';
+        const isSapling = e.defId === 'plant_sapling' || e.defId === 'sapling';
         lights.push({
           x: ex,
           y: ey,
@@ -281,17 +365,59 @@ export class LightingPass {
           innerRadius: isSapling ? 14 : 20,
           intensity: 1,
         });
+      } else if (e.defId === 'enemy_horror') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 56,
+          innerRadius: 28,
+          intensity: 1,
+        });
+      } else if (e.defId === 'cursed_laser_crystal') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 38,
+          innerRadius: 22,
+          intensity: 1,
+        });
       } else if (
         e.defId === 'laser_crystal' ||
         e.defId === 'lightning_crystal' ||
         e.defId === 'guardian' ||
-        e.defId === 'explo_guardian'
+        e.defId === 'explo_guardian' ||
+        e.defId === 'fireballer' ||
+        e.defId === 'super_fireballer'
       ) {
         lights.push({
           x: ex,
           y: ey,
           radius: 34,
           innerRadius: 20,
+          intensity: 1,
+        });
+      } else if (e.defId === 'fire_trap') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 32,
+          innerRadius: 18,
+          intensity: 1,
+        });
+      } else if (e.defId === 'cursed_spider') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 26,
+          innerRadius: 14,
+          intensity: 1,
+        });
+      } else if (e.defId === 'rad_maggot') {
+        lights.push({
+          x: ex,
+          y: ey,
+          radius: 20,
+          innerRadius: 10,
           intensity: 1,
         });
       }
@@ -302,13 +428,22 @@ export class LightingPass {
       const pt = state.particles[i]!;
       if (
         pt.kind === 'explosion' ||
+        pt.kind === 'popo_explo' ||
+        pt.kind === 'gamma_blast' ||
+        pt.kind === 'portal_clear' ||
         pt.kind === 'fire' ||
+        pt.kind === 'trap_fire' ||
         pt.kind === 'plasma' ||
         pt.kind === 'muzzle' ||
-        pt.kind === 'laser_hit'
+        pt.kind === 'laser_hit' ||
+        pt.kind === 'frog_heal'
       ) {
         const lifeFrac = pt.maxLifeTicks > 0 ? pt.lifeTicks / pt.maxLifeTicks : 0.5;
-        const isBlast = pt.kind === 'explosion';
+        const isBlast =
+          pt.kind === 'explosion' ||
+          pt.kind === 'popo_explo' ||
+          pt.kind === 'gamma_blast' ||
+          pt.kind === 'portal_clear';
         const outerR = isBlast
           ? Math.round(Math.min(62, Math.max(30, pt.size * 2.2) * (0.65 + 0.35 * lifeFrac)))
           : Math.round(Math.min(36, Math.max(18, pt.size * 1.8) * (0.65 + 0.35 * lifeFrac)));

@@ -4,6 +4,7 @@ import {
   type AreaDef,
   type BiomeId,
   type FloorDecal,
+  type SpriteDef,
   type WorldMap,
 } from '@/contracts';
 import type { AssetBundle } from '@/assets';
@@ -32,7 +33,7 @@ export const BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   scrapyard: '#828890',
   mansion: '#8a7e6e',
   caves: '#7a4eb4',
-  cursed_caves: '#6a3ca8',
+  cursed_caves: '#643a98',
   frozen_city: '#9da4a6',
   jungle: '#438428',
   labs: '#12333b',
@@ -40,7 +41,7 @@ export const BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   campfire: '#8c7a5c',
   vault: '#3d4d58',
   hq: '#b8c2cc',
-  crib: '#6e2844', // Wave 2B
+  crib: '#64406e',
 };
 
 /**
@@ -55,7 +56,7 @@ export const STEAM_BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   scrapyard: '#8a969e',
   mansion: '#8a7e6e',
   caves: '#8152bc',
-  cursed_caves: '#6a3ca8',
+  cursed_caves: '#c8781e',
   frozen_city: '#b4bdc5',
   jungle: '#2a900c',
   labs: '#12333b',
@@ -63,7 +64,7 @@ export const STEAM_BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   campfire: '#9a8262',
   vault: '#485864',
   hq: '#b8c2cc',
-  crib: '#6e2844', // Wave 2B
+  crib: '#84786a',
 };
 
 export function getBiomeRoofColor(biome: BiomeId, isSteam: boolean = false): string {
@@ -172,6 +173,63 @@ function isIntactSlab2x2(map: WorldMap, slabTx: number, slabTy: number): boolean
     map.tiles[(slabTy + 1) * w + slabTx] === TileType.Floor &&
     map.tiles[(slabTy + 1) * w + slabTx + 1] === TileType.Floor
   );
+}
+
+function isIntactPatch3x3(map: WorldMap, cx: number, cy: number): boolean {
+  if (cx < 1 || cy < 1 || cx + 1 >= map.width || cy + 1 >= map.height) {
+    return false;
+  }
+  const w = map.width;
+  for (let dy = -1; dy <= 1; dy++) {
+    const row = (cy + dy) * w;
+    for (let dx = -1; dx <= 1; dx++) {
+      if (map.tiles[row + cx + dx] !== TileType.Floor) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Computes the aligned 16x16 quadrant sub-rect inside a 2x2 floor slab sprite.
+ * Handles Steam oversized slabs like `sprFloor1B` (36x36 with origin=(2,2) border overhang)
+ * by offsetting cleanly into the centered 32x32 core so zero 2px grid seams appear!
+ */
+export function computeSlabSubRect(
+  sprite: SpriteDef,
+  frameIndex: number,
+  tx: number,
+  ty: number,
+  ts: number = TILE_SIZE,
+): { subX: number; subY: number } {
+  const coreSpan = ts * 2;
+  const fCount = sprite.frames.length;
+  const safeIdx = fCount > 0 ? ((Math.floor(frameIndex) % fCount) + fCount) % fCount : 0;
+  const rect = sprite.frames[safeIdx];
+  const targetW = rect ? rect.targetW : sprite.width;
+  const targetH = rect ? rect.targetH : sprite.height;
+  const targetX = rect ? rect.targetX : 0;
+  const targetY = rect ? rect.targetY : 0;
+
+  let offsetX = 0;
+  if (targetW > coreSpan) {
+    const extraX = targetW - coreSpan;
+    const relOriginX = sprite.originX - targetX;
+    offsetX = relOriginX > 0 && relOriginX <= extraX ? relOriginX : Math.floor(extraX / 2);
+    offsetX = Math.max(0, Math.min(extraX, offsetX));
+  }
+
+  let offsetY = 0;
+  if (targetH > coreSpan) {
+    const extraY = targetH - coreSpan;
+    const relOriginY = sprite.originY - targetY;
+    offsetY = relOriginY > 0 && relOriginY <= extraY ? relOriginY : Math.floor(extraY / 2);
+    offsetY = Math.max(0, Math.min(extraY, offsetY));
+  }
+
+  return {
+    subX: offsetX + (tx & 1) * ts,
+    subY: offsetY + (ty & 1) * ts,
+  };
 }
 
 /**
@@ -307,6 +365,31 @@ export class FloorBuffer {
     fillBiomeRoofRect(this.ctx, map.biome, 0, 0, logicalW, logicalH, 0, 0, this.isSteam);
 
     this.renderTileRange(map, 0, 0, map.width - 1, map.height - 1, areaDef);
+    this.stampBiomeFloorDecals(map);
+  }
+
+  private stampBiomeFloorDecals(map: WorldMap): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (map.biome !== 'pizza_sewers' || !this.sprites.hasSprite('sprPizzaSewerDecal')) {
+      return;
+    }
+    const ts = this.tileSize;
+    let stamped = 0;
+    const maxDecals = 4;
+    for (let ty = 2; ty < map.height - 2 && stamped < maxDecals; ty += 3) {
+      for (let tx = 2; tx < map.width - 2 && stamped < maxDecals; tx += 3) {
+        if (!isIntactPatch3x3(map, tx, ty)) continue;
+        const h = tileHash(tx, ty, 202);
+        if (h % 5 !== 0) continue;
+        this.sprites.draw(ctx, 'sprPizzaSewerDecal', tx * ts + ts * 0.5, ty * ts + ts * 0.5, {
+          frame: 0,
+          alpha: 0.9,
+          pixelSnap: true,
+        });
+        stamped += 1;
+      }
+    }
   }
 
   /**
@@ -427,8 +510,7 @@ export class FloorBuffer {
         if (altDef && altDef.frames.length > 0) {
           const af0 = altDef.frames[0]!;
           if (af0.targetW >= ts * 2 && af0.targetH >= ts * 2) {
-            const subX = (tx & 1) * ts;
-            const subY = (ty & 1) * ts;
+            const { subX, subY } = computeSlabSubRect(altDef, 0, tx, ty, ts);
             drewIceLake = this.sprites.drawSubRect(ctx, floorAltSprite, 0, subX, subY, ts, ts, px, py, ts, ts);
           } else {
             drewIceLake = this.sprites.draw(ctx, floorAltSprite, px, py, { frame: 0, pixelSnap: true });
@@ -452,12 +534,12 @@ export class FloorBuffer {
           const slabTx = tx & ~1;
           const slabTy = ty & ~1;
           const slabVariant = map.floorVariants[slabTy * map.width + slabTx] ?? variant;
-          const subX = (tx & 1) * ts;
-          const subY = (ty & 1) * ts;
+          const { subX, subY } = computeSlabSubRect(floorDef, slabVariant, tx, ty, ts);
           drewBase = this.sprites.drawSubRect(ctx, floorSprite, slabVariant, subX, subY, ts, ts, px, py, ts, ts);
 
           // Subtle intact-floor variety using sprFloor*B slabs (~14% of intact 2x2 floor blocks).
           // Skip on Palace biome (7-1, 7-2, 7-3) so Palace floors stay 100% uniform dark charcoal diamond tiles!
+          // Soften Steam Pizza Sewers sprFloor102B (stark neon-yellow contrast) via lower frequency & soft alpha blend.
           if (
             drewBase &&
             map.biome !== 'frozen_city' &&
@@ -466,12 +548,27 @@ export class FloorBuffer {
             this.sprites.hasSprite(floorAltSprite) &&
             isIntactSlab2x2(map, slabTx, slabTy)
           ) {
+            const isSteamPizza = this.isSteam && map.biome === 'pizza_sewers';
+            const altPeriod = isSteamPizza ? 19 : 7;
             const sh = tileHash(slabTx >> 1, slabTy >> 1, 7);
-            if (sh % 7 === 0) {
+            if (sh % altPeriod === 0) {
               const altDef = this.sprites.getSprite(floorAltSprite);
-              if (altDef && altDef.frames.length > 0 && altDef.frames[0]!.targetW >= ts * 2 && altDef.frames[0]!.targetH >= ts * 2) {
+              if (
+                altDef &&
+                altDef.frames.length > 0 &&
+                altDef.frames[0]!.targetW >= ts * 2 &&
+                altDef.frames[0]!.targetH >= ts * 2
+              ) {
                 const altFrame = (sh >>> 4) % Math.max(1, altDef.frames.length);
-                this.sprites.drawSubRect(ctx, floorAltSprite, altFrame, subX, subY, ts, ts, px, py, ts, ts);
+                const altSub = computeSlabSubRect(altDef, altFrame, tx, ty, ts);
+                if (isSteamPizza) {
+                  ctx.save();
+                  ctx.globalAlpha = 0.42;
+                  this.sprites.drawSubRect(ctx, floorAltSprite, altFrame, altSub.subX, altSub.subY, ts, ts, px, py, ts, ts);
+                  ctx.restore();
+                } else {
+                  this.sprites.drawSubRect(ctx, floorAltSprite, altFrame, altSub.subX, altSub.subY, ts, ts, px, py, ts, ts);
+                }
               }
             }
           }
@@ -524,7 +621,9 @@ export class FloorBuffer {
       }
     }
 
-    // Palace / Vault Red Carpet: skip procedural carpet on 7-3 ONLY when full-length Steam sprCarpet is loaded
+    // Palace / Vault / Crib Carpet:
+    // - Skip procedural carpet on 7-3 ONLY when full-length Steam sprCarpet is loaded
+    // - Skip procedural carpet on $$$ Crib when sprVenuzCarpet is loaded (drawn cleanly in Layer 2!)
     if (tile === TileType.Carpet) {
       const carpetDef = this.sprites.getSprite('sprCarpet');
       const useSteamThroneCarpet =
@@ -532,7 +631,10 @@ export class FloorBuffer {
         this.sprites.hasSprite('sprCarpet') &&
         carpetDef !== undefined &&
         carpetDef.height >= 200;
-      if (!useSteamThroneCarpet) {
+      const useVenuzRug =
+        (map.biome === 'crib' || map.areaCode === '$$$') &&
+        this.sprites.hasSprite('sprVenuzCarpet');
+      if (!useSteamThroneCarpet && !useVenuzRug) {
         this.drawCarpetTile(ctx, map, tx, ty, px, py, ts);
       }
     }
@@ -552,32 +654,37 @@ export class FloorBuffer {
     const topCarpet = ty > 0 && map.tiles[(ty - 1) * map.width + tx] === TileType.Carpet;
     const botCarpet = ty + 1 < map.height && map.tiles[(ty + 1) * map.width + tx] === TileType.Carpet;
 
-    // Authentic 1x Nuclear Throne Palace royal crimson carpet (#a01f31) + crisp 1px #d8b85c gold side trim
-    ctx.fillStyle = '#a01f31';
+    const isCrib = map.biome === 'crib' || map.areaCode === '$$$';
+    const baseFill = isCrib ? '#6e1e38' : '#a01f31';
+    const trimFill = isCrib ? '#e8bc38' : '#d8b85c';
+    const innerShade = isCrib ? '#4e1228' : '#7a1524';
+
+    // Authentic 1x Nuclear Throne royal carpet + crisp 1px gold side trim
+    ctx.fillStyle = baseFill;
     ctx.fillRect(px, py, ts, ts);
 
     if (!leftCarpet) {
-      ctx.fillStyle = '#d8b85c';
+      ctx.fillStyle = trimFill;
       ctx.fillRect(px, py, 1, ts);
-      ctx.fillStyle = '#7a1524';
+      ctx.fillStyle = innerShade;
       ctx.fillRect(px + 1, py, 1, ts);
     }
     if (!rightCarpet) {
-      ctx.fillStyle = '#d8b85c';
+      ctx.fillStyle = trimFill;
       ctx.fillRect(px + ts - 1, py, 1, ts);
-      ctx.fillStyle = '#7a1524';
+      ctx.fillStyle = innerShade;
       ctx.fillRect(px + ts - 2, py, 1, ts);
     }
     if (!topCarpet) {
-      ctx.fillStyle = '#d8b85c';
+      ctx.fillStyle = trimFill;
       ctx.fillRect(px, py, ts, 1);
-      ctx.fillStyle = '#7a1524';
+      ctx.fillStyle = innerShade;
       ctx.fillRect(px, py + 1, ts, 1);
     }
     if (!botCarpet) {
-      ctx.fillStyle = '#d8b85c';
+      ctx.fillStyle = trimFill;
       ctx.fillRect(px, py + ts - 1, ts, 1);
-      ctx.fillStyle = '#7a1524';
+      ctx.fillStyle = innerShade;
       ctx.fillRect(px, py + ts - 2, ts, 1);
     }
   }
@@ -594,6 +701,23 @@ export class FloorBuffer {
     const x = Math.round(decal.x);
     const y = Math.round(decal.y);
     const scale = decal.scale > 0 ? decal.scale : 1;
+
+    // Explicit floor decal sprites (e.g., sprTrapScorchMark, sprPizzaSewerDecal) outside corpse/scorch/casing
+    if (
+      decal.sprite &&
+      decal.kind !== 'corpse' &&
+      decal.kind !== 'scorch' &&
+      decal.kind !== 'casing' &&
+      this.sprites.hasSprite(decal.sprite)
+    ) {
+      this.sprites.draw(ctx, decal.sprite, x, y, {
+        frame: decal.frame ?? 0,
+        flipX: decal.facing === -1,
+        alpha: 0.9,
+        pixelSnap: true,
+      });
+      return;
+    }
 
     switch (decal.kind) {
       case 'corpse': {

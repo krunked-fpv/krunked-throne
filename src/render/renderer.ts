@@ -28,7 +28,6 @@ import {
   resolveEnemySpritePrefix,
   resolveWeaponLabel,
   resolveWeaponSpriteName,
-  selectLoadingTip,
   type UiDataProvider,
 } from '@/ui/data-provider';
 import { BitmapFontRenderer } from './bitmap-font';
@@ -157,7 +156,108 @@ interface DrawableEntity {
   draw: () => void;
 }
 
-const PASSIVE_AI_STATES = new Set(['idle', 'wander', 'sleep', 'feign', 'disguised']);
+export interface LaserColorContext {
+  kind?: string;
+  team?: 'player' | 'enemy';
+  weaponId?: string;
+  isUltra?: boolean;
+  sourceCause?: string;
+  sourceSprite?: string;
+  sprite?: string;
+  biome?: BiomeId;
+  areaCode?: string;
+}
+
+/**
+ * Resolves authentic Nuclear Throne laser beam & laser muzzle flash colors:
+ * - Enemy lasers: '#ff3ec8' pink-magenta, or '#b838ff' purple in 4-? Cursed Caves / Cursed Crystals
+ * - Ion Cannon: '#38e4ff' electric cyan
+ * - Ultra Laser Pistol / Ultra lasers: '#38d848' radioactive neon green
+ * - Standard player lasers (Laser Pistol/Rifle/Minigun/Cannon, Golden Laser Pistol, energy_*): '#ff3838' crimson red
+ */
+export function resolveLaserColor(ctx: LaserColorContext): string {
+  const isEnemy = ctx.kind === 'enemy_laser' || ctx.team === 'enemy';
+  if (isEnemy) {
+    const cause = (ctx.sourceCause ?? '').toLowerCase();
+    const srcSpr = (ctx.sourceSprite ?? '').toLowerCase();
+    const spr = (ctx.sprite ?? '').toLowerCase();
+    const isCursed =
+      ctx.biome === 'cursed_caves' ||
+      ctx.areaCode === '4-?' ||
+      cause.includes('cursed') ||
+      srcSpr.includes('invlasercrystal') ||
+      spr.includes('invlaser') ||
+      spr.includes('cursed');
+    return isCursed ? '#b838ff' : '#ff3ec8';
+  }
+  const wid = ctx.weaponId ?? '';
+  if (wid === 'ion_cannon') {
+    return '#38e4ff';
+  }
+  if (ctx.isUltra || wid === 'ultra_laser_pistol' || wid.startsWith('ultra_')) {
+    return '#38d848';
+  }
+  return '#ff3838';
+}
+
+export const BIOME_TOP_DECAL_SPRITES: Readonly<Partial<Record<BiomeId, string>>> = {
+  caves: 'sprTopDecalCave',
+  cursed_caves: 'sprTopDecalInvCave',
+  frozen_city: 'sprTopDecalCity',
+  jungle: 'sprTopDecalJungle',
+  pizza_sewers: 'sprTopDecalPizzaSewers',
+  scrapyard: 'sprTopDecalScrapyard',
+  sewers: 'sprTopDecalSewers',
+};
+
+export function resolveBiomeTopDecalSprite(biome: BiomeId): string | undefined {
+  return BIOME_TOP_DECAL_SPRITES[biome];
+}
+
+function isFloorFlatProp(prop: PropEntity): boolean {
+  return (
+    prop.kind === 'snare_trap' ||
+    prop.kind === 'necro_revive_area' ||
+    prop.sprite === 'sprVenuzCarpet' ||
+    prop.sprite === 'sprPizzaSewerDecal' ||
+    prop.sprite === 'sprTrapScorchMark'
+  );
+}
+
+function propCullMargin(prop: PropEntity): number {
+  switch (prop.kind) {
+    case 'venuz_tv':
+      return 150;
+    case 'captain_desk':
+    case 'big_tv':
+      return 96;
+    case 'venuz_couch':
+      return 80;
+    case 'giant_weapon_chest':
+    case 'giant_ammo_chest':
+    case 'throne_statue':
+    case 'vault_statue':
+      return 72;
+    default:
+      return Math.max(64, prop.radius + 32);
+  }
+}
+
+function propDepthSortY(prop: PropEntity): number {
+  switch (prop.kind) {
+    case 'big_tv':
+      return prop.y - 8;
+    case 'venuz_tv':
+    case 'last_chair':
+      return prop.y - 2;
+    case 'yung_cuz':
+      return prop.y + 1;
+    default:
+      return prop.y;
+  }
+}
+
+const PASSIVE_AI_STATES = new Set(['idle', 'wander', 'sleep', 'feign', 'disguised', 'idle_desk', 'sit', 'empty', 'inactive']);
 const ACTIVE_AI_STATES = new Set([
   'alert',
   'chase',
@@ -517,6 +617,7 @@ export class GameRenderer {
   private lastEmptyTextSec = -10;
   private lastSkidTick = -1;
   private lastBeamScorchTick = -10;
+  private lastCursedSmokeTick = -1;
   private lowAmmoWarnedPools = new Set<AmmoType>();
   private fxSeq = 1;
   private meleeSwingSide: 1 | -1 = 1;
@@ -649,6 +750,7 @@ export class GameRenderer {
     this.shieldDisappearTicks = 0;
     this.lastSkidTick = -1;
     this.lastBeamScorchTick = -10;
+    this.lastCursedSmokeTick = -1;
     this.wallRenderMask = null;
     this.camera.clearFocusBias();
     if (state) {
@@ -1002,7 +1104,63 @@ export class GameRenderer {
           break;
         }
 
-        case 'particle':
+        case 'portal_open': {
+          const isVaultPortal = ev.targetArea === 'vault';
+          const isBluePortal =
+            ev.targetArea === '1-?' ||
+            ev.targetArea === 'hq-1' ||
+            ev.targetArea === 'hq-2' ||
+            ev.targetArea === 'hq-3';
+          const isCribPortal = ev.targetArea === '$$$';
+          const ringColor = isVaultPortal
+            ? '#52f088'
+            : isBluePortal
+              ? '#52b8ff'
+              : isCribPortal
+                ? '#ffe047'
+                : '#c870ff';
+          this.transientParticles.push({
+            kind: 'portal_clear',
+            x: ev.x,
+            y: ev.y,
+            vx: 0,
+            vy: 0,
+            color: ringColor,
+            size: 32,
+            life: 12,
+            maxLife: 12,
+            sprite: 'sprPortalClear',
+          });
+          this.shockwaves.push({
+            x: ev.x,
+            y: ev.y,
+            startR: 6,
+            endR: 40,
+            color: ringColor,
+            glowColor: ringColor,
+            life: 12,
+            maxLife: 12,
+          });
+          this.spawnFlashLight(ev.x, ev.y, 56, ringColor, 8);
+          break;
+        }
+
+        case 'particle': {
+          const resolvedSprite =
+            ev.sprite ??
+            (ev.kind === 'gamma_blast'
+              ? 'sprGammaBlast'
+              : ev.kind === 'portal_clear'
+                ? 'sprPortalClear'
+                : ev.kind === 'popo_explo'
+                  ? 'sprPopoExplo'
+                  : ev.kind === 'frog_gas' || ev.kind === 'toxic_gas'
+                    ? 'sprFrogGas'
+                    : ev.kind === 'frog_heal'
+                      ? 'sprFrogHeal'
+                      : ev.kind === 'trap_fire'
+                        ? 'sprTrapFire'
+                        : undefined);
           this.transientParticles.push({
             kind: ev.kind,
             x: ev.x,
@@ -1013,9 +1171,49 @@ export class GameRenderer {
             size: ev.size ?? 2,
             life: Math.max(1, ev.life),
             maxLife: Math.max(1, ev.life),
-            sprite: ev.sprite,
+            sprite: resolvedSprite,
           });
-          if (ev.kind === 'explosion') {
+          if (ev.kind === 'gamma_blast' || resolvedSprite === 'sprGammaBlast') {
+            this.shockwaves.push({
+              x: ev.x,
+              y: ev.y,
+              startR: 8,
+              endR: Math.max(36, ev.size ?? 48),
+              color: '#58ff68',
+              glowColor: 'rgba(88, 255, 104, 0.72)',
+              life: 9,
+              maxLife: 9,
+            });
+            this.spawnFlashLight(ev.x, ev.y, 56, 'rgba(88, 255, 104, 0.65)', 6);
+          } else if (ev.kind === 'portal_clear' || resolvedSprite === 'sprPortalClear') {
+            this.shockwaves.push({
+              x: ev.x,
+              y: ev.y,
+              startR: 6,
+              endR: Math.max(32, ev.size ?? 38),
+              color: ev.color || '#c870ff',
+              glowColor: 'rgba(196, 112, 255, 0.72)',
+              life: 11,
+              maxLife: 11,
+            });
+            this.spawnFlashLight(ev.x, ev.y, 54, 'rgba(196, 112, 255, 0.6)', 7);
+          } else if (ev.kind === 'popo_explo' || resolvedSprite === 'sprPopoExplo') {
+            const popoR = Math.max(36, (ev.size ?? 36) * 1.25);
+            this.shockwaves.push({
+              x: ev.x,
+              y: ev.y,
+              startR: 6,
+              endR: popoR,
+              color: '#4ca6ff',
+              glowColor: 'rgba(85, 185, 255, 0.72)',
+              life: 11,
+              maxLife: 11,
+              isExplosion: true,
+            });
+            this.spawnSmokeBurst(ev.x, ev.y, 5, Math.min(34, popoR * 0.8), '#26344a');
+            this.spawnFlashLight(ev.x, ev.y, 64, 'rgba(90, 190, 255, 0.5)', 7);
+            this.screenBlastFlashTicks = Math.max(this.screenBlastFlashTicks, 1.8);
+          } else if (ev.kind === 'explosion') {
             const baseRadius = Math.max(22, (ev.size ?? 24) * 1.38);
             const ringColor = ev.color || '#ffba4d';
             const lowerCol = ringColor.toLowerCase();
@@ -1068,6 +1266,7 @@ export class GameRenderer {
             this.spawnFlashLight(ev.x, ev.y, 26, 'rgba(255, 195, 75, 0.9)', 2.6);
           }
           break;
+        }
 
         case 'area_change':
           this.lastMapRef = null;
@@ -1193,13 +1392,25 @@ export class GameRenderer {
 
     const kind = wep?.projectileKind;
     if (kind === 'plasma' || kind === 'rad_beam') {
-      color = 'rgba(90, 255, 130, 0.9)';
-      coreColor = '#e2ffe8';
+      if (kind === 'rad_beam' && player.mutant === 'horror' && player.skin === 'b') {
+        color = 'rgba(184, 56, 255, 0.92)';
+        coreColor = '#f5d0ff';
+      } else {
+        color = 'rgba(90, 255, 130, 0.9)';
+        coreColor = '#e2ffe8';
+      }
       radius = 12;
     } else if (kind === 'laser') {
-      color = '#38d848';
+      color = resolveLaserColor({
+        kind: 'laser',
+        team: 'player',
+        weaponId: slot.weaponId,
+        isUltra: wep?.ultra,
+        biome: state.biome,
+        areaCode: state.areaCode,
+      });
       coreColor = '#ffffff';
-      radius = 10;
+      radius = slot.weaponId === 'laser_cannon' || slot.weaponId === 'ion_cannon' ? 13 : 10;
     } else if (kind === 'lightning') {
       color = 'rgba(110, 225, 255, 0.9)';
       coreColor = '#e8fbff';
@@ -1382,6 +1593,61 @@ export class GameRenderer {
               maxLife: 7,
             });
           }
+        }
+      }
+    }
+
+    // Drift subtle purple cursed smoke particles from cursed pickups, held cursed weapons, chests & cursed foes
+    if (curTick !== this.lastCursedSmokeTick && curTick % 4 === 0 && this.transientParticles.length < 190) {
+      this.lastCursedSmokeTick = curTick;
+      const emitCursedPuff = (cx: number, cy: number): void => {
+        if (this.transientParticles.length >= 200) return;
+        this.transientParticles.push({
+          kind: 'cursed_smoke',
+          x: cx + (this.nextFxHash() - 0.5) * 6,
+          y: cy + (this.nextFxHash() - 0.5) * 4,
+          vx: (this.nextFxHash() - 0.5) * 0.45,
+          vy: -0.45 - this.nextFxHash() * 0.45,
+          color: this.nextFxHash() > 0.45 ? '#b838ff' : '#6c24a8',
+          size: 2.5 + this.nextFxHash() * 1.5,
+          life: 11 + Math.floor(this.nextFxHash() * 6),
+          maxLife: 16,
+        });
+      };
+      if (state.player.alive) {
+        const activeSlot = state.player.weapons[state.player.activeSlot];
+        if (activeSlot?.cursed) {
+          const anchor = this.computeHeldWeaponAnchor(state.player, state.player.x, state.player.y, false, 0);
+          emitCursedPuff(anchor.x + Math.cos(state.player.aimAngle) * 6, anchor.y + Math.sin(state.player.aimAngle) * 6);
+        }
+        if (state.player.mutant === 'steroids') {
+          const offIdx = state.player.activeSlot === 0 ? 1 : 0;
+          const offSlot = state.player.weapons[offIdx];
+          if (offSlot?.cursed) {
+            const anchor = this.computeHeldWeaponAnchor(state.player, state.player.x, state.player.y, true, 0);
+            emitCursedPuff(anchor.x + Math.cos(state.player.aimAngle) * 6, anchor.y + Math.sin(state.player.aimAngle) * 6);
+          }
+        }
+      }
+      for (let i = 0; i < state.pickups.length; i++) {
+        const pk = state.pickups[i]!;
+        if ((pk.cursed || pk.kind === 'cursed_ammo') && ((curTick >> 2) + pk.id) % 2 === 0) {
+          emitCursedPuff(pk.x, pk.y - 2);
+        }
+      }
+      for (let i = 0; i < state.props.length; i++) {
+        const prop = state.props[i]!;
+        if (prop.cursed && !prop.opened && ((curTick >> 2) + prop.id) % 3 === 0) {
+          emitCursedPuff(prop.x, prop.y - 4);
+        }
+      }
+      for (let i = 0; i < state.enemies.length; i++) {
+        const e = state.enemies[i]!;
+        if (
+          (e.defId === 'cursed_spider' || e.defId === 'cursed_laser_crystal') &&
+          ((curTick >> 2) + e.id) % 3 === 0
+        ) {
+          emitCursedPuff(e.x, e.y - 4);
         }
       }
     }
@@ -1572,14 +1838,16 @@ export class GameRenderer {
     ctx.translate(-viewLeft, -viewTop);
 
     // ------------------------------------------------------------------------
-    // LAYER 2: 7-3 Throne Hall Carpet (clipped BEFORE walls!) + Wall Base AO & Outer Outlines
+    // LAYER 2: 7-3 Throne Carpet & Y.V.'s Crib/Mansion Rug (clipped BEFORE walls!) + Wall Base AO & Outer Outlines
     // ------------------------------------------------------------------------
     this.renderThroneHallCarpet(ctx, state, settings.pixelSnap);
+    this.renderVenuzCarpet(ctx, state, settings.pixelSnap);
     const wallRange = this.renderWallBases(ctx, map, viewLeft, viewTop, w, h, areaDef);
 
     // ------------------------------------------------------------------------
-    // LAYER 3: Settled Live Corpses, Throne Beam Telegraph, Plant Snares, Rogue Aim, Shadows, Pickups, Portal
+    // LAYER 3: Floor Hazards (Revive Areas, Trap Scorch), Settled Live Corpses, Throne Telegraph, Snares, Shadows, Pickups, Portal
     // ------------------------------------------------------------------------
+    this.renderFloorHazards(ctx, state, viewLeft, viewTop, w, h, settings.pixelSnap);
     for (let i = 0; i < state.corpses.length; i++) {
       const corpse = state.corpses[i]!;
       if (!corpse.baked) continue;
@@ -1602,10 +1870,10 @@ export class GameRenderer {
 
     for (let i = 0; i < state.props.length; i++) {
       const prop = state.props[i]!;
-      if (prop.kind === 'snare_trap') continue; // Rendered flat on floor in Layer 3
-      if (this.isOutsideView(prop.x, prop.y, 64, viewLeft, viewTop, w, h)) continue;
+      if (isFloorFlatProp(prop)) continue; // Rendered flat on floor in Layer 2/3
+      if (this.isOutsideView(prop.x, prop.y, propCullMargin(prop), viewLeft, viewTop, w, h)) continue;
       drawList.push({
-        sortY: prop.y,
+        sortY: propDepthSortY(prop),
         draw: () => this.renderProp(ctx, prop, state.tick, settings.pixelSnap, map),
       });
     }
@@ -1978,6 +2246,51 @@ export class GameRenderer {
         }
       }
     }
+
+    // 3. Subtle biome roof decals (sprTopDecalCave/InvCave/City/Jungle/PizzaSewers/Scrapyard/Sewers)
+    //    on intact 2x2 wall-top islands (stamped on the odd/south row of each 2x2 block so both rows'
+    //    roof caps are already drawn and decals NEVER overhang onto walkable floor!).
+    const topDecalSpr = resolveBiomeTopDecalSprite(map.biome);
+    if (topDecalSpr && (ty & 1) === 1 && ty > 0 && this.sprites.hasSprite(topDecalSpr)) {
+      const decalDef = this.sprites.getSprite(topDecalSpr)!;
+      const mw = map.width;
+      const startTx = Math.max(0, minTx & ~1);
+      const endTx = Math.min(mw - 2, maxTx);
+      const prevRow = (ty - 1) * mw;
+      for (let tx = startTx; tx <= endTx; tx += 2) {
+        const i00 = prevRow + tx;
+        const i10 = prevRow + tx + 1;
+        const i01 = row + tx;
+        const i11 = row + tx + 1;
+        if (
+          isWalkable(map.tiles[i00]!) ||
+          isWalkable(map.tiles[i10]!) ||
+          isWalkable(map.tiles[i01]!) ||
+          isWalkable(map.tiles[i11]!)
+        ) {
+          continue;
+        }
+        const hasWallIsland = wMask
+          ? wMask[i00]! > 0 || wMask[i10]! > 0 || wMask[i01]! > 0 || wMask[i11]! > 0
+          : true;
+        if (!hasWallIsland) continue;
+
+        let h = Math.imul((tx >> 1) + 19, 374761393) ^ Math.imul((ty >> 1) + 53, 668265263);
+        h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+        if (h % 7 !== 0) continue;
+
+        const cx = (tx + 1) * ts;
+        const cy = ty * ts - overhang;
+        const drawX = cx - decalDef.width * 0.5 + decalDef.originX;
+        const drawY = cy - decalDef.height * 0.5 + decalDef.originY;
+        const frame = (h >>> 4) % Math.max(1, decalDef.frames.length);
+        this.sprites.draw(ctx, topDecalSpr, drawX, drawY, {
+          frame,
+          alpha: 0.82,
+          pixelSnap: true,
+        });
+      }
+    }
   }
 
   private renderGroundShadows(
@@ -2019,13 +2332,97 @@ export class GameRenderer {
       }
     }
 
-    // Prop centered contact shadows
+    // Prop centered contact shadows (tailored footprints for large Crib/HQ/Vault/Palace setpieces!)
     for (let i = 0; i < state.props.length; i++) {
       const p = state.props[i]!;
-      if (p.kind === 'snare_trap' || !p.sprite) continue;
-      const rx = Math.max(5, Math.round(p.radius * 0.92));
-      const ry = Math.max(2, Math.round(p.radius * 0.42));
-      fillPixelOval(ctx, Math.round(p.x), Math.round(p.y + 4), rx, ry);
+      if (isFloorFlatProp(p) || !p.sprite) continue;
+      let rx = Math.max(5, Math.round(p.radius * 0.92));
+      let ry = Math.max(2, Math.round(p.radius * 0.42));
+      let oy = 4;
+      switch (p.kind) {
+        case 'venuz_tv':
+          rx = 94;
+          ry = 4;
+          oy = 2;
+          break;
+        case 'venuz_couch':
+          rx = 44;
+          ry = 10;
+          oy = 14;
+          break;
+        case 'yung_cuz':
+          rx = 7;
+          ry = 3;
+          oy = 6;
+          break;
+        case 'giant_weapon_chest':
+        case 'giant_ammo_chest':
+          rx = 26;
+          ry = 9;
+          oy = 16;
+          break;
+        case 'venuz_car_exit':
+          rx = 15;
+          ry = 6;
+          oy = 7;
+          break;
+        case 'captain_desk':
+          rx = 56;
+          ry = 12;
+          oy = 16;
+          break;
+        case 'big_tv':
+          rx = 48;
+          ry = 4;
+          oy = 44;
+          break;
+        case 'last_chair':
+          rx = 9;
+          ry = 4;
+          oy = 6;
+          break;
+        case 'messenger':
+          rx = 6;
+          ry = 3;
+          oy = 6;
+          break;
+        case 'throne_statue':
+        case 'vault_statue':
+          rx = 11;
+          ry = 5;
+          oy = 14;
+          break;
+        case 'proto_chest':
+          rx = 10;
+          ry = 4;
+          oy = 6;
+          break;
+        case 'frog_egg':
+          rx = 16;
+          ry = 6;
+          oy = 12;
+          break;
+        case 'chandelier':
+          rx = 10;
+          ry = 4;
+          oy = 12;
+          break;
+        case 'small_generator':
+        case 'office_table':
+          rx = 13;
+          ry = 5;
+          oy = 7;
+          break;
+        case 'server':
+        case 'terminal':
+          rx = 9;
+          ry = 4;
+          oy = 6;
+          break;
+        default:
+          break;
+      }
+      fillPixelOval(ctx, Math.round(p.x), Math.round(p.y + oy), rx, ry);
     }
 
     // Pickup centered contact shadows
@@ -2217,8 +2614,15 @@ export class GameRenderer {
   ): void {
     for (let i = 0; i < pickups.length; i++) {
       const pk = pickups[i]!;
-      // Blink slightly when close to expiring
-      if (pk.lifeTicks > 0 && pk.lifeTicks < 60 && Math.floor(pk.lifeTicks / 4) % 2 === 0) {
+      const isCursedAmmo = pk.kind === 'cursed_ammo';
+      const cursedAmmoExpiring = isCursedAmmo && pk.lifeTicks > 0 && pk.lifeTicks < 60;
+      const cursedAmmoUrgent = isCursedAmmo && pk.lifeTicks > 0 && pk.lifeTicks < 25;
+      const cursedBlinkOn = cursedAmmoExpiring
+        ? Math.floor(pk.lifeTicks / (cursedAmmoUrgent ? 2 : 4)) % 2 === 0
+        : false;
+
+      // Standard pickups blink out cleanly when close to expiring; cursed_ammo stays visible with urgent warning flash!
+      if (!isCursedAmmo && pk.lifeTicks > 0 && pk.lifeTicks < 60 && Math.floor(pk.lifeTicks / 4) % 2 === 0) {
         continue;
       }
       const pkPos = lerpPosSafe(pk.prevX ?? pk.x, pk.prevY ?? pk.y, pk.x, pk.y, alpha, 56);
@@ -2227,6 +2631,7 @@ export class GameRenderer {
       let spr = 'sprRad';
       if (pk.kind === 'big_rad') spr = this.sprites.hasSprite('sprBigRad') ? 'sprBigRad' : 'sprRadBig';
       else if (pk.kind === 'ammo') spr = 'sprAmmo';
+      else if (isCursedAmmo) spr = 'sprCursedAmmo';
       else if (pk.kind === 'hp') spr = 'sprHP';
       else if (pk.kind === 'portal_strike') {
         spr = this.sprites.hasSprite('sprRogueAmmo')
@@ -2234,13 +2639,24 @@ export class GameRenderer {
           : this.sprites.hasSprite('sprRogueAmmoHUD')
             ? 'sprRogueAmmoHUD'
             : 'sprAmmo';
-      }
-      else if (pk.kind === 'weapon' && pk.weaponId) {
+      } else if (pk.kind === 'weapon' && pk.weaponId) {
         spr = resolveWeaponSpriteName(pk.weaponId, this.data);
       }
 
+      // Pulsing purple aura & imminent-explosion blinking warning ring around cursed_ammo
+      if (isCursedAmmo) {
+        ctx.save();
+        const pulseR = Math.round(6 + Math.sin(tick * 0.42 + pk.id) * 1.5);
+        ctx.fillStyle = cursedBlinkOn ? 'rgba(255, 56, 104, 0.42)' : 'rgba(184, 56, 255, 0.28)';
+        drawPixelDisc(ctx, pkPos.x, py, pulseR);
+        ctx.fillStyle = cursedBlinkOn ? '#ff3868' : '#d878ff';
+        drawPixelRing(ctx, pkPos.x, py, cursedAmmoExpiring ? pulseR + 2 : pulseR, 1, cursedAmmoExpiring ? 3 : 0, tick & 7);
+        ctx.restore();
+      }
+
       const drew = this.sprites.draw(ctx, spr, pkPos.x, py, {
-        frame: Math.floor(pk.animFrame || tick * 0.2),
+        frame: Math.floor(isCursedAmmo ? tick * 0.35 + pk.id : pk.animFrame || tick * 0.2),
+        flashWhite: cursedBlinkOn,
         pixelSnap,
       });
 
@@ -2249,27 +2665,38 @@ export class GameRenderer {
         const y = Math.round(py);
         ctx.fillStyle = '#120e16';
         ctx.fillRect(x - 4, y - 4, 8, 8);
-        ctx.fillStyle =
-          pk.kind === 'hp'
-            ? '#ff3b4a'
-            : pk.kind === 'ammo'
-              ? '#f5c742'
-              : pk.kind === 'weapon'
-                ? '#c7d2e0'
-                : pk.kind === 'portal_strike'
-                  ? '#52a8ff'
-                  : '#59ff66';
+        ctx.fillStyle = cursedBlinkOn
+          ? '#ffffff'
+          : isCursedAmmo
+            ? '#b838ff'
+            : pk.kind === 'hp'
+              ? '#ff3b4a'
+              : pk.kind === 'ammo'
+                ? '#f5c742'
+                : pk.kind === 'weapon'
+                  ? '#c7d2e0'
+                  : pk.kind === 'portal_strike'
+                    ? '#52a8ff'
+                    : '#59ff66';
         ctx.fillRect(x - 3, y - 3, 6, 6);
+        if (isCursedAmmo) {
+          ctx.fillStyle = '#ffa8ff';
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
       }
 
-      // Cursed weapon purple aura sparkle
-      if (pk.cursed) {
+      // Drifting purple cursed smoke wisps rising from cursed weapons & cursed ammo pickups
+      if (pk.cursed || isCursedAmmo) {
         ctx.save();
-        ctx.fillStyle = '#c94aff';
-        ctx.globalAlpha = 0.65;
-        const ox = Math.round(Math.cos(tick * 0.3 + pk.id) * 6);
-        const oy = Math.round(Math.sin(tick * 0.3 + pk.id) * 4);
-        ctx.fillRect(Math.round(pkPos.x + ox), Math.round(py + oy), 2, 2);
+        for (let s = 0; s < 3; s++) {
+          const phase = wrapMod(this.renderTimeSec * 1.55 + pk.id * 0.31 + s * 0.33, 1);
+          const sx = Math.round(pkPos.x + Math.sin(phase * 5.2 + pk.id + s * 2.1) * (3 + phase * 2));
+          const sy = Math.round(py - 2 - phase * 10);
+          const r = phase < 0.6 ? 2 : 1;
+          ctx.globalAlpha = (1 - phase) * 0.82;
+          ctx.fillStyle = s === 0 ? '#e888ff' : s === 1 ? '#b838ff' : '#581a88';
+          drawPixelDisc(ctx, sx, sy, r);
+        }
         ctx.restore();
       }
     }
@@ -2288,28 +2715,34 @@ export class GameRenderer {
     // Distinct secret portal visual identity:
     // - '1-?' Oasis: Ocean Blue tint
     // - 'vault' Crown Vault: Emerald Green (sprProtoPortal)
-    // - 'hq-1' IDPD HQ: Police Blue (sprPopoPortal / sprIDPDPortalStart)
+    // - 'hq-1'..'hq-3' IDPD HQ: Police Blue (sprPopoPortal / sprIDPDPortalStart)
+    // - '$$$' Y.V.'s Crib: Luxury Gold shimmer
     // - Default: Classic Wasteland Purple (sprPortal)
     const isVault = target === 'vault';
     const isOasis = target === '1-?';
-    const isHq = target === 'hq-1';
+    const isHq = target === 'hq-1' || target === 'hq-2' || target === 'hq-3';
+    const isCrib = target === '$$$';
 
     const outerGlowCol = isVault
       ? 'rgba(60, 235, 118, 0.48)'
-      : isOasis
-        ? 'rgba(46, 175, 255, 0.48)'
-        : isHq
-          ? 'rgba(65, 145, 255, 0.50)'
-          : 'rgba(170, 75, 245, 0.48)';
+      : isCrib
+        ? 'rgba(245, 200, 56, 0.52)'
+        : isOasis
+          ? 'rgba(46, 175, 255, 0.48)'
+          : isHq
+            ? 'rgba(65, 145, 255, 0.50)'
+            : 'rgba(170, 75, 245, 0.48)';
     const coreGlowCol = isVault
       ? 'rgba(210, 255, 225, 0.62)'
-      : isOasis || isHq
-        ? 'rgba(205, 242, 255, 0.62)'
-        : 'rgba(245, 220, 255, 0.62)';
-    const ringColA = isVault ? '#b8ffd0' : isOasis || isHq ? '#bae8ff' : '#ebd0ff';
-    const ringColB = isVault ? '#47f084' : isOasis ? '#38c8ff' : isHq ? '#4f9eff' : '#b86bff';
-    const shardColA = isVault ? '#9effbc' : isOasis || isHq ? '#9ee2ff' : '#e8b5ff';
-    const shardColB = isVault ? '#38d974' : isOasis ? '#30b8ff' : isHq ? '#4a88ff' : '#78d8ff';
+      : isCrib
+        ? 'rgba(255, 248, 196, 0.68)'
+        : isOasis || isHq
+          ? 'rgba(205, 242, 255, 0.62)'
+          : 'rgba(245, 220, 255, 0.62)';
+    const ringColA = isVault ? '#b8ffd0' : isCrib ? '#fff5a8' : isOasis || isHq ? '#bae8ff' : '#ebd0ff';
+    const ringColB = isVault ? '#47f084' : isCrib ? '#f5c838' : isOasis ? '#38c8ff' : isHq ? '#4f9eff' : '#b86bff';
+    const shardColA = isVault ? '#9effbc' : isCrib ? '#ffe878' : isOasis || isHq ? '#9ee2ff' : '#e8b5ff';
+    const shardColB = isVault ? '#38d974' : isCrib ? '#e8a828' : isOasis ? '#30b8ff' : isHq ? '#4a88ff' : '#78d8ff';
 
     // Outer swirling crisp pixel-hard vortex aura discs (zero blurry radial gradients!)
     ctx.save();
@@ -2363,6 +2796,8 @@ export class GameRenderer {
       } else {
         tintColor = '#52a8ff';
       }
+    } else if (isCrib) {
+      tintColor = '#ffe047';
     } else if (isOasis) {
       // Oasis portal uses blue-tinted portal vortex
       if (this.sprites.hasSprite('sprPopoPortal')) {
@@ -2424,7 +2859,7 @@ export class GameRenderer {
         }
       }
     }
-    // Use dedicated Steam hurt/charge sprites when present on generators & proto statues
+    // Use dedicated Steam / Built-In hurt, charge & dead sprites when present on generators, statues & setpieces
     // (Guard Vault Crown Pedestal so shooting sprCrownPedIdle never flashes sprProtoStatueHurt!)
     if (prop.kind === 'throne_generator' && prop.hurtFlashTicks > 0 && this.sprites.hasSprite('sprBigGeneratorHurt')) {
       sprName = 'sprBigGeneratorHurt';
@@ -2433,6 +2868,21 @@ export class GameRenderer {
         sprName = 'sprProtoStatueHurt';
       } else if ((prop.radsStored ?? 0) > 0 && this.sprites.hasSprite('sprProtoStatueCharge')) {
         sprName = 'sprProtoStatueCharge';
+      }
+    } else if (prop.hp <= 0 && !prop.opened) {
+      const deadCand =
+        prop.kind === 'captain_desk'
+          ? 'sprDeskDead'
+          : prop.kind === 'big_tv'
+            ? 'sprBigTVDead'
+            : `${sprName.replace(/Idle$/, '')}Dead`;
+      if (this.sprites.hasSprite(deadCand)) {
+        sprName = deadCand;
+      }
+    } else if (prop.hurtFlashTicks > 0 && !prop.opened) {
+      const hurtCand = `${sprName.replace(/Idle$/, '')}Hurt`;
+      if (this.sprites.hasSprite(hurtCand)) {
+        sprName = hurtCand;
       }
     }
     if (!this.sprites.hasSprite(sprName) && sprName === 'sprPalacePillar' && this.sprites.hasSprite('sprPillar')) {
@@ -2470,9 +2920,14 @@ export class GameRenderer {
       sprDef !== undefined &&
       sprDef.frames.length >= 7 &&
       sprName !== 'sprProtoChest' &&
+      sprName !== 'sprRadChestMaggot' &&
       (prop.kind === 'weapon_chest' ||
         prop.kind === 'big_weapon_chest' ||
+        prop.kind === 'giant_weapon_chest' ||
+        prop.kind === 'giant_ammo_chest' ||
         prop.kind === 'ammo_chest' ||
+        prop.kind === 'health_chest' ||
+        prop.kind === 'pizza_chest' ||
         prop.kind === 'rad_canister' ||
         prop.kind === 'idpd_canister' ||
         sprName.includes('Chest'));
@@ -2512,6 +2967,15 @@ export class GameRenderer {
       pixelSnap,
     });
 
+    // Live holographic CRT scanline sweep overlay on HQ-3 Big TV monitor when powered on
+    if (drew && prop.kind === 'big_tv' && sprName === 'sprBigTVOn' && this.sprites.hasSprite('sprBigTVLines')) {
+      this.sprites.draw(ctx, 'sprBigTVLines', prop.x + joltX, prop.y, {
+        frame: 0,
+        alpha: 0.42 + 0.14 * Math.sin(tick * 0.25),
+        pixelSnap,
+      });
+    }
+
     if (!drew) {
       const x = Math.round(prop.x);
       const y = Math.round(prop.y);
@@ -2523,17 +2987,26 @@ export class GameRenderer {
           ? '#ffffff'
           : prop.cursed
             ? '#a338e8'
-            : prop.kind === 'rad_canister'
+            : prop.kind === 'rad_canister' || prop.kind === 'rad_maggot_canister'
               ? '#52e864'
-              : prop.kind === 'weapon_chest' || prop.kind === 'big_weapon_chest'
+              : prop.kind === 'weapon_chest' ||
+                  prop.kind === 'big_weapon_chest' ||
+                  prop.kind === 'giant_weapon_chest'
                 ? '#c43b3b'
-                : prop.kind === 'ammo_chest'
-                  ? '#d9a432'
-                  : prop.kind === 'throne_generator'
+                : prop.kind === 'ammo_chest' ||
+                    prop.kind === 'giant_ammo_chest' ||
+                    prop.kind === 'venuz_car_exit' ||
+                    prop.kind === 'gold_barrel'
+                  ? '#e6b834'
+                  : prop.kind === 'throne_generator' || prop.kind === 'small_generator'
                     ? '#47d970'
-                    : prop.kind === 'toxic_barrel'
-                      ? '#4ab347'
-                      : '#7d6e65';
+                    : prop.kind === 'captain_desk' || prop.kind === 'big_tv'
+                      ? '#3874c8'
+                      : prop.kind === 'venuz_tv' || prop.kind === 'venuz_couch'
+                        ? '#8c2848'
+                        : prop.kind === 'toxic_barrel' || prop.kind === 'frog_egg'
+                          ? '#4ab347'
+                          : '#7d6e65';
       ctx.fillRect(x - r + 1, y - r + 1, r * 2 - 2, r * 2 - 2);
     }
 
@@ -2785,14 +3258,19 @@ export class GameRenderer {
         ctx.restore();
       }
 
-      // Subtle cursed purple aura / golden weapon glint cues on equipped weapon
+      // Drifting purple cursed smoke wisps / golden weapon glint cues on equipped weapon
       if (slot.cursed) {
         ctx.save();
-        ctx.fillStyle = '#c94aff';
-        ctx.globalAlpha = 0.72;
-        const cx = anchorX + Math.cos(drawAngle) * 5 + Math.sin(this.renderTimeSec * 9) * 2;
-        const cy = anchorY + Math.sin(drawAngle) * 5 + Math.cos(this.renderTimeSec * 11) * 2;
-        ctx.fillRect(Math.round(cx), Math.round(cy), 2, 2);
+        for (let s = 0; s < 3; s++) {
+          const phase = wrapMod(this.renderTimeSec * 1.8 + slotIdx * 0.41 + s * 0.33, 1);
+          const bx = anchorX + Math.cos(drawAngle) * (4 + s * 2);
+          const by = anchorY + Math.sin(drawAngle) * (4 + s * 2);
+          const sx = Math.round(bx + Math.sin(phase * 6 + s * 2.1) * 2.5);
+          const sy = Math.round(by - 1 - phase * 9);
+          ctx.globalAlpha = (1 - phase) * 0.85;
+          ctx.fillStyle = s === 0 ? '#f0a8ff' : s === 1 ? '#b838ff' : '#581a88';
+          drawPixelDisc(ctx, sx, sy, phase < 0.55 ? 2 : 1);
+        }
         ctx.restore();
       } else if (wepDef?.golden && Math.floor(this.renderTimeSec * 6) % 3 === 0) {
         ctx.save();
@@ -2894,25 +3372,27 @@ export class GameRenderer {
       drawHeldWeapon(activeWeaponSlot, activeSlotIdx, false);
     }
 
-    // Crystal Shield dome overlay & sprShieldDisappear shatter animation on release
+    // Crystal Shield dome overlay (golden sprShieldB for B-skin!) & sprShieldDisappear shatter animation on release
     if (player.shielding && player.alive) {
-      const shieldSpr = player.skin === 'b' && this.sprites.hasSprite('sprShieldB') ? 'sprShieldB' : 'sprShield';
+      const isGoldenShield = player.skin === 'b';
+      const shieldSpr = isGoldenShield && this.sprites.hasSprite('sprShieldB') ? 'sprShieldB' : 'sprShield';
       const drewShield = this.sprites.draw(ctx, shieldSpr, px, py, {
         frame: Math.floor(state.tick * 0.25),
-        alpha: 0.85,
+        alpha: 0.88,
         pixelSnap,
       });
       if (!drewShield) {
         ctx.save();
-        ctx.fillStyle = 'rgba(190, 90, 255, 0.34)';
+        ctx.fillStyle = isGoldenShield ? 'rgba(245, 196, 56, 0.36)' : 'rgba(190, 90, 255, 0.34)';
         drawPixelDisc(ctx, px, py, 12);
-        ctx.fillStyle = '#f0b8ff';
+        ctx.fillStyle = isGoldenShield ? '#ffe878' : '#f0b8ff';
         drawPixelRing(ctx, px, py, 12, 1);
         ctx.restore();
       }
     } else if (this.shieldDisappearTicks > 0 && player.alive && player.mutant === 'crystal') {
+      const isGoldenShield = player.skin === 'b';
       const disSpr =
-        player.skin === 'b' && this.sprites.hasSprite('sprShieldBDisappear')
+        isGoldenShield && this.sprites.hasSprite('sprShieldBDisappear')
           ? 'sprShieldBDisappear'
           : 'sprShieldDisappear';
       const disFrac = 1 - Math.max(0, Math.min(1, this.shieldDisappearTicks / 8));
@@ -2925,10 +3405,21 @@ export class GameRenderer {
       if (!drewDis) {
         ctx.save();
         ctx.globalAlpha = 1 - disFrac;
-        ctx.fillStyle = '#f0b8ff';
+        ctx.fillStyle = isGoldenShield ? '#ffe878' : '#f0b8ff';
         drawPixelRing(ctx, px, py, Math.max(4, Math.round(13 * (1 - disFrac * 0.5))), 1, 4, state.tick & 7);
         ctx.restore();
       }
+    }
+
+    // Frog rooted active toxic cloud emitter ring
+    if (player.alive && player.mutant === 'frog' && player.frogRooted) {
+      ctx.save();
+      const pulseR = Math.round(11 + Math.sin(this.renderTimeSec * 14) * 2);
+      ctx.fillStyle = 'rgba(88, 224, 56, 0.22)';
+      drawPixelDisc(ctx, px, py + 2, pulseR);
+      ctx.fillStyle = '#88ff64';
+      drawPixelRing(ctx, px, py + 2, pulseR, 1, 4, state.tick & 7);
+      ctx.restore();
     }
 
     // Boiling Veins active ember aura when hp <= 4 (explosion & fire immunity active!)
@@ -2994,6 +3485,66 @@ export class GameRenderer {
         enemy.hurtFlashTicks > 0 && this.sprites.hasSprite('sprScrapBossSleepHurt')
           ? 'sprScrapBossSleepHurt'
           : 'sprScrapBossSleep';
+    } else if (enemy.bossId === 'captain' && enemy.hurtFlashTicks === 0) {
+      if ((enemy.aiState === 'idle_desk' || enemy.aiState === 'sit' || enemy.aiState === 'sleep') && this.sprites.hasSprite('sprLastSit')) {
+        sprName = 'sprLastSit';
+      } else if (enemy.aiState === 'dash_start' && this.sprites.hasSprite('sprLastDashStart')) {
+        sprName = 'sprLastDashStart';
+      } else if ((enemy.aiState === 'dash' || enemy.aiState === 'charge') && this.sprites.hasSprite('sprLastDash')) {
+        sprName = 'sprLastDash';
+      } else if (enemy.aiState === 'dash_end' && this.sprites.hasSprite('sprLastDashEnd')) {
+        sprName = 'sprLastDashEnd';
+      } else if ((enemy.aiState === 'spin' || enemy.aiState === 'spin_fire' || enemy.aiState === 'fire') && this.sprites.hasSprite('sprLastSpin')) {
+        sprName = 'sprLastSpin';
+      } else if (enemy.aiState === 'warp_out' && this.sprites.hasSprite('sprLastWarpOut')) {
+        sprName = 'sprLastWarpOut';
+      } else if (enemy.aiState === 'warp_in' && this.sprites.hasSprite('sprLastWarpIn')) {
+        sprName = 'sprLastWarpIn';
+      } else if (enemy.aiState === 'collapse' && this.sprites.hasSprite('sprLastDeathCollapse')) {
+        sprName = 'sprLastDeathCollapse';
+      } else if (enemy.aiState === 'death_wait' && this.sprites.hasSprite('sprLastDeathWait')) {
+        sprName = 'sprLastDeathWait';
+      } else {
+        sprName = 'sprLastIdle';
+      }
+    } else if (enemy.bossId === 'technomancer' && enemy.hurtFlashTicks === 0) {
+      if (enemy.aiState === 'empty' && this.sprites.hasSprite('sprTechnoMancerEmpty')) {
+        sprName = 'sprTechnoMancerEmpty';
+      } else if (enemy.aiState === 'inactive' && this.sprites.hasSprite('sprTechnoMancerInactive')) {
+        sprName = 'sprTechnoMancerInactive';
+      } else if (enemy.aiState === 'appear' && this.sprites.hasSprite('sprTechnoMancerAppear')) {
+        sprName = 'sprTechnoMancerAppear';
+      } else if (enemy.aiState === 'disappear' && this.sprites.hasSprite('sprTechnoMancerDisappear')) {
+        sprName = 'sprTechnoMancerDisappear';
+      } else if ((enemy.aiState === 'fire2' || enemy.aiState === 'revive') && this.sprites.hasSprite('sprTechnoMancerFire2')) {
+        sprName = 'sprTechnoMancerFire2';
+      } else if (enemy.aiState === 'fire' && this.sprites.hasSprite('sprTechnoMancerFire1')) {
+        sprName = 'sprTechnoMancerFire1';
+      } else if (enemy.aiState === 'tell' && this.sprites.hasSprite('sprTechnoMancerActivate')) {
+        sprName = 'sprTechnoMancerActivate';
+      } else {
+        sprName = 'sprTechnoMancer';
+      }
+    } else if (enemy.bossId === 'mom' && enemy.aiState === 'dying' && this.sprites.hasSprite('sprFrogQueenDying')) {
+      sprName = 'sprFrogQueenDying';
+    } else if (enemy.defId === 'assassin' && enemy.aiState === 'feign' && this.sprites.hasSprite('sprMeleeFake')) {
+      sprName = 'sprMeleeFake';
+    } else if (enemy.defId === 'big_rat' && enemy.aiState === 'rage_wait' && this.sprites.hasSprite('sprRatkingRageWait')) {
+      sprName = 'sprRatkingRageWait';
+    } else if (enemy.defId === 'big_rat' && enemy.aiState === 'rage_attack' && this.sprites.hasSprite('sprRatkingRageAttack')) {
+      sprName = 'sprRatkingRageAttack';
+    } else if (enemy.defId === 'snowbot' && enemy.aiState === 'car_lift' && this.sprites.hasSprite('sprSnowBotCarLift')) {
+      sprName = 'sprSnowBotCarLift';
+    } else if (enemy.defId === 'snowbot' && (enemy.aiState === 'car_walk' || enemy.aiState === 'carry_car') && this.sprites.hasSprite('sprSnowBotCarWalk')) {
+      sprName = 'sprSnowBotCarWalk';
+    } else if (enemy.defId === 'snowbot' && enemy.aiState === 'car_throw' && this.sprites.hasSprite('sprSnowBotCarThrow')) {
+      sprName = 'sprSnowBotCarThrow';
+    } else if (
+      (enemy.defId === 'elite_shielder' || enemy.defId === 'idpd_shielder') &&
+      (enemy.aiState === 'shield' || enemy.aiState === 'shielding')
+    ) {
+      const shSpr = enemy.defId === 'elite_shielder' ? 'sprEliteShielderShieldAppear' : 'sprShielderShieldAppear';
+      sprName = this.sprites.hasSprite(shSpr) ? shSpr : `${prefix}Idle`;
     } else if (def) {
       if (enemy.hurtFlashTicks > 0) sprName = def.sprites.hurt;
       else if (enemy.aiState === 'fire' && def.sprites.fire) sprName = def.sprites.fire;
@@ -3160,10 +3711,12 @@ export class GameRenderer {
       ctx.restore();
     }
 
-    // Telegraphs: Crimson/cyan laser sightlines + crisp pre-attack flash stars for all telegraphed attackers!
+    // Telegraphs: Crimson/cyan/pink/purple laser sightlines + crisp pre-attack flash stars for all telegraphed attackers!
     const isSniperOrCrystal =
       enemy.defId === 'sniper' ||
       enemy.defId === 'laser_crystal' ||
+      enemy.defId === 'cursed_laser_crystal' ||
+      enemy.defId === 'hyper_crystal' ||
       enemy.defId === 'lightning_crystal';
     if (TELEGRAPH_AI_STATES.has(enemy.aiState)) {
       if (isSniperOrCrystal) {
@@ -3171,10 +3724,17 @@ export class GameRenderer {
         const endX = ex + Math.cos(enemy.aimAngle) * rayDist;
         const endY = drawY + Math.sin(enemy.aimAngle) * rayDist;
         const urgent = enemy.aiTimer <= 10;
+        const isCursedCrystal =
+          enemy.defId === 'cursed_laser_crystal' ||
+          (enemy.defId === 'hyper_crystal' && (map.biome === 'cursed_caves' || map.areaCode === '4-?'));
         const lineColor =
           enemy.defId === 'lightning_crystal'
             ? (urgent ? '#c8f8ff' : '#68d8ff')
-            : (urgent ? '#ff7840' : '#e83e18');
+            : isCursedCrystal
+              ? (urgent ? '#e898ff' : '#b838ff')
+              : enemy.defId === 'laser_crystal' || enemy.defId === 'hyper_crystal'
+                ? (urgent ? '#ff96e0' : '#ff3ec8')
+                : (urgent ? '#ff7840' : '#e83e18');
 
         // Razor-sharp 1px Nuclear Throne sniper sightline matching 06_scrapyard_3_3.png (zero blurry outer glow!)
         ctx.save();
@@ -3262,6 +3822,185 @@ export class GameRenderer {
     ctx.clip();
     this.sprites.draw(ctx, 'sprCarpet', centerX, topY, { frame: 0, pixelSnap });
     ctx.restore();
+  }
+
+  /**
+   * Renders Y.V.'s Crib (`$$$`) & Mansion (`3-?`) luxury rug (`sprVenuzCarpet`, 164x68, orig 82,0)
+   * cleanly on the Layer 2 floor pass underneath all entities and setpiece props.
+   */
+  private renderVenuzCarpet(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    pixelSnap: boolean,
+  ): void {
+    const sprDef = this.sprites.getSprite('sprVenuzCarpet');
+    if (!sprDef || !this.sprites.hasSprite('sprVenuzCarpet')) return;
+
+    // 1. Render any explicit `sprVenuzCarpet` prop flat on Layer 2
+    let drewExplicit = false;
+    for (let i = 0; i < state.props.length; i++) {
+      const prop = state.props[i]!;
+      if (prop.sprite !== 'sprVenuzCarpet') continue;
+      const drawY = prop.y - sprDef.height * 0.5 + sprDef.originY;
+      this.sprites.draw(ctx, 'sprVenuzCarpet', prop.x, drawY, { frame: 0, pixelSnap });
+      drewExplicit = true;
+    }
+    if (drewExplicit) return;
+
+    if (state.biome !== 'crib' && state.areaCode !== '$$$' && state.biome !== 'mansion') {
+      return;
+    }
+
+    const map = state.map;
+    const ts = map.tileSize || TILE_SIZE;
+    let minTx = map.width;
+    let maxTx = -1;
+    let minTy = map.height;
+    let maxTy = -1;
+    for (let ty = 0; ty < map.height; ty++) {
+      const row = ty * map.width;
+      for (let tx = 0; tx < map.width; tx++) {
+        if (map.tiles[row + tx] === TileType.Carpet) {
+          if (tx < minTx) minTx = tx;
+          if (tx > maxTx) maxTx = tx;
+          if (ty < minTy) minTy = ty;
+          if (ty > maxTy) maxTy = ty;
+        }
+      }
+    }
+
+    let cx: number | null = null;
+    let cy: number | null = null;
+    if (maxTx >= minTx && maxTy >= minTy) {
+      const spanTilesX = maxTx - minTx + 1;
+      if (state.biome === 'crib' || state.areaCode === '$$$' || spanTilesX >= 6) {
+        cx = ((minTx + maxTx + 1) * 0.5) * ts;
+        cy = ((minTy + maxTy + 1) * 0.5) * ts;
+      }
+    } else if (state.biome === 'crib' || state.areaCode === '$$$') {
+      const couch = state.props.find((p) => p.kind === 'venuz_couch');
+      if (couch) {
+        cx = couch.x;
+        cy = couch.y + 8;
+      } else {
+        cx = map.spawnX;
+        cy = map.spawnY - 12;
+      }
+    }
+    if (cx === null || cy === null) return;
+
+    const drawX = cx - sprDef.width * 0.5 + sprDef.originX;
+    const drawY = cy - sprDef.height * 0.5 + sprDef.originY;
+    this.sprites.draw(ctx, 'sprVenuzCarpet', drawX, drawY, { frame: 0, pixelSnap });
+  }
+
+  /**
+   * Renders floor-flat hazards and summon areas UNDER all entities in Layer 3:
+   * - `necro_revive_area` (`sprReviveArea` / `sprNecroReviveArea` / `sprPopoReviveArea`) pulsing hollow green/purple rune circles
+   * - `sprTrapScorchMark` scorched fire lanes in front of Scrapyard `fire_trap` wall hazards
+   * - Any explicit floor-flat `sprPizzaSewerDecal` / `sprTrapScorchMark` props
+   */
+  private renderFloorHazards(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    viewLeft: number,
+    viewTop: number,
+    w: number,
+    h: number,
+    pixelSnap: boolean,
+  ): void {
+    const map = state.map;
+    const ts = map.tileSize || TILE_SIZE;
+    const hasTrapScorch = this.sprites.hasSprite('sprTrapScorchMark');
+
+    // 1. Props: Necromancer/Technomancer/IDPD Revive Areas, Fire Trap scorch marks, & floor-flat decal props
+    for (let i = 0; i < state.props.length; i++) {
+      const prop = state.props[i]!;
+      if (prop.kind === 'necro_revive_area') {
+        const r = Math.max(18, Math.round(prop.radius || 32));
+        if (this.isOutsideView(prop.x, prop.y, r + 48, viewLeft, viewTop, w, h)) continue;
+        const isPopo = prop.sprite === 'sprPopoReviveArea';
+        const sprCand =
+          prop.sprite && this.sprites.hasSprite(prop.sprite)
+            ? prop.sprite
+            : r >= 24 && this.sprites.hasSprite('sprReviveArea')
+              ? 'sprReviveArea'
+              : this.sprites.hasSprite('sprNecroReviveArea')
+                ? 'sprNecroReviveArea'
+                : 'sprReviveArea';
+        const pulse = 0.5 + 0.5 * Math.sin(this.renderTimeSec * 8 + prop.id);
+        const outerR = Math.round(r + pulse * 2);
+        const innerR = Math.max(8, Math.round(r * 0.65 - pulse * 1.5));
+
+        ctx.save();
+        // Translucent arcane ground glow + pulsing hollow neon-green & purple rune circles (critical for Skeleton unlock!)
+        ctx.fillStyle = isPopo ? 'rgba(42, 128, 255, 0.16)' : 'rgba(130, 56, 224, 0.16)';
+        drawPixelDisc(ctx, prop.x, prop.y, outerR);
+        ctx.fillStyle = isPopo ? '#3898ff' : '#9848e8';
+        drawPixelRing(ctx, prop.x, prop.y, innerR, 1, 4, Math.floor(state.tick * 0.4) & 7);
+        ctx.fillStyle = isPopo ? '#8ceeff' : '#58ff68';
+        drawPixelRing(ctx, prop.x, prop.y, outerR, 1, 6, Math.floor(state.tick * 0.3) & 7);
+        if (pulse > 0.45) {
+          ctx.fillStyle = isPopo ? '#ffffff' : '#c8ffb0';
+          drawPixelRing(ctx, prop.x, prop.y, Math.max(4, outerR - 3), 1, 9, (state.tick >> 1) & 7);
+        }
+        ctx.restore();
+
+        this.sprites.draw(ctx, sprCand, prop.x, prop.y, {
+          frame: Math.floor((state.tick + prop.id) * 0.25),
+          alpha: 0.92,
+          pixelSnap,
+        });
+      } else if (prop.kind === 'fire_trap' && hasTrapScorch) {
+        if (this.isOutsideView(prop.x, prop.y, 72, viewLeft, viewTop, w, h)) continue;
+        // Offset scorch mark slightly onto adjacent walkable floor lane in front of the wall trap
+        const tx = Math.floor(prop.x / ts);
+        const ty = Math.floor(prop.y / ts);
+        let ox = 0;
+        let oy = 12;
+        if (tx + 1 < map.width && isWalkable(map.tiles[ty * map.width + (tx + 1)]!)) {
+          ox = 20;
+          oy = 0;
+        } else if (tx > 0 && isWalkable(map.tiles[ty * map.width + (tx - 1)]!)) {
+          ox = -20;
+          oy = 0;
+        } else if (ty > 0 && isWalkable(map.tiles[(ty - 1) * map.width + tx]!)) {
+          ox = 0;
+          oy = -20;
+        } else if (ty + 1 < map.height && isWalkable(map.tiles[(ty + 1) * map.width + tx]!)) {
+          ox = 0;
+          oy = 20;
+        }
+        this.sprites.draw(ctx, 'sprTrapScorchMark', prop.x + ox, prop.y + oy, {
+          frame: 0,
+          alpha: 0.65,
+          pixelSnap,
+        });
+      } else if (prop.sprite === 'sprPizzaSewerDecal' || prop.sprite === 'sprTrapScorchMark') {
+        if (this.isOutsideView(prop.x, prop.y, 64, viewLeft, viewTop, w, h)) continue;
+        this.sprites.draw(ctx, prop.sprite, prop.x, prop.y, {
+          frame: 0,
+          alpha: prop.sprite === 'sprTrapScorchMark' ? 0.68 : 0.92,
+          pixelSnap,
+        });
+      }
+    }
+
+    // 2. Enemy-backed `fire_trap` entities also cast `sprTrapScorchMark` along their firing lane
+    if (hasTrapScorch) {
+      for (let i = 0; i < state.enemies.length; i++) {
+        const e = state.enemies[i]!;
+        if (e.defId !== 'fire_trap') continue;
+        if (this.isOutsideView(e.x, e.y, 72, viewLeft, viewTop, w, h)) continue;
+        const ox = Math.cos(e.aimAngle) * 24;
+        const oy = Math.sin(e.aimAngle) * 24;
+        this.sprites.draw(ctx, 'sprTrapScorchMark', e.x + ox, e.y + oy, {
+          frame: 0,
+          alpha: 0.65,
+          pixelSnap,
+        });
+      }
+    }
   }
 
   /**
@@ -3559,22 +4298,27 @@ export class GameRenderer {
       return;
     }
 
-    // 2. Horror Rad Beam: dynamically scaled by proj.radius (uses Steam sprHorrorBullet / stepped emerald-cyan stream!)
+    // 2. Horror Rad Beam: dynamically scaled by proj.radius; Horror B-Skin draws purple sprHorrorBBullet beam!
     if (proj.kind === 'rad_beam') {
       const radiusScale = Math.max(0.75, Math.min(1.55, proj.radius / 5.5));
+      const useHorrorBBeam =
+        proj.team === 'player' && state.player.mutant === 'horror' && state.player.skin === 'b';
       const beamSpr =
-        state.player.skin === 'b' && this.sprites.hasSprite('sprHorrorBBullet')
+        useHorrorBBeam && this.sprites.hasSprite('sprHorrorBBullet')
           ? 'sprHorrorBBullet'
           : 'sprHorrorBullet';
+      const wakeDark = useHorrorBBeam ? '#4a1478' : '#0e4d26';
+      const wakeBright = useHorrorBBeam ? '#b838ff' : '#38d848';
+      const coreDark = useHorrorBBeam ? '#2e0c4e' : '#0d361d';
       const tailLen = Math.round(12 + proj.radius * 2.2);
       const tx = px - Math.cos(proj.angle) * tailLen;
       const ty = py - Math.sin(proj.angle) * tailLen;
 
       ctx.save();
-      // Crisp 1x integer-pixel stepped emerald-cyan wake behind the rad projectile (zero blurry strokes!)
-      ctx.fillStyle = '#0e4d26';
+      // Crisp 1x integer-pixel stepped wake behind the rad projectile (purple for Horror B, emerald for Horror A / Enemy Horror)
+      ctx.fillStyle = wakeDark;
       drawPixelLine(ctx, tx, ty, px, py, Math.max(3, Math.round(proj.radius * 1.3)));
-      ctx.fillStyle = '#38d848';
+      ctx.fillStyle = wakeBright;
       drawPixelLine(ctx, tx, ty, px, py, Math.max(2, Math.round(proj.radius * 0.9)));
       ctx.fillStyle = '#ffffff';
       drawPixelLine(ctx, lerp(tx, px, 0.35), lerp(ty, py, 0.35), px, py, Math.max(1, Math.round(proj.radius * 0.4)));
@@ -3588,9 +4332,9 @@ export class GameRenderer {
       });
       if (!drewHorror) {
         const coreR = Math.max(3, Math.round(proj.radius * 0.85));
-        ctx.fillStyle = '#0d361d';
+        ctx.fillStyle = coreDark;
         drawPixelDisc(ctx, px, py, coreR + 1);
-        ctx.fillStyle = '#38d848';
+        ctx.fillStyle = wakeBright;
         drawPixelDisc(ctx, px, py, coreR);
         ctx.fillStyle = '#ffffff';
         drawPixelDisc(ctx, px, py, Math.max(1, Math.round(coreR * 0.5)));
@@ -3599,8 +4343,8 @@ export class GameRenderer {
       return;
     }
 
-    // 3. Hitscan Lasers & Lightning: Crisp 1x pixel-stepped bright neon-green beam (#38d848) + pure-white core
-    //    + pure-white crisp circular/cloud pixel impact splash at terminus (matches 05_oasis, 12_jungle, 13_frozen_5_3, 14_labs_6_1!)
+    // 3. Hitscan Lasers & Lightning: Crisp 1x pixel-stepped color-accurate beam + pure-white core
+    //    (red default player, cyan Ion Cannon, neon-green Ultra, pink enemy, purple Cursed Caves enemy!)
     if (proj.kind === 'laser' || proj.kind === 'enemy_laser' || proj.kind === 'lightning') {
       const lifeFrac = proj.maxLifeTicks > 0 ? Math.max(0.2, proj.lifeTicks / proj.maxLifeTicks) : 1;
       let ox: number;
@@ -3640,8 +4384,18 @@ export class GameRenderer {
         drawPixelLine(ctx, m1x, m1y, m2x, m2y, 1);
         drawPixelLine(ctx, m2x, m2y, px, py, 1);
       } else {
-        // Thick crisp bright neon-green outer beam (#38d848) + solid pure-white inner core (#ffffff)
-        const outerColor = '#38d848';
+        // Color-accurate outer beam + solid pure-white inner core (#ffffff)
+        const outerColor = resolveLaserColor({
+          kind: proj.kind,
+          team: proj.team,
+          weaponId: proj.weaponId,
+          isUltra: proj.isUltra,
+          sourceCause: proj.sourceCause,
+          sourceSprite: proj.sourceSprite,
+          sprite: proj.sprite,
+          biome: state.biome,
+          areaCode: state.areaCode,
+        });
         const baseOuter = isHeavyLaser ? 8 : 6;
         const outerW = Math.max(2, Math.round(baseOuter * (0.45 + 0.55 * lifeFrac)));
         const coreW = outerW >= 5 ? Math.max(2, outerW - 2) : Math.max(1, outerW - 2);
@@ -3675,6 +4429,68 @@ export class GameRenderer {
           ctx.fillRect(ix + splashR + 1, iy - h2, 2, 1);
           ctx.fillRect(ix + h1, iy - splashR - 2, 1, 2);
         }
+      }
+      ctx.restore();
+      return;
+    }
+
+    // 3b. Captain's glowing tracking blue plasma orb (`sprLastBall`), Scrapyard wall flames (`sprTrapFire`),
+    //     and Mom / Frog drifting toxic clouds (`sprFrogGas`)
+    if (proj.sprite === 'sprLastBall') {
+      ctx.save();
+      const pulseR = Math.round(13 + Math.sin(this.renderTimeSec * 18 + proj.id) * 2);
+      ctx.fillStyle = 'rgba(40, 120, 255, 0.28)';
+      drawPixelDisc(ctx, px, py, pulseR);
+      ctx.fillStyle = '#78ecff';
+      drawPixelRing(ctx, px, py, pulseR, 1, 4, (tick + proj.id) & 7);
+      const drewBall = this.sprites.draw(ctx, 'sprLastBall', px, py, {
+        frame: Math.floor((tick + proj.id) * 0.45),
+        pixelSnap,
+      });
+      if (!drewBall) {
+        ctx.fillStyle = '#2878ff';
+        drawPixelDisc(ctx, px, py, 10);
+        ctx.fillStyle = '#78ecff';
+        drawPixelDisc(ctx, px, py, 6);
+        ctx.fillStyle = '#ffffff';
+        drawPixelDisc(ctx, px, py, 3);
+      }
+      ctx.restore();
+      return;
+    }
+
+    if (proj.sprite === 'sprTrapFire') {
+      ctx.save();
+      const drewFlame = this.sprites.draw(ctx, 'sprTrapFire', px, py, {
+        frame: Math.floor((tick + proj.id) * 0.55),
+        rotation: proj.angle,
+        pixelSnap,
+      });
+      if (!drewFlame) {
+        ctx.fillStyle = '#ff6818';
+        drawPixelDisc(ctx, px, py, Math.max(4, Math.round(proj.radius)));
+        ctx.fillStyle = '#fff080';
+        drawPixelDisc(ctx, px, py, Math.max(2, Math.round(proj.radius * 0.55)));
+      }
+      ctx.restore();
+      return;
+    }
+
+    if (proj.sprite === 'sprFrogGas') {
+      const lifeFrac = proj.maxLifeTicks > 0 ? Math.max(0.15, proj.lifeTicks / proj.maxLifeTicks) : 1;
+      ctx.save();
+      const gasAlpha = Math.min(0.88, lifeFrac * 1.6);
+      const drewGas = this.sprites.draw(ctx, 'sprFrogGas', px, py, {
+        frame: Math.floor((tick + proj.id) * 0.22),
+        alpha: gasAlpha,
+        pixelSnap,
+      });
+      if (!drewGas) {
+        ctx.globalAlpha = gasAlpha;
+        ctx.fillStyle = '#48c834';
+        drawPixelDisc(ctx, px, py, Math.max(5, Math.round(proj.radius)));
+        ctx.fillStyle = '#a8ff60';
+        drawPixelDisc(ctx, px - 1, py - 1, Math.max(3, Math.round(proj.radius * 0.55)));
       }
       ctx.restore();
       return;
@@ -3916,95 +4732,35 @@ export class GameRenderer {
       ctx.restore();
     }
 
-    // 4. Portal suction warp pull + NT-style Loading Tip card during portal transition
-    // Suppress strictly during mutation/ultra select, game over, and victory so it NEVER ghosts behind menus!
-    const suppressPortalCard =
+    // 4. Initial 3-tick portal suction edge vignette (ticksIn < 4).
+    // Full-screen GENERATING... portal vortex is rendered cleanly by hud.ts from ticksIn >= 4 (no dead legacy card overdraw!).
+    const suppressPortalBorder =
       state.phase === 'mutation_select' ||
       state.phase === 'ultra_select' ||
       state.phase === 'game_over' ||
       state.phase === 'victory_throne';
-    if (state.portal.active && state.portal.entered && !suppressPortalCard) {
+    if (state.portal.active && state.portal.entered && !suppressPortalBorder) {
       const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
-      const warp = Math.min(1, Math.max(1, ticksIn) / 24);
-      const border = Math.round(6 + warp * 18);
-      const target = state.portal.targetArea;
-      const borderRgb =
-        target === 'vault'
-          ? '24, 150, 72'
-          : target === '1-?' || target === 'hq-1'
-            ? '30, 102, 195'
-            : '110, 32, 185';
-      ctx.save();
-      ctx.fillStyle = `rgba(${borderRgb}, ${(0.22 + warp * 0.38).toFixed(3)})`;
-      ctx.fillRect(0, 0, w, border);
-      ctx.fillRect(0, h - border, w, border);
-      ctx.fillRect(0, border, border, h - border * 2);
-      ctx.fillRect(w - border, border, border, h - border * 2);
-
-      // Once player is pulled into the vortex (ticks >= 7), present the classic wasteland loading card & tip!
-      if (ticksIn >= 7) {
-        const cardAlpha = Math.min(1, (ticksIn - 6) / 7);
-        const targetArea = this.data.getArea(state.portal.targetArea);
-        const targetBiome = targetArea?.biome ?? state.biome;
-        const targetCode =
-          state.portal.nextLoop > 0
-            ? `L${state.portal.nextLoop} ${state.portal.targetArea}`
-            : state.portal.targetArea;
-        // Avoid duplicate area codes AND keep Vault title crisp ("CROWN VAULT" instead of "VAULT  CROWN"!)
-        const rawName = (targetArea?.name ?? 'WASTELAND').toUpperCase().trim();
-        const codeUpper = state.portal.targetArea.toUpperCase();
-        let areaTitle: string;
-        if (rawName.endsWith(` ${codeUpper}`)) {
-          areaTitle = state.portal.nextLoop > 0 ? `L${state.portal.nextLoop} ${rawName}` : rawName;
-        } else {
-          const cleanName = rawName === codeUpper ? 'WASTELAND' : rawName;
-          areaTitle = `${targetCode}  ${cleanName}`;
-        }
-        const tip = selectLoadingTip(targetBiome, state.portal.targetArea, state.portal.nextLoop, state.seed);
-
-        ctx.globalAlpha = cardAlpha * 0.95;
-        ctx.fillStyle = '#0a0712';
-        ctx.fillRect(0, 0, w, h);
-
-        ctx.globalAlpha = cardAlpha;
-        const cx = Math.round(w * 0.5);
-        const cy = Math.round(h * 0.5);
-
-        // Crisp pixel-hard portal emblem disc behind mutant silhouette
-        const emblemGlowColor =
+      if (ticksIn < 4) {
+        const warp = Math.min(1, Math.max(1, ticksIn) / 4);
+        const border = Math.round(4 + warp * 8);
+        const target = state.portal.targetArea;
+        const borderRgb =
           target === 'vault'
-            ? 'rgba(72, 235, 130, 0.35)'
-            : target === '1-?' || target === 'hq-1'
-              ? 'rgba(72, 175, 255, 0.35)'
-              : 'rgba(175, 78, 255, 0.35)';
-        ctx.fillStyle = emblemGlowColor;
-        fillPixelDisc(ctx, cx, cy - 8, 28);
-        const mutantDef = this.data.getMutant(state.player.mutant);
-        const walkSpr =
-          state.player.skin === 'b' && mutantDef.sprites.bWalk && this.sprites.hasSprite(mutantDef.sprites.bWalk)
-            ? mutantDef.sprites.bWalk
-            : mutantDef.sprites.walk;
-        const walkDef = this.sprites.getSprite(walkSpr);
-        // Crisp integer scale ONLY (2x for 24x24 mutants, 1x for oversized 48x48 Horror — ZERO 1.5x mixels!)
-        const intScale = walkDef && walkDef.height >= 40 ? 1 : 2;
-        this.sprites.draw(ctx, walkSpr, cx, cy - 8, {
-          frame: Math.floor(state.tick * 0.4),
-          scaleX: intScale,
-          scaleY: intScale,
-          pixelSnap: true,
-        });
-
-        this.fonts.draw(ctx, `@pWARPING TO @w${areaTitle}`, cx, cy + 18, 'fntM1', {
-          align: 'center',
-          outline: true,
-        });
-        this.fonts.draw(ctx, `@d${tip}`, cx, cy + 34, 'fntSmall', {
-          align: 'center',
-          maxWidth: w - 36,
-          outline: true,
-        });
+            ? '24, 150, 72'
+            : target === '$$$'
+              ? '215, 170, 38'
+              : target === '1-?' || target === 'hq-1' || target === 'hq-2' || target === 'hq-3'
+                ? '30, 102, 195'
+                : '110, 32, 185';
+        ctx.save();
+        ctx.fillStyle = `rgba(${borderRgb}, ${(0.22 + warp * 0.25).toFixed(3)})`;
+        ctx.fillRect(0, 0, w, border);
+        ctx.fillRect(0, h - border, w, border);
+        ctx.fillRect(0, border, border, h - border * 2);
+        ctx.fillRect(w - border, border, border, h - border * 2);
+        ctx.restore();
       }
-      ctx.restore();
     }
   }
 
@@ -4273,6 +5029,25 @@ export class GameRenderer {
         break;
       }
 
+      case 'crib': {
+        // Luxury Y.V.'s Crib drifting gold sparkles & ambient dust glints
+        for (let i = 0; i < 18; i++) {
+          const twinkle = Math.sin(t * (2.4 + (i % 4) * 0.7) + i * 1.9);
+          if (twinkle <= 0.15) continue;
+          const sx = wrapMod(i * 67 + Math.sin(t * 1.1 + i) * 5 - viewLeft * 0.35, w);
+          const sy = wrapMod(i * 39 - t * (5 + (i % 3) * 2) - viewTop * 0.35, h);
+          const ix = Math.floor(sx);
+          const iy = Math.floor(sy);
+          ctx.fillStyle = `rgba(255, 224, 96, ${((twinkle - 0.15) * 0.65).toFixed(3)})`;
+          ctx.fillRect(ix, iy, 1, 1);
+          if (twinkle > 0.72) {
+            ctx.fillRect(ix - 1, iy, 3, 1);
+            ctx.fillRect(ix, iy - 1, 1, 3);
+          }
+        }
+        break;
+      }
+
       default: {
         // Scrapyard / Campfire / Mansion / Jungle / HQ subtle drifting embers/flecks
         ctx.fillStyle =
@@ -4348,6 +5123,66 @@ export class GameRenderer {
           }
         }
       }
+    } else if (kind === 'cursed_smoke') {
+      ctx.globalAlpha = Math.max(0.15, alpha * 0.85);
+      const r = Math.max(1, Math.round(Math.max(2, size * 0.55) * (0.4 + 0.6 * lifeFrac)));
+      ctx.fillStyle = '#4c1878';
+      drawPixelDisc(ctx, ix, iy, r);
+      if (r >= 2) {
+        ctx.fillStyle = color || '#b838ff';
+        drawPixelDisc(ctx, ix, iy, r - 1);
+      }
+    } else if (kind === 'gamma_blast') {
+      ctx.globalAlpha = Math.max(0.25, lifeFrac);
+      const r = Math.max(8, Math.round(48 * (1 - lifeFrac * 0.7)));
+      ctx.fillStyle = '#58ff68';
+      drawPixelRing(ctx, ix, iy, r, 2);
+      ctx.fillStyle = '#d8ff98';
+      drawPixelRing(ctx, ix, iy, Math.max(4, r - 4), 1);
+    } else if (kind === 'portal_clear') {
+      ctx.globalAlpha = Math.max(0.25, lifeFrac);
+      const r = Math.max(6, Math.round(32 * (1 - lifeFrac * 0.65)));
+      ctx.fillStyle = color || '#c46bff';
+      drawPixelRing(ctx, ix, iy, r, 2);
+      ctx.fillStyle = '#ffffff';
+      drawPixelRing(ctx, ix, iy, Math.max(3, r - 3), 1);
+    } else if (kind === 'popo_explo') {
+      ctx.globalAlpha = 1;
+      const baseR = Math.max(4, Math.round(size * 0.6));
+      if (lifeFrac > 0.68) {
+        ctx.fillStyle = '#ffffff';
+        drawPixelDisc(ctx, ix, iy, baseR);
+      } else if (lifeFrac > 0.35) {
+        ctx.fillStyle = '#2878ff';
+        drawPixelDisc(ctx, ix, iy, baseR);
+        ctx.fillStyle = '#80e8ff';
+        drawPixelDisc(ctx, ix, iy, Math.max(2, Math.round(baseR * 0.62)));
+      } else {
+        const r = Math.round(baseR * (lifeFrac / 0.35));
+        if (r >= 1) {
+          ctx.fillStyle = '#1d2d44';
+          drawPixelDisc(ctx, ix, iy, r);
+        }
+      }
+    } else if (kind === 'frog_gas' || kind === 'toxic_gas') {
+      ctx.globalAlpha = Math.max(0.18, Math.min(0.82, lifeFrac * 1.5));
+      const r = Math.max(3, Math.round(Math.max(6, size) * (0.7 + 0.3 * (1 - lifeFrac))));
+      ctx.fillStyle = '#48c834';
+      drawPixelDisc(ctx, ix, iy, r);
+      ctx.fillStyle = '#a8ff60';
+      drawPixelDisc(ctx, ix - 1, iy - 1, Math.max(1, Math.round(r * 0.55)));
+    } else if (kind === 'frog_heal') {
+      ctx.globalAlpha = Math.max(0.25, lifeFrac);
+      ctx.fillStyle = '#80ff80';
+      ctx.fillRect(ix - 2, iy, 5, 1);
+      ctx.fillRect(ix, iy - 2, 1, 5);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(ix, iy, 1, 1);
+    } else if (kind === 'trap_fire') {
+      ctx.globalAlpha = 1;
+      const r = Math.max(2, Math.round(Math.max(3, size * 0.65) * lifeFrac));
+      ctx.fillStyle = lifeFrac > 0.65 ? '#ffffff' : lifeFrac > 0.35 ? '#ffe848' : '#ff6818';
+      drawPixelDisc(ctx, ix, iy, r);
     } else if (kind === 'smoke' || kind === 'dust') {
       // Pure opaque shrinking charcoal pixel-stepped smoke disc
       ctx.globalAlpha = 1;
@@ -4379,6 +5214,27 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  private resolveParticleSpriteName(kind: string, sprite?: string): string | undefined {
+    if (sprite && this.sprites.hasSprite(sprite)) return sprite;
+    switch (kind) {
+      case 'gamma_blast':
+        return this.sprites.hasSprite('sprGammaBlast') ? 'sprGammaBlast' : undefined;
+      case 'portal_clear':
+        return this.sprites.hasSprite('sprPortalClear') ? 'sprPortalClear' : undefined;
+      case 'popo_explo':
+        return this.sprites.hasSprite('sprPopoExplo') ? 'sprPopoExplo' : undefined;
+      case 'frog_gas':
+      case 'toxic_gas':
+        return this.sprites.hasSprite('sprFrogGas') ? 'sprFrogGas' : undefined;
+      case 'frog_heal':
+        return this.sprites.hasSprite('sprFrogHeal') ? 'sprFrogHeal' : undefined;
+      case 'trap_fire':
+        return this.sprites.hasSprite('sprTrapFire') ? 'sprTrapFire' : undefined;
+      default:
+        return undefined;
+    }
+  }
+
   private renderParticles(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     state: SimState,
@@ -4393,10 +5249,18 @@ export class GameRenderer {
         this.drawBeamWarnParticle(ctx, p.x, p.y, lifeFrac);
         continue;
       }
-      if (p.sprite && this.sprites.hasSprite(p.sprite)) {
-        const sp = this.sprites.getSprite(p.sprite)!;
-        const frame = Math.floor((1 - lifeFrac) * sp.frames.length);
-        this.sprites.draw(ctx, p.sprite, p.x, p.y, { frame, alpha: p.kind === 'explosion' || p.kind === 'smoke' ? 1 : alpha, pixelSnap });
+      const sprName = this.resolveParticleSpriteName(p.kind, p.sprite);
+      if (sprName) {
+        const sp = this.sprites.getSprite(sprName)!;
+        const frame = Math.min(sp.frames.length - 1, Math.max(0, Math.floor((1 - lifeFrac) * sp.frames.length)));
+        const opaqueVfx =
+          p.kind === 'explosion' ||
+          p.kind === 'smoke' ||
+          p.kind === 'gamma_blast' ||
+          p.kind === 'portal_clear' ||
+          p.kind === 'popo_explo' ||
+          p.kind === 'trap_fire';
+        this.sprites.draw(ctx, sprName, p.x, p.y, { frame, alpha: opaqueVfx ? 1 : alpha, pixelSnap });
       } else {
         this.drawCrispParticle(ctx, p.kind, p.x, p.y, p.size, p.color, lifeFrac, alpha);
       }
@@ -4410,10 +5274,18 @@ export class GameRenderer {
         this.drawBeamWarnParticle(ctx, p.x, p.y, lifeFrac);
         continue;
       }
-      if (p.sprite && this.sprites.hasSprite(p.sprite)) {
-        const sp = this.sprites.getSprite(p.sprite)!;
-        const frame = Math.floor((1 - lifeFrac) * sp.frames.length);
-        this.sprites.draw(ctx, p.sprite, p.x, p.y, { frame, alpha: p.kind === 'explosion' || p.kind === 'smoke' ? 1 : lifeFrac, pixelSnap });
+      const sprName = this.resolveParticleSpriteName(p.kind, p.sprite);
+      if (sprName) {
+        const sp = this.sprites.getSprite(sprName)!;
+        const frame = Math.min(sp.frames.length - 1, Math.max(0, Math.floor((1 - lifeFrac) * sp.frames.length)));
+        const opaqueVfx =
+          p.kind === 'explosion' ||
+          p.kind === 'smoke' ||
+          p.kind === 'gamma_blast' ||
+          p.kind === 'portal_clear' ||
+          p.kind === 'popo_explo' ||
+          p.kind === 'trap_fire';
+        this.sprites.draw(ctx, sprName, p.x, p.y, { frame, alpha: opaqueVfx ? 1 : lifeFrac, pixelSnap });
       } else {
         this.drawCrispParticle(ctx, p.kind, p.x, p.y, p.size, p.color, lifeFrac, lifeFrac);
       }
@@ -4433,7 +5305,7 @@ export class GameRenderer {
       state.phase === 'ultra_select' ||
       state.phase === 'game_over' ||
       state.phase === 'victory_throne' ||
-      (state.portal.active && state.portal.entered && Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0) >= 7)
+      (state.portal.active && state.portal.entered && Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0) >= 4)
     ) {
       return;
     }
