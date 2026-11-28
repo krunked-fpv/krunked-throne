@@ -258,6 +258,538 @@ function drawInkBrushSplat(
 }
 
 /**
+ * Shared top-left Nuclear Throne gameplay HUD helper (Rad canister + level digit,
+ * HP bar + LOW HP, borderless active/secondary weapons + reload bar, 5 draining ammo icons).
+ * Used identically by gameplay HUD, Pause overlay (21_paused.png), and Level Up (11a_levelup.png)!
+ */
+export interface TopLeftHudRenderParams {
+  sprites: SpriteRenderer;
+  fonts: BitmapFontRenderer;
+  data: UiDataProvider;
+  isSteamMode: boolean;
+  state: SimState;
+  displayedHpFrac?: number;
+  inputMode?: HudInputDeviceMode;
+  gamepadFamily?: GamepadFamily;
+}
+
+function drawSpriteIntegerOrFitShared(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  sprites: SpriteRenderer,
+  spriteName: string,
+  frame: number,
+  boxX: number,
+  boxY: number,
+  boxW: number,
+  boxH: number,
+  opts: { alpha?: number; tintColor?: string } = {},
+): boolean {
+  const spr = sprites.getSprite(spriteName);
+  if (!spr || spr.frames.length === 0 || !sprites.hasSprite(spriteName)) return false;
+  const fIdx = Math.max(0, Math.min(spr.frames.length - 1, Math.floor(frame)));
+  const rect = spr.frames[fIdx];
+  if (!rect || rect.srcW <= 0 || rect.srcH <= 0) return false;
+
+  if (rect.targetW <= boxW && rect.targetH <= boxH) {
+    const targetLeft = Math.round(boxX + (boxW - rect.targetW) * 0.5);
+    const targetTop = Math.round(boxY + (boxH - rect.targetH) * 0.5);
+    const drawX = targetLeft - (rect.targetX - spr.originX);
+    const drawY = targetTop - (rect.targetY - spr.originY);
+    return sprites.draw(ctx, spriteName, drawX, drawY, {
+      frame: fIdx,
+      alpha: opts.alpha,
+      tintColor: opts.tintColor,
+      pixelSnap: true,
+    });
+  }
+
+  return sprites.drawInBox(ctx, spriteName, fIdx, boxX, boxY, boxW, boxH, {
+    alpha: opts.alpha,
+    tintColor: opts.tintColor,
+    maxScale: 1,
+  });
+}
+
+function drawHudWeaponSpriteShared(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  sprites: SpriteRenderer,
+  spriteName: string,
+  boxX: number,
+  boxY: number,
+  boxW: number,
+  boxH: number,
+  bright: boolean,
+): { drew: boolean; visualW: number } {
+  const spr = sprites.getSprite(spriteName);
+  if (!spr || spr.frames.length === 0 || !sprites.hasSprite(spriteName)) {
+    return { drew: false, visualW: 12 };
+  }
+  const rect = spr.frames[0];
+  if (!rect || rect.srcW <= 0 || rect.srcH <= 0) {
+    return { drew: false, visualW: 12 };
+  }
+
+  const fitScale = Math.min(1, boxW / Math.max(1, rect.targetW), boxH / Math.max(1, rect.targetH));
+  const visualW = Math.max(10, Math.min(boxW, Math.round(rect.targetW * fitScale)));
+
+  if (bright) {
+    const outlineAlpha = 0.96;
+    for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+      drawSpriteIntegerOrFitShared(ctx, sprites, spriteName, 0, boxX + ox, boxY + oy, visualW, boxH, {
+        alpha: outlineAlpha,
+        tintColor: '#ffffff',
+      });
+    }
+    drawSpriteIntegerOrFitShared(ctx, sprites, spriteName, 0, boxX, boxY, visualW, boxH, {
+      alpha: 1,
+      tintColor: '#0e0a12',
+    });
+  } else {
+    for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+      drawSpriteIntegerOrFitShared(ctx, sprites, spriteName, 0, boxX + ox, boxY + oy, visualW, boxH, {
+        alpha: 0.65,
+        tintColor: '#b8b8c4',
+      });
+    }
+    drawSpriteIntegerOrFitShared(ctx, sprites, spriteName, 0, boxX, boxY, visualW, boxH, {
+      alpha: 0.9,
+      tintColor: '#14101a',
+    });
+  }
+
+  return { drew: true, visualW };
+}
+
+export function renderTopLeftGameplayHud(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  params: TopLeftHudRenderParams,
+): void {
+  const { sprites, fonts, data, isSteamMode, state } = params;
+  const inputMode: HudInputDeviceMode = params.inputMode ?? 'kbm';
+  const gamepadFamily: GamepadFamily = params.gamepadFamily ?? 'generic';
+  const player = state.player;
+  const hp = Math.max(0, player.hp);
+  const maxHp = Math.max(1, player.maxHp);
+  const hpFrac = Math.min(1, hp / maxHp);
+  const displayedHpFrac = params.displayedHpFrac ?? hpFrac;
+
+  // ------------------------------------------------------------------------
+  // 1. RAD CANISTER (x=4, y=4, ~14x24px) with Level digit centered ON tube!
+  // ------------------------------------------------------------------------
+  const radX = 4;
+  const radY = 4;
+  const isUltraLevel = player.level >= 10 || player.radsToNextLevel >= 9999;
+  const radFrac = isUltraLevel
+    ? 1
+    : player.radsToNextLevel > 0
+      ? Math.max(0, Math.min(1, player.rads / player.radsToNextLevel))
+      : 1;
+
+  const expBarSpr = sprites.getSprite('sprExpBar');
+  let canisterW = 14;
+  let canisterH = 22;
+  if (expBarSpr && expBarSpr.frames.length > 0 && sprites.hasSprite('sprExpBar')) {
+    canisterW = expBarSpr.width;
+    canisterH = expBarSpr.height;
+    const fillFrame = Math.min(
+      expBarSpr.frames.length - 1,
+      Math.round(radFrac * (expBarSpr.frames.length - 1)),
+    );
+    const levelGlowOn = state.pendingLevelUps > 0 && Math.floor(state.tick / 6) % 2 === 0;
+    if (levelGlowOn) {
+      // CRITICAL: Draw sprExpBarLevel BEFORE sprExpBar so Steam's 16x26 glow frames the green canister
+      const lvlSpr = sprites.getSprite('sprExpBarLevel');
+      if (lvlSpr && lvlSpr.width <= expBarSpr.width) {
+        drawPixelBorder(ctx, radX - 1, radY - 1, expBarSpr.width + 2, expBarSpr.height + 2, '#ffe047', 1);
+      }
+      sprites.draw(ctx, 'sprExpBarLevel', radX, radY, { frame: 0, pixelSnap: true });
+    }
+    sprites.draw(ctx, 'sprExpBar', radX, radY, { frame: fillFrame, pixelSnap: true });
+  } else {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(radX, radY, 15, 22);
+    ctx.fillStyle = '#686b70';
+    ctx.fillRect(radX + 1, radY + 1, 13, 3);
+    ctx.fillRect(radX + 1, radY + 18, 13, 3);
+    ctx.fillStyle = '#141816';
+    ctx.fillRect(radX + 2, radY + 4, 11, 14);
+    const fillH = Math.round(14 * radFrac);
+    if (fillH > 0) {
+      ctx.fillStyle = state.pendingLevelUps > 0 ? '#a8ff6e' : '#48e048';
+      ctx.fillRect(radX + 2, radY + 18 - fillH, 11, fillH);
+    }
+    canisterW = 15;
+    canisterH = 22;
+  }
+
+  // Bold white-outlined Level number (1..9 or U) centered RIGHT ON THE CANISTER!
+  const levelDigit = player.level >= 10 ? 'U' : String(Math.max(1, player.level));
+  fonts.draw(
+    ctx,
+    levelDigit,
+    radX + Math.floor(canisterW * 0.5),
+    radY + Math.floor(canisterH * 0.5) - 4,
+    'fntM1',
+    {
+      align: 'center',
+      color: player.level >= 10 ? '#8cff66' : '#ffffff',
+      outline: true,
+    },
+  );
+
+  // ------------------------------------------------------------------------
+  // 2. HP BAR (x=22, y=5, w=84, h=11) + LOW HP blinking red warning
+  // ------------------------------------------------------------------------
+  const barX = 22;
+  const barY = 5;
+  const barW = 84;
+  const barH = 11;
+  const innerX = barX + 2;
+  const innerY = barY + 2;
+  const innerW = barW - 4;
+  const innerH = barH - 4;
+
+  if (isSteamMode && sprites.hasSprite('sprHealthBar')) {
+    sprites.draw(ctx, 'sprHealthBar', barX - 2, barY - 1, { frame: 0, pixelSnap: true });
+    const sInnerX = barX + 1;
+    const sInnerY = barY + 2;
+    const sInnerW = 82;
+    const sInnerH = 8;
+    const fillW = Math.round(sInnerW * hpFrac);
+    const trailW = Math.round(sInnerW * displayedHpFrac);
+    if (trailW > fillW) {
+      ctx.fillStyle = '#8e1b18';
+      ctx.fillRect(sInnerX + fillW, sInnerY, trailW - fillW, sInnerH);
+    }
+    if (fillW > 0) {
+      const frame = resolveHealthFillFrame(player.hurtFlashTicks);
+      const drewFill = sprites.draw(ctx, 'sprHealthFill', sInnerX, sInnerY, {
+        frame,
+        scaleX: fillW,
+        scaleY: 1,
+        pixelSnap: true,
+      });
+      if (!drewFill) {
+        ctx.fillStyle = player.hurtFlashTicks > 0 ? '#ffffff' : '#fc3800';
+        ctx.fillRect(sInnerX, sInnerY, fillW, sInnerH);
+        if (player.hurtFlashTicks <= 0) {
+          ctx.fillStyle = '#ff7c40';
+          ctx.fillRect(sInnerX, sInnerY, fillW, 1);
+        }
+      }
+    }
+  } else {
+    // Exact crisp 1x Nuclear Throne black + white bordered HP bar (matches 04_desert_1_1.png!)
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(barX + 1, barY + 1, barW - 2, barH - 2);
+    ctx.fillStyle = '#1d171c';
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
+    const fillW = Math.round(innerW * hpFrac);
+    const trailW = Math.round(innerW * displayedHpFrac);
+    if (trailW > fillW) {
+      ctx.fillStyle = '#8e1b18';
+      ctx.fillRect(innerX + fillW, innerY, trailW - fillW, innerH);
+    }
+    if (fillW > 0) {
+      if (player.hurtFlashTicks > 0) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(innerX, innerY, fillW, innerH);
+      } else {
+        ctx.fillStyle = '#fc3800';
+        ctx.fillRect(innerX, innerY, fillW, innerH);
+        ctx.fillStyle = '#ff7c40';
+        ctx.fillRect(innerX, innerY, fillW, 1);
+      }
+    }
+  }
+
+  // Boiling Veins subtle warm border pulse when <= 4 HP
+  if (player.alive && hp <= 4 && player.mutations.includes('boiling_veins')) {
+    const bvPulse = Math.floor(state.tick / 6) % 2 === 0;
+    drawPixelBorder(ctx, barX - 1, barY - 1, barW + 2, barH + 2, bvPulse ? '#ffe047' : '#ff7b24', 1);
+  }
+
+  // Bold white-outlined HP numbers centered inside bar (8/8)
+  fonts.draw(
+    ctx,
+    `${Math.ceil(hp)}/${maxHp}`,
+    barX + Math.floor(barW * 0.5),
+    barY + 2,
+    'fntM1',
+    { align: 'center', color: '#ffffff', outline: true },
+  );
+
+  // Strong Spirit pixel-crisp halo right of HP bar (zero ctx.arc!)
+  let rightOfHpX = barX + barW + 4;
+  if (player.mutations.includes('strong_spirit')) {
+    const ssBoxX = barX + barW + 2;
+    const ssBoxY = barY + 1;
+    const ready = player.strongSpiritReady;
+    const drewSteamHalo =
+      isSteamMode &&
+      sprites.hasSprite('sprStrongSpirit') &&
+      drawSpriteIntegerOrFitShared(ctx, sprites, 'sprStrongSpirit', 0, ssBoxX, ssBoxY, 12, 10, {
+        alpha: ready ? 1 : 0.36,
+        tintColor: ready ? undefined : '#5b677d',
+      });
+
+    if (!drewSteamHalo) {
+      const hx = ssBoxX + 1;
+      const hy = barY + 2;
+      const ringCol = ready ? '#e6fcff' : '#4f5b6e';
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(hx + 1, hy - 1, 8, 1);
+      ctx.fillRect(hx + 1, hy + 6, 8, 1);
+      ctx.fillRect(hx - 1, hy + 1, 1, 4);
+      ctx.fillRect(hx + 10, hy + 1, 1, 4);
+      ctx.fillStyle = ringCol;
+      ctx.fillRect(hx + 2, hy, 6, 1);
+      ctx.fillRect(hx + 2, hy + 5, 6, 1);
+      ctx.fillRect(hx + 1, hy + 1, 2, 1);
+      ctx.fillRect(hx + 7, hy + 1, 2, 1);
+      ctx.fillRect(hx, hy + 2, 2, 2);
+      ctx.fillRect(hx + 8, hy + 2, 2, 2);
+      ctx.fillRect(hx + 1, hy + 4, 2, 1);
+      ctx.fillRect(hx + 7, hy + 4, 2, 1);
+    }
+    rightOfHpX = ssBoxX + 15;
+  }
+
+  // Blinking bright red black-outlined `LOW HP` warning directly right of HP bar!
+  const isLowHp =
+    player.alive &&
+    ((maxHp > 4 && hp <= 4) || (maxHp <= 4 && hp < maxHp && hp <= 1));
+  if (isLowHp && Math.floor(state.tick / 10) % 2 === 0) {
+    fonts.draw(ctx, 'LOW HP', Math.max(110, rightOfHpX), barY + 2, 'fntM1', {
+      color: '#ff3020',
+      outline: true,
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // 3. WEAPONS ROW (x=22, y=18) — ZERO DARK BOXES, ZERO WEAPON NAMES!
+  // ------------------------------------------------------------------------
+  const activeSlot = player.weapons[player.activeSlot];
+  const secondarySlot = player.weapons[player.activeSlot === 0 ? 1 : 0];
+  const activeDef = activeSlot ? data.getWeapon(activeSlot.weaponId) : undefined;
+  const secDef = secondarySlot ? data.getWeapon(secondarySlot.weaponId) : undefined;
+  const isSteroids = player.mutant === 'steroids';
+
+  let cursorX = 22;
+  const wepRowY = 18;
+
+  if (activeSlot) {
+    const wepSpr = resolveWeaponSpriteName(activeSlot.weaponId, data);
+    const { visualW } = drawHudWeaponSpriteShared(ctx, sprites, wepSpr, cursorX, wepRowY, 22, 10, true);
+
+    if (activeSlot.reloadTicks > 0 && activeSlot.maxReloadTicks > 0) {
+      const frac = 1 - Math.max(0, Math.min(1, activeSlot.reloadTicks / activeSlot.maxReloadTicks));
+      const rBarW = Math.max(14, visualW);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(cursorX - 1, wepRowY + 10, rBarW + 2, 3);
+      ctx.fillStyle = '#36323e';
+      ctx.fillRect(cursorX, wepRowY + 11, rBarW, 1);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(cursorX, wepRowY + 11, Math.max(1, Math.round(rBarW * frac)), 1);
+    }
+
+    cursorX += visualW + 3;
+
+    const ammoType = activeDef?.ammoType ?? 'melee';
+    if (ammoType !== 'melee') {
+      const count = player.ammo[ammoType] ?? 0;
+      const max = Math.max(1, player.ammoMax[ammoType] ?? 1);
+      const low = player.gunWarrantTicks <= 0 && (count === 0 || count / max <= 0.2);
+      const countStr = player.gunWarrantTicks > 0 ? 'INF' : String(count);
+      const drawn = fonts.draw(ctx, countStr, cursorX, wepRowY + 1, 'fntM1', {
+        color: player.gunWarrantTicks > 0 ? '#ffe047' : low ? '#ff3828' : '#ffffff',
+        outline: true,
+      });
+      cursorX += Math.max(14, drawn.width) + 6;
+    } else {
+      cursorX += 5;
+    }
+  }
+
+  if (secondarySlot) {
+    const secSpr = resolveWeaponSpriteName(secondarySlot.weaponId, data);
+    const { visualW } = drawHudWeaponSpriteShared(
+      ctx,
+      sprites,
+      secSpr,
+      cursorX,
+      wepRowY,
+      20,
+      10,
+      isSteroids,
+    );
+
+    if (secondarySlot.reloadTicks > 0 && secondarySlot.maxReloadTicks > 0) {
+      const sFrac =
+        1 - Math.max(0, Math.min(1, secondarySlot.reloadTicks / secondarySlot.maxReloadTicks));
+      const rBarW = Math.max(14, visualW);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(cursorX - 1, wepRowY + 10, rBarW + 2, 3);
+      ctx.fillStyle = '#36323e';
+      ctx.fillRect(cursorX, wepRowY + 11, rBarW, 1);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(cursorX, wepRowY + 11, Math.max(1, Math.round(rBarW * sFrac)), 1);
+    }
+
+    cursorX += visualW + 3;
+
+    const secAmmoType = secDef?.ammoType ?? 'melee';
+    if (secAmmoType !== 'melee') {
+      const secCount = player.ammo[secAmmoType] ?? 0;
+      const secMax = Math.max(1, player.ammoMax[secAmmoType] ?? 1);
+      const secLow = player.gunWarrantTicks <= 0 && (secCount === 0 || secCount / secMax <= 0.2);
+      const secStr = player.gunWarrantTicks > 0 ? 'INF' : String(secCount);
+      const drawn = fonts.draw(ctx, secStr, cursorX, wepRowY + 1, 'fntM1', {
+        color: player.gunWarrantTicks > 0 ? '#ffe047' : secLow ? '#ff3828' : isSteroids ? '#ffffff' : '#c8c8d2',
+        outline: true,
+      });
+      cursorX += drawn.width + 4;
+    }
+
+    // Gamepad-only compact swap glyph (invisible in KBM/Touch for 100% pure video HUD!)
+    if (inputMode === 'gamepad') {
+      const swapKey = getGamepadGlyphs(gamepadFamily).swap;
+      fonts.draw(ctx, swapKey, cursorX, wepRowY + 2, 'fntSmall', {
+        color: '#ffe047',
+        outline: true,
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // 4. 5 TINY AMMO POOL ICONS (x=4, y=30, 9px stride) — ZERO NUMBERS!
+  // ------------------------------------------------------------------------
+  const ammoStartX = 4;
+  const ammoY = 30;
+  const ammoStride = 9;
+  const equippedTypes = new Set<AmmoType>();
+  if (activeDef?.ammoType && activeDef.ammoType !== 'melee') equippedTypes.add(activeDef.ammoType);
+  if (secDef?.ammoType && secDef.ammoType !== 'melee') equippedTypes.add(secDef.ammoType);
+
+  let lowAmmoWarningText = '';
+
+  for (let i = 0; i < AMMO_POOL_SPECS.length; i++) {
+    const spec = AMMO_POOL_SPECS[i]!;
+    const ax = ammoStartX + i * ammoStride;
+    const count = player.ammo[spec.type] ?? 0;
+    const max = Math.max(1, player.ammoMax[spec.type] ?? 1);
+    const frac = Math.max(0, Math.min(1, count / max));
+    const isEquipped = equippedTypes.has(spec.type);
+    const isLow = player.gunWarrantTicks <= 0 && (count === 0 || frac <= 0.2);
+
+    if (isEquipped && isLow && !lowAmmoWarningText) {
+      lowAmmoWarningText = spec.lowLabel;
+    }
+
+    let drewIcon = false;
+    const iconBoxW = 8;
+    const iconBoxH = 9;
+
+    for (const candidate of spec.iconSprites) {
+      const iconDef = sprites.getSprite(candidate);
+      if (iconDef && sprites.hasSprite(candidate)) {
+        const iconFrame = computeAmmoIconFrame(
+          count,
+          max,
+          iconDef.frames.length,
+          player.gunWarrantTicks,
+        );
+        if (isEquipped) {
+          // Crisp white highlight outline on the equipped weapon's ammo pool icon (matches video!)
+          for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+            drawSpriteIntegerOrFitShared(ctx, sprites, candidate, 0, ax + ox, ammoY + oy, iconBoxW, iconBoxH, {
+              alpha: 0.9,
+              tintColor: '#ffffff',
+            });
+          }
+        }
+        // Both Steam AND Built-In Wave 2 pack full 8-frame draining sheets (f0=FULL .. f7=EMPTY)!
+        if (isSteamMode || iconDef.frames.length >= 8) {
+          drewIcon = drawSpriteIntegerOrFitShared(ctx, sprites, candidate, iconFrame, ax, ammoY, iconBoxW, iconBoxH, {
+            alpha: count === 0 && player.gunWarrantTicks <= 0 ? 0.78 : 1,
+          });
+        } else {
+          const effFrac = player.gunWarrantTicks > 0 ? 1 : frac;
+          drewIcon = drawSpriteIntegerOrFitShared(ctx, sprites, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
+            alpha: effFrac <= 0 ? 0.36 : 0.30,
+          });
+          if (drewIcon && effFrac > 0) {
+            const fillH = Math.max(1, Math.round(iconBoxH * effFrac));
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(ax, ammoY + iconBoxH - fillH, iconBoxW, fillH);
+            ctx.clip();
+            drawSpriteIntegerOrFitShared(ctx, sprites, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
+              alpha: 1,
+            });
+            ctx.restore();
+          }
+        }
+        if (drewIcon) break;
+      }
+    }
+
+    if (!drewIcon) {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(ax, ammoY + 1, 6, 7);
+      ctx.fillStyle = count === 0 ? '#4e525c' : spec.color;
+      ctx.fillRect(ax + 1, ammoY + 2, 4, 5);
+    }
+  }
+
+  let warnX = ammoStartX + AMMO_POOL_SPECS.length * ammoStride + 4;
+
+  // Rogue Portal Strike compact canister icon right beside the 5 ammo icons
+  if (player.mutant === 'rogue') {
+    const rx = ammoStartX + AMMO_POOL_SPECS.length * ammoStride + 2;
+    const rogueDef = sprites.getSprite('sprRogueAmmoHUD');
+    let drewRogue = false;
+    if (rogueDef && sprites.hasSprite('sprRogueAmmoHUD')) {
+      const rf = Math.max(0, Math.min(rogueDef.frames.length - 1, player.portalStrikes));
+      drewRogue = drawSpriteIntegerOrFitShared(ctx, sprites, 'sprRogueAmmoHUD', rf, rx, ammoY - 2, 10, 13);
+    }
+    if (!drewRogue) {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(rx, ammoY, 6, 8);
+      ctx.fillStyle = player.portalStrikes > 0 ? '#52a8ff' : '#3a4659';
+      ctx.fillRect(rx + 1, ammoY + 1, 4, 6);
+    }
+    warnX = rx + 12;
+  }
+
+  // Blinking bright red `LOW ENERGY` / `LOW BULLETS` / `LOW SHELLS` right beside ammo icons!
+  if (lowAmmoWarningText && Math.floor(state.tick / 10) % 2 === 0) {
+    fonts.draw(ctx, lowAmmoWarningText, warnX, ammoY + 1, 'fntM1', {
+      color: '#ff3020',
+      outline: true,
+    });
+  }
+
+  // Timed status indicator (Chicken Headless / Fish Gun Warrant) tucked cleanly below ammo row
+  if (player.headlessTicks > 0 && player.alive) {
+    const secs = (player.headlessTicks / 30).toFixed(1);
+    fonts.draw(ctx, `@rHEAD ${secs}S`, ammoStartX, ammoY + 12, 'fntSmall', {
+      outline: true,
+    });
+  } else if (player.gunWarrantTicks > 0) {
+    const secs = (player.gunWarrantTicks / 30).toFixed(1);
+    fonts.draw(ctx, `@yINF AMMO ${secs}S`, ammoStartX, ammoY + 12, 'fntSmall', {
+      outline: true,
+    });
+  }
+}
+
+/**
  * 1:1 Authentic Nuclear Throne Canvas HUD Renderer (426x240 / 320x240 native 1x grid):
  * - Top-Left: Vertical rad canister with centered level digit (1..9 / U), crisp red-orange HP bar
  *   with blinking LOW HP warning, borderless active + secondary weapon silhouettes & ammo counts
@@ -341,61 +873,6 @@ export class HudRenderer {
       tintColor: opts.tintColor,
       maxScale: 1,
     });
-  }
-
-  /**
-   * Draws a compact crisp white-outlined HUD weapon icon (4-way 1px white outline + dark/crisp sprite)
-   * matching Nuclear Throne's ultra-readable floating HUD weapons with zero dark box clutter.
-   */
-  private drawHudWeaponSprite(
-    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-    spriteName: string,
-    boxX: number,
-    boxY: number,
-    boxW: number,
-    boxH: number,
-    bright: boolean,
-  ): { drew: boolean; visualW: number } {
-    const spr = this.sprites.getSprite(spriteName);
-    if (!spr || spr.frames.length === 0 || !this.sprites.hasSprite(spriteName)) {
-      return { drew: false, visualW: 12 };
-    }
-    const rect = spr.frames[0];
-    if (!rect || rect.srcW <= 0 || rect.srcH <= 0) {
-      return { drew: false, visualW: 12 };
-    }
-
-    const fitScale = Math.min(1, boxW / Math.max(1, rect.targetW), boxH / Math.max(1, rect.targetH));
-    const visualW = Math.max(10, Math.min(boxW, Math.round(rect.targetW * fitScale)));
-
-    if (bright) {
-      // Crisp 1px white pixel outline around HUD weapon silhouette (pops on both snow and black caves!)
-      const outlineAlpha = 0.96;
-      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
-        this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX + ox, boxY + oy, visualW, boxH, {
-          alpha: outlineAlpha,
-          tintColor: '#ffffff',
-        });
-      }
-      this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX, boxY, visualW, boxH, {
-        alpha: 1,
-        tintColor: '#0e0a12',
-      });
-    } else {
-      // Secondary weapon: slightly muted dark silhouette with subtle gray-white rim
-      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
-        this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX + ox, boxY + oy, visualW, boxH, {
-          alpha: 0.65,
-          tintColor: '#b8b8c4',
-        });
-      }
-      this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX, boxY, visualW, boxH, {
-        alpha: 0.9,
-        tintColor: '#14101a',
-      });
-    }
-
-    return { drew: true, visualW };
   }
 
   render(
@@ -555,421 +1032,16 @@ export class HudRenderer {
       }
     }
 
-    // ------------------------------------------------------------------------
-    // 1. RAD CANISTER (x=4, y=4, ~14x24px) with Level digit centered ON tube!
-    // ------------------------------------------------------------------------
-    const radX = 4;
-    const radY = 4;
-    const isUltraLevel = player.level >= 10 || player.radsToNextLevel >= 9999;
-    const radFrac = isUltraLevel
-      ? 1
-      : player.radsToNextLevel > 0
-        ? Math.max(0, Math.min(1, player.rads / player.radsToNextLevel))
-        : 1;
-
-    const expBarSpr = this.sprites.getSprite('sprExpBar');
-    let canisterW = 14;
-    let canisterH = 22;
-    if (expBarSpr && expBarSpr.frames.length > 0 && this.sprites.hasSprite('sprExpBar')) {
-      canisterW = expBarSpr.width;
-      canisterH = expBarSpr.height;
-      const fillFrame = Math.min(
-        expBarSpr.frames.length - 1,
-        Math.round(radFrac * (expBarSpr.frames.length - 1)),
-      );
-      const levelGlowOn = state.pendingLevelUps > 0 && Math.floor(state.tick / 6) % 2 === 0;
-      if (levelGlowOn) {
-        // CRITICAL: Draw sprExpBarLevel BEFORE sprExpBar so Steam's 16x26 glow frames the green canister
-        const lvlSpr = this.sprites.getSprite('sprExpBarLevel');
-        if (lvlSpr && lvlSpr.width <= expBarSpr.width) {
-          drawPixelBorder(ctx, radX - 1, radY - 1, expBarSpr.width + 2, expBarSpr.height + 2, '#ffe047', 1);
-        }
-        this.sprites.draw(ctx, 'sprExpBarLevel', radX, radY, { frame: 0, pixelSnap: true });
-      }
-      this.sprites.draw(ctx, 'sprExpBar', radX, radY, { frame: fillFrame, pixelSnap: true });
-    } else {
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(radX, radY, 15, 22);
-      ctx.fillStyle = '#686b70';
-      ctx.fillRect(radX + 1, radY + 1, 13, 3);
-      ctx.fillRect(radX + 1, radY + 18, 13, 3);
-      ctx.fillStyle = '#141816';
-      ctx.fillRect(radX + 2, radY + 4, 11, 14);
-      const fillH = Math.round(14 * radFrac);
-      if (fillH > 0) {
-        ctx.fillStyle = state.pendingLevelUps > 0 ? '#a8ff6e' : '#48e048';
-        ctx.fillRect(radX + 2, radY + 18 - fillH, 11, fillH);
-      }
-      canisterW = 15;
-      canisterH = 22;
-    }
-
-    // Bold white-outlined Level number (1..9 or U) centered RIGHT ON THE CANISTER!
-    const levelDigit = player.level >= 10 ? 'U' : String(Math.max(1, player.level));
-    this.fonts.draw(
-      ctx,
-      levelDigit,
-      radX + Math.floor(canisterW * 0.5),
-      radY + Math.floor(canisterH * 0.5) - 4,
-      'fntM1',
-      {
-        align: 'center',
-        color: player.level >= 10 ? '#8cff66' : '#ffffff',
-        outline: true,
-      },
-    );
-
-    // ------------------------------------------------------------------------
-    // 2. HP BAR (x=22, y=5, w=84, h=11) + LOW HP blinking red warning
-    // ------------------------------------------------------------------------
-    const barX = 22;
-    const barY = 5;
-    const barW = 84;
-    const barH = 11;
-    const innerX = barX + 2;
-    const innerY = barY + 2;
-    const innerW = barW - 4;
-    const innerH = barH - 4;
-
-    if (this.isSteamMode && this.sprites.hasSprite('sprHealthBar')) {
-      this.sprites.draw(ctx, 'sprHealthBar', barX - 2, barY - 1, { frame: 0, pixelSnap: true });
-      const sInnerX = barX + 1;
-      const sInnerY = barY + 2;
-      const sInnerW = 82;
-      const sInnerH = 8;
-      const fillW = Math.round(sInnerW * hpFrac);
-      const trailW = Math.round(sInnerW * this.displayedHpFrac);
-      if (trailW > fillW) {
-        ctx.fillStyle = '#8e1b18';
-        ctx.fillRect(sInnerX + fillW, sInnerY, trailW - fillW, sInnerH);
-      }
-      if (fillW > 0) {
-        const frame = resolveHealthFillFrame(player.hurtFlashTicks);
-        const drewFill = this.sprites.draw(ctx, 'sprHealthFill', sInnerX, sInnerY, {
-          frame,
-          scaleX: fillW,
-          scaleY: 1,
-          pixelSnap: true,
-        });
-        if (!drewFill) {
-          ctx.fillStyle = player.hurtFlashTicks > 0 ? '#ffffff' : '#fc3800';
-          ctx.fillRect(sInnerX, sInnerY, fillW, sInnerH);
-          if (player.hurtFlashTicks <= 0) {
-            ctx.fillStyle = '#ff7c40';
-            ctx.fillRect(sInnerX, sInnerY, fillW, 1);
-          }
-        }
-      }
-    } else {
-      // Exact crisp 1x Nuclear Throne black + white bordered HP bar (matches 04_desert_1_1.png!)
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(barX, barY, barW, barH);
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(barX + 1, barY + 1, barW - 2, barH - 2);
-      ctx.fillStyle = '#1d171c';
-      ctx.fillRect(innerX, innerY, innerW, innerH);
-
-      const fillW = Math.round(innerW * hpFrac);
-      const trailW = Math.round(innerW * this.displayedHpFrac);
-      if (trailW > fillW) {
-        ctx.fillStyle = '#8e1b18';
-        ctx.fillRect(innerX + fillW, innerY, trailW - fillW, innerH);
-      }
-      if (fillW > 0) {
-        if (player.hurtFlashTicks > 0) {
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(innerX, innerY, fillW, innerH);
-        } else {
-          ctx.fillStyle = '#fc3800';
-          ctx.fillRect(innerX, innerY, fillW, innerH);
-          ctx.fillStyle = '#ff7c40';
-          ctx.fillRect(innerX, innerY, fillW, 1);
-        }
-      }
-    }
-
-    // Boiling Veins subtle warm border pulse when <= 4 HP
-    if (player.alive && hp <= 4 && player.mutations.includes('boiling_veins')) {
-      const bvPulse = Math.floor(state.tick / 6) % 2 === 0;
-      drawPixelBorder(ctx, barX - 1, barY - 1, barW + 2, barH + 2, bvPulse ? '#ffe047' : '#ff7b24', 1);
-    }
-
-    // Bold white-outlined HP numbers centered inside bar (8/8)
-    this.fonts.draw(
-      ctx,
-      `${Math.ceil(hp)}/${maxHp}`,
-      barX + Math.floor(barW * 0.5),
-      barY + 2,
-      'fntM1',
-      { align: 'center', color: '#ffffff', outline: true },
-    );
-
-    // Strong Spirit pixel-crisp halo right of HP bar (zero ctx.arc!)
-    let rightOfHpX = barX + barW + 4;
-    if (player.mutations.includes('strong_spirit')) {
-      const ssBoxX = barX + barW + 2;
-      const ssBoxY = barY + 1;
-      const ready = player.strongSpiritReady;
-      const drewSteamHalo =
-        this.isSteamMode &&
-        this.sprites.hasSprite('sprStrongSpirit') &&
-        this.drawSpriteIntegerOrFit(ctx, 'sprStrongSpirit', 0, ssBoxX, ssBoxY, 12, 10, {
-          alpha: ready ? 1 : 0.36,
-          tintColor: ready ? undefined : '#5b677d',
-        });
-
-      if (!drewSteamHalo) {
-        const hx = ssBoxX + 1;
-        const hy = barY + 2;
-        const ringCol = ready ? '#e6fcff' : '#4f5b6e';
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(hx + 1, hy - 1, 8, 1);
-        ctx.fillRect(hx + 1, hy + 6, 8, 1);
-        ctx.fillRect(hx - 1, hy + 1, 1, 4);
-        ctx.fillRect(hx + 10, hy + 1, 1, 4);
-        ctx.fillStyle = ringCol;
-        ctx.fillRect(hx + 2, hy, 6, 1);
-        ctx.fillRect(hx + 2, hy + 5, 6, 1);
-        ctx.fillRect(hx + 1, hy + 1, 2, 1);
-        ctx.fillRect(hx + 7, hy + 1, 2, 1);
-        ctx.fillRect(hx, hy + 2, 2, 2);
-        ctx.fillRect(hx + 8, hy + 2, 2, 2);
-        ctx.fillRect(hx + 1, hy + 4, 2, 1);
-        ctx.fillRect(hx + 7, hy + 4, 2, 1);
-      }
-      rightOfHpX = ssBoxX + 15;
-    }
-
-    // Blinking bright red black-outlined `LOW HP` warning directly right of HP bar!
-    const isLowHp =
-      player.alive &&
-      ((maxHp > 4 && hp <= 4) || (maxHp <= 4 && hp < maxHp && hp <= 1));
-    if (isLowHp && Math.floor(state.tick / 10) % 2 === 0) {
-      this.fonts.draw(ctx, 'LOW HP', Math.max(110, rightOfHpX), barY + 2, 'fntM1', {
-        color: '#ff3020',
-        outline: true,
-      });
-    }
-
-    // ------------------------------------------------------------------------
-    // 3. WEAPONS ROW (x=22, y=18) — ZERO DARK BOXES, ZERO WEAPON NAMES!
-    // ------------------------------------------------------------------------
-    const activeSlot = player.weapons[player.activeSlot];
-    const secondarySlot = player.weapons[player.activeSlot === 0 ? 1 : 0];
-    const activeDef = activeSlot ? this.data.getWeapon(activeSlot.weaponId) : undefined;
-    const secDef = secondarySlot ? this.data.getWeapon(secondarySlot.weaponId) : undefined;
-    const isSteroids = player.mutant === 'steroids';
-
-    let cursorX = 22;
-    const wepRowY = 18;
-
-    // Active Weapon silhouette + ammo count + reload bar (only while reloading)
-    if (activeSlot) {
-      const wepSpr = resolveWeaponSpriteName(activeSlot.weaponId, this.data);
-      const { visualW } = this.drawHudWeaponSprite(ctx, wepSpr, cursorX, wepRowY, 22, 10, true);
-
-      // Thin crisp reload progress bar directly underneath reloading weapon ONLY while reloadTicks > 0
-      if (activeSlot.reloadTicks > 0 && activeSlot.maxReloadTicks > 0) {
-        const frac = 1 - Math.max(0, Math.min(1, activeSlot.reloadTicks / activeSlot.maxReloadTicks));
-        const rBarW = Math.max(14, visualW);
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(cursorX - 1, wepRowY + 10, rBarW + 2, 3);
-        ctx.fillStyle = '#36323e';
-        ctx.fillRect(cursorX, wepRowY + 11, rBarW, 1);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(cursorX, wepRowY + 11, Math.max(1, Math.round(rBarW * frac)), 1);
-      }
-
-      cursorX += visualW + 3;
-
-      const ammoType = activeDef?.ammoType ?? 'melee';
-      if (ammoType !== 'melee') {
-        const count = player.ammo[ammoType] ?? 0;
-        const max = Math.max(1, player.ammoMax[ammoType] ?? 1);
-        const low = player.gunWarrantTicks <= 0 && (count === 0 || count / max <= 0.2);
-        const countStr = player.gunWarrantTicks > 0 ? 'INF' : String(count);
-        const drawn = this.fonts.draw(ctx, countStr, cursorX, wepRowY + 1, 'fntM1', {
-          color: player.gunWarrantTicks > 0 ? '#ffe047' : low ? '#ff3828' : '#ffffff',
-          outline: true,
-        });
-        cursorX += Math.max(14, drawn.width) + 6;
-      } else {
-        cursorX += 5;
-      }
-    }
-
-    // Secondary Weapon silhouette + ammo count directly to the right
-    if (secondarySlot) {
-      const secSpr = resolveWeaponSpriteName(secondarySlot.weaponId, this.data);
-      const { visualW } = this.drawHudWeaponSprite(
-        ctx,
-        secSpr,
-        cursorX,
-        wepRowY,
-        20,
-        10,
-        isSteroids,
-      );
-
-      if (secondarySlot.reloadTicks > 0 && secondarySlot.maxReloadTicks > 0) {
-        const sFrac =
-          1 - Math.max(0, Math.min(1, secondarySlot.reloadTicks / secondarySlot.maxReloadTicks));
-        const rBarW = Math.max(14, visualW);
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(cursorX - 1, wepRowY + 10, rBarW + 2, 3);
-        ctx.fillStyle = '#36323e';
-        ctx.fillRect(cursorX, wepRowY + 11, rBarW, 1);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(cursorX, wepRowY + 11, Math.max(1, Math.round(rBarW * sFrac)), 1);
-      }
-
-      cursorX += visualW + 3;
-
-      const secAmmoType = secDef?.ammoType ?? 'melee';
-      if (secAmmoType !== 'melee') {
-        const secCount = player.ammo[secAmmoType] ?? 0;
-        const secMax = Math.max(1, player.ammoMax[secAmmoType] ?? 1);
-        const secLow = player.gunWarrantTicks <= 0 && (secCount === 0 || secCount / secMax <= 0.2);
-        const secStr = player.gunWarrantTicks > 0 ? 'INF' : String(secCount);
-        const drawn = this.fonts.draw(ctx, secStr, cursorX, wepRowY + 1, 'fntM1', {
-          color: player.gunWarrantTicks > 0 ? '#ffe047' : secLow ? '#ff3828' : isSteroids ? '#ffffff' : '#c8c8d2',
-          outline: true,
-        });
-        cursorX += drawn.width + 4;
-      }
-
-      // Gamepad-only compact swap glyph (invisible in KBM/Touch for 100% pure video HUD!)
-      if (inputMode === 'gamepad') {
-        const swapKey = getGamepadGlyphs(gamepadFamily).swap;
-        this.fonts.draw(ctx, swapKey, cursorX, wepRowY + 2, 'fntSmall', {
-          color: '#ffe047',
-          outline: true,
-        });
-      }
-    }
-
-    // ------------------------------------------------------------------------
-    // 4. 5 TINY AMMO POOL ICONS (x=4, y=30, 9px stride) — ZERO NUMBERS!
-    // ------------------------------------------------------------------------
-    const ammoStartX = 4;
-    const ammoY = 30;
-    const ammoStride = 9;
-    const equippedTypes = new Set<AmmoType>();
-    if (activeDef?.ammoType && activeDef.ammoType !== 'melee') equippedTypes.add(activeDef.ammoType);
-    if (secDef?.ammoType && secDef.ammoType !== 'melee') equippedTypes.add(secDef.ammoType);
-
-    let lowAmmoWarningText = '';
-
-    for (let i = 0; i < AMMO_POOL_SPECS.length; i++) {
-      const spec = AMMO_POOL_SPECS[i]!;
-      const ax = ammoStartX + i * ammoStride;
-      const count = player.ammo[spec.type] ?? 0;
-      const max = Math.max(1, player.ammoMax[spec.type] ?? 1);
-      const frac = Math.max(0, Math.min(1, count / max));
-      const isEquipped = equippedTypes.has(spec.type);
-      const isLow = player.gunWarrantTicks <= 0 && (count === 0 || frac <= 0.2);
-
-      if (isEquipped && isLow && !lowAmmoWarningText) {
-        lowAmmoWarningText = spec.lowLabel;
-      }
-
-      let drewIcon = false;
-      const iconBoxW = 8;
-      const iconBoxH = 9;
-
-      for (const candidate of spec.iconSprites) {
-        const iconDef = this.sprites.getSprite(candidate);
-        if (iconDef && this.sprites.hasSprite(candidate)) {
-          const iconFrame = computeAmmoIconFrame(
-            count,
-            max,
-            iconDef.frames.length,
-            player.gunWarrantTicks,
-          );
-          if (isEquipped) {
-            // Crisp white highlight outline on the equipped weapon's ammo pool icon (matches video!)
-            for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
-              this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax + ox, ammoY + oy, iconBoxW, iconBoxH, {
-                alpha: 0.9,
-                tintColor: '#ffffff',
-              });
-            }
-          }
-          if (this.isSteamMode) {
-            drewIcon = this.drawSpriteIntegerOrFit(ctx, candidate, iconFrame, ax, ammoY, iconBoxW, iconBoxH, {
-              alpha: count === 0 && player.gunWarrantTicks <= 0 ? 0.72 : 1,
-            });
-          } else {
-            const effFrac = player.gunWarrantTicks > 0 ? 1 : frac;
-            drewIcon = this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
-              alpha: effFrac <= 0 ? 0.36 : 0.30,
-            });
-            if (drewIcon && effFrac > 0) {
-              const fillH = Math.max(1, Math.round(iconBoxH * effFrac));
-              ctx.save();
-              ctx.beginPath();
-              ctx.rect(ax, ammoY + iconBoxH - fillH, iconBoxW, fillH);
-              ctx.clip();
-              this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
-                alpha: 1,
-              });
-              ctx.restore();
-            }
-          }
-          if (drewIcon) break;
-        }
-      }
-
-      if (!drewIcon) {
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(ax, ammoY + 1, 6, 7);
-        ctx.fillStyle = count === 0 ? '#4e525c' : spec.color;
-        ctx.fillRect(ax + 1, ammoY + 2, 4, 5);
-      }
-    }
-
-    let warnX = ammoStartX + AMMO_POOL_SPECS.length * ammoStride + 4;
-
-    // Rogue Portal Strike compact canister icon right beside the 5 ammo icons
-    if (player.mutant === 'rogue') {
-      const rx = ammoStartX + AMMO_POOL_SPECS.length * ammoStride + 2;
-      const rogueDef = this.sprites.getSprite('sprRogueAmmoHUD');
-      let drewRogue = false;
-      if (rogueDef && this.sprites.hasSprite('sprRogueAmmoHUD')) {
-        const rf = Math.max(0, Math.min(rogueDef.frames.length - 1, player.portalStrikes));
-        drewRogue = this.drawSpriteIntegerOrFit(ctx, 'sprRogueAmmoHUD', rf, rx, ammoY - 2, 10, 13);
-      }
-      if (!drewRogue) {
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(rx, ammoY, 6, 8);
-        ctx.fillStyle = player.portalStrikes > 0 ? '#52a8ff' : '#3a4659';
-        ctx.fillRect(rx + 1, ammoY + 1, 4, 6);
-      }
-      warnX = rx + 12;
-    }
-
-    // Blinking bright red `LOW ENERGY` / `LOW BULLETS` / `LOW SHELLS` right beside ammo icons!
-    if (lowAmmoWarningText && Math.floor(state.tick / 10) % 2 === 0) {
-      this.fonts.draw(ctx, lowAmmoWarningText, warnX, ammoY + 1, 'fntM1', {
-        color: '#ff3020',
-        outline: true,
-      });
-    }
-
-    // Timed status indicator (Chicken Headless / Fish Gun Warrant) tucked cleanly below ammo row
-    if (player.headlessTicks > 0 && player.alive) {
-      const secs = (player.headlessTicks / 30).toFixed(1);
-      this.fonts.draw(ctx, `@rHEAD ${secs}S`, ammoStartX, ammoY + 12, 'fntSmall', {
-        outline: true,
-      });
-    } else if (player.gunWarrantTicks > 0) {
-      const secs = (player.gunWarrantTicks / 30).toFixed(1);
-      this.fonts.draw(ctx, `@yINF AMMO ${secs}S`, ammoStartX, ammoY + 12, 'fntSmall', {
-        outline: true,
-      });
-    }
+    renderTopLeftGameplayHud(ctx, {
+      sprites: this.sprites,
+      fonts: this.fonts,
+      data: this.data,
+      isSteamMode: this.isSteamMode,
+      state,
+      displayedHpFrac: this.displayedHpFrac,
+      inputMode,
+      gamepadFamily,
+    });
   }
 
   /**
