@@ -34,7 +34,7 @@ import {
   resolveWeaponSpriteName,
   type UiDataProvider,
 } from './data-provider';
-import { computeUltraIconFrame } from './hud';
+import { computeUltraIconFrame, renderTopLeftGameplayHud } from './hud';
 
 export const OPAQUE_MENU_BACKDROP = 'rgba(10, 9, 14, 0.96)';
 
@@ -160,8 +160,8 @@ export function drawPortalVortex(
   const iw = Math.max(1, Math.round(w));
   const ih = Math.max(1, Math.round(h));
   const frameBucket = Math.floor(Math.max(0, timeSec) * 24);
-  const coreX = iw * 0.43 + Math.sin(timeSec * 0.65) * 14;
-  const coreY = ih * 0.56 + Math.cos(timeSec * 0.52) * 9;
+  const coreX = iw * 0.44 + Math.sin(timeSec * 0.58) * 14;
+  const coreY = ih * 0.55 + Math.cos(timeSec * 0.46) * 9;
 
   let drewRasterVortex = false;
   if (!cachedVortexCanvas || cachedVortexW !== iw || cachedVortexH !== ih) {
@@ -181,28 +181,28 @@ export function drawPortalVortex(
         cachedVortexTick = frameBucket;
         const img = vctx.createImageData(iw, ih);
         const data = img.data;
-        const phaseShift = timeSec * 2.6;
+        const phaseShift = timeSec * 1.95;
 
-        // Stepped tunnel shading bands from abyssal core to outer purple spiral (#512a68 / #391c4b)
-        const lightR = [0x14, 0x28, 0x38, 0x47, 0x51];
-        const lightG = [0x09, 0x12, 0x1c, 0x24, 0x2a];
-        const lightB = [0x1c, 0x36, 0x4c, 0x5d, 0x68];
-        const darkR = [0x12, 0x1c, 0x27, 0x31, 0x39];
-        const darkG = [0x08, 0x0c, 0x13, 0x18, 0x1c];
-        const darkB = [0x18, 0x28, 0x37, 0x42, 0x4b];
+        // Exact sampled Nuclear Throne 5-arm smooth curved portal tunnel (#4a275f / #3a1f4a -> #14091c core)
+        const lightR = [0x14, 0x26, 0x35, 0x42, 0x4a];
+        const lightG = [0x09, 0x12, 0x1a, 0x22, 0x27];
+        const lightB = [0x1c, 0x34, 0x47, 0x56, 0x5f];
+        const darkR = [0x12, 0x1d, 0x28, 0x32, 0x3a];
+        const darkG = [0x08, 0x0d, 0x14, 0x1a, 0x1f];
+        const darkB = [0x18, 0x29, 0x37, 0x42, 0x4a];
 
         let off = 0;
         for (let y = 0; y < ih; y++) {
-          const dy = (y - coreY) * 1.1;
+          const dy = (y - coreY) * 1.06;
           const dy2 = dy * dy;
           for (let x = 0; x < iw; x++) {
             const dx = x - coreX;
             const dist = Math.sqrt(dx * dx + dy2);
             let tier: number;
-            if (dist < 14) tier = 0;
+            if (dist < 13) tier = 0;
             else if (dist < 30) tier = 1;
-            else if (dist < 54) tier = 2;
-            else if (dist < 90) tier = 3;
+            else if (dist < 58) tier = 2;
+            else if (dist < 102) tier = 3;
             else tier = 4;
 
             if (tier === 0) {
@@ -212,8 +212,9 @@ export function drawPortalVortex(
               data[off + 3] = 0xff;
             } else {
               const ang = Math.atan2(dy, dx);
-              const twist = Math.log(dist + 14) * 3.55 + dist * 0.015;
-              const arm = Math.sin(ang * 2 + twist - phaseShift) >= 0;
+              // 5 smooth curving spiral bands matching 01_title.png & 11a_levelup.png!
+              const twist = Math.log(dist + 22) * 3.15 + dist * 0.011;
+              const arm = Math.sin(ang * 5 + twist - phaseShift) >= 0;
               if (arm) {
                 data[off] = lightR[tier]!;
                 data[off + 1] = lightG[tier]!;
@@ -412,587 +413,803 @@ function drawEdgeInkSplats(
   }
 }
 
+/**
+ * Organic angled diagonal spiky brush-stroke ink splats for Pause screen (exact match to 21_paused.png!):
+ * - Sleek ragged top ink bar behind the HUD
+ * - Diagonal spiky ink wedges rising into bottom-left (MENU/RETRY) and bottom-right (SETTINGS/CONTINUE)
+ *   while leaving the CENTER arena floor clearly visible between them!
+ */
+function drawPauseCornerInkSplats(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  w: number,
+  h: number,
+  phase: 'top' | 'bottom',
+): void {
+  const iw = Math.round(w);
+  const ih = Math.round(h);
+  const isWide = iw >= 380;
+  ctx.fillStyle = '#000000';
+
+  if (phase === 'top') {
+    // Sleek pure-black top HUD bar (28px tall) with hand-brushed jagged bottom teeth
+    const topH = 29;
+    ctx.fillRect(0, 0, iw, topH);
+    for (let x = 0; x < iw; x += 6) {
+      const hv = (Math.imul((x + 19) ^ 0x3b71, 2654435761) >>> 0) % 100;
+      const tooth = (hv % 4) + (x < 92 || x > iw - 96 ? 2 : 0);
+      ctx.fillRect(x, topH, 6, tooth);
+      if (hv % 11 === 0) ctx.fillRect(x + 2, topH + tooth + 1, 2, 1);
+    }
+    return;
+  }
+
+  // Bottom thin footer strip (16px) leaving center arena clearly visible from y = 160..224!
+  const footH = 16;
+  ctx.fillRect(0, ih - footH, iw, footH);
+  for (let x = 0; x < iw; x += 5) {
+    const hv = (Math.imul((x + 41) ^ 0x6d19, 2654435761) >>> 0) % 100;
+    ctx.fillRect(x, ih - footH - (hv % 3), 5, hv % 3);
+  }
+
+  // Bottom-Left organic diagonal ink wedge sloping UP into left corner (holds MENU & RETRY)
+  const leftSpan = isWide ? 148 : 114;
+  const leftPeak = 64;
+  for (let yOff = 0; yOff < leftPeak; yOff++) {
+    const t = yOff / leftPeak; // 0 at foot, 1 at top peak
+    const hv = (Math.imul((yOff + 7) ^ 0x51a3, 2654435761) >>> 0) % 100;
+    const jag = (hv % 15) - 6;
+    const span = Math.max(8, Math.round(leftSpan * (1 - t * 0.78) + jag));
+    ctx.fillRect(0, ih - footH - yOff - 1, span, 1);
+    if (hv % 8 === 0 && span + 8 < iw * 0.45) {
+      ctx.fillRect(span + 3, ih - footH - yOff - 1, 4 + (hv % 7), 1);
+    }
+  }
+  // Dramatic diagonal brush whip-streaks fanning out from bottom-left wedge (matching 21_paused.png!)
+  drawPixelLine(ctx, 0, ih - footH - leftPeak - 10, leftSpan - 18, ih - footH - 12, 3);
+  drawPixelLine(ctx, 14, ih - footH - leftPeak - 4, leftSpan + 16, ih - footH - 2, 2);
+  drawPixelLine(ctx, 42, ih - footH - 42, leftSpan + 26, ih - footH - 8, 2);
+  drawPixelLine(ctx, 64, ih - footH - 28, leftSpan + 30, ih - footH - 18, 1);
+  // Stray ink flecks
+  ctx.fillRect(leftSpan + 12, ih - footH - 36, 3, 2);
+  ctx.fillRect(leftSpan + 24, ih - footH - 22, 2, 2);
+
+  // Bottom-Right mirrored organic diagonal ink wedge sloping UP into right corner (holds SETTINGS & CONTINUE)
+  const rightSpan = isWide ? 164 : 122;
+  const rightPeak = 68;
+  for (let yOff = 0; yOff < rightPeak; yOff++) {
+    const t = yOff / rightPeak;
+    const hv = (Math.imul((yOff + 23) ^ 0x73c9, 2654435761) >>> 0) % 100;
+    const jag = (hv % 17) - 7;
+    const span = Math.max(10, Math.round(rightSpan * (1 - t * 0.72) + jag));
+    ctx.fillRect(iw - span, ih - footH - yOff - 1, span, 1);
+    if (hv % 7 === 0 && iw - span - 12 > iw * 0.55) {
+      ctx.fillRect(iw - span - 7 - (hv % 6), ih - footH - yOff - 1, 4 + (hv % 6), 1);
+    }
+  }
+  // Dramatic diagonal brush whip-streaks fanning up-left from bottom-right wedge (matching 21_paused.png!)
+  drawPixelLine(ctx, iw, ih - footH - rightPeak - 12, iw - rightSpan + 14, ih - footH - 14, 3);
+  drawPixelLine(ctx, iw - 12, ih - footH - rightPeak - 4, iw - rightSpan - 18, ih - footH - 4, 2);
+  drawPixelLine(ctx, iw - 48, ih - footH - 48, iw - rightSpan - 26, ih - footH - 16, 2);
+  drawPixelLine(ctx, iw - 28, ih - footH - rightPeak - 14, iw - rightSpan + 24, ih - footH - 54, 1);
+  // Stray ink flecks
+  ctx.fillRect(iw - rightSpan - 16, ih - footH - 38, 3, 2);
+  ctx.fillRect(iw - rightSpan - 28, ih - footH - 20, 2, 2);
+}
+
+/**
+ * Sleek horizontal jagged corner ink splat extending inward from the left or right screen edge
+ * (exact match to top-right & bottom-left ink strokes in 11a_levelup.png!).
+ */
+function drawCornerEdgeInkSplat(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  w: number,
+  side: 'left' | 'right',
+  y: number,
+  span: number,
+  h: number,
+  seed: number = 0,
+): void {
+  const iw = Math.round(w);
+  const iy = Math.round(y);
+  const ih = Math.max(8, Math.round(h));
+  const iSpan = Math.max(24, Math.round(span));
+  ctx.fillStyle = '#000000';
+
+  for (let r = 0; r < ih; r++) {
+    const hv = (Math.imul((seed + r * 31) ^ 0x45d9f3b, 2654435761) >>> 0) % 100;
+    const edgeTaper = r < 4 ? (4 - r) * 5 : r > ih - 4 ? (r - (ih - 4)) * 4 : 0;
+    const spike = (hv % 28) - 8;
+    const rowW = Math.max(16, iSpan - edgeTaper + spike);
+    if (side === 'left') {
+      ctx.fillRect(0, iy + r, rowW, 1);
+      if (hv % 6 === 0) {
+        ctx.fillRect(rowW + 3 + (hv % 6), iy + r, 5 + (hv % 9), 1);
+      }
+    } else {
+      ctx.fillRect(iw - rowW, iy + r, rowW, 1);
+      if (hv % 6 === 0) {
+        const fw = 5 + (hv % 9);
+        ctx.fillRect(iw - rowW - 3 - (hv % 6) - fw, iy + r, fw, 1);
+      }
+    }
+  }
+
+  // Sweeping horizontal whip-streaks shooting cleanly off the inner edge
+  if (side === 'left') {
+    drawPixelLine(ctx, iSpan - 18, iy + 2, iSpan + 24, iy + 5, 2);
+    drawPixelLine(ctx, iSpan - 8, iy + Math.round(ih * 0.45), iSpan + 30, iy + Math.round(ih * 0.55), 2);
+  } else {
+    drawPixelLine(ctx, iw - iSpan + 16, iy + 3, iw - iSpan - 26, iy + 6, 2);
+    drawPixelLine(ctx, iw - iSpan + 8, iy + Math.round(ih * 0.52), iw - iSpan - 30, iy + Math.round(ih * 0.62), 2);
+  }
+}
+
 // ============================================================================
-// BESPOKE 1x JAGGED NUCLEAR THRONE CHUNKY DISPLAY FONT (9x12 NATIVE 1x PIXELS)
-// Matches 01_title.png, 21_paused.png, 11_levelup.png, 22_settings_video.png!
+// BESPOKE 1x BOLD HAND-DRAWN NUCLEAR THRONE CHUNKY DISPLAY FONT (11x14 NATIVE 1x)
+// Thick 3px hand-painted strokes, organic irregular edges & 2px crisp #000000 outline!
+// Matches 01_title.png, 21_paused.png, 11a_levelup.png, 22_settings_video.png!
 // ============================================================================
 
-const CHUNKY_GLYPHS_9X12: Readonly<Record<string, readonly string[]>> = {
+const CHUNKY_GLYPHS_11X14: Readonly<Record<string, readonly string[]>> = {
   A: [
-    '...###...',
-    '..#####..',
-    '.###.###.',
-    '.##...##.',
-    '###...###',
-    '#########',
-    '#########',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##....###',
-    '.#.....#.',
+    '....###....',
+    '...#####...',
+    '..#######..',
+    '..###.###..',
+    '.###...###.',
+    '.###...###.',
+    '###########',
+    '###########',
+    '###########',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '.##.....##.',
   ],
   B: [
-    '#######..',
-    '########.',
-    '##....###',
-    '##....##.',
-    '#######..',
-    '########.',
-    '##....###',
-    '##.....##',
-    '##.....##',
-    '##....###',
-    '########.',
-    '######...',
+    '########...',
+    '#########..',
+    '##########.',
+    '###....###.',
+    '###....###.',
+    '#########..',
+    '##########.',
+    '###....####',
+    '###.....###',
+    '###.....###',
+    '###....####',
+    '##########.',
+    '#########..',
+    '#######....',
   ],
   C: [
-    '..######.',
-    '.########',
-    '###....##',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.....##',
-    '###...###',
-    '.#######.',
-    '..#####..',
+    '...#######.',
+    '..#########',
+    '.##########',
+    '####....###',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###.....###',
+    '####...####',
+    '.##########',
+    '..########.',
+    '...######..',
   ],
   D: [
-    '######...',
-    '#######..',
-    '##...###.',
-    '##....###',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##....###',
-    '##...###.',
-    '#######..',
-    '#####....',
+    '#######....',
+    '########...',
+    '#########..',
+    '###...####.',
+    '###....###.',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###....###.',
+    '###...####.',
+    '#########..',
+    '########...',
+    '######.....',
   ],
   E: [
-    '#########',
-    '########.',
-    '##.......',
-    '##.......',
-    '#######..',
-    '#######..',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '#########',
-    '########.',
+    '###########',
+    '###########',
+    '##########.',
+    '###........',
+    '###........',
+    '#########..',
+    '#########..',
+    '########...',
+    '###........',
+    '###........',
+    '###........',
+    '###########',
+    '###########',
+    '##########.',
   ],
   F: [
-    '#########',
-    '########.',
-    '##.......',
-    '##.......',
-    '#######..',
-    '#######..',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
+    '###########',
+    '###########',
+    '##########.',
+    '###........',
+    '###........',
+    '#########..',
+    '#########..',
+    '########...',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '##.........',
   ],
   G: [
-    '..######.',
-    '.########',
-    '###....##',
-    '##.......',
-    '##.......',
-    '##..#####',
-    '##..#####',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '.########',
-    '..#####.#',
+    '...#######.',
+    '..#########',
+    '.##########',
+    '####....###',
+    '###........',
+    '###........',
+    '###...#####',
+    '###...#####',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '.##########',
+    '..#########',
+    '...######.#',
   ],
   H: [
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '#########',
-    '#########',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###########',
+    '###########',
+    '###########',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '##.......##',
   ],
   I: [
-    '.#######.',
-    '.#######.',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '.#######.',
-    '.#######.',
+    '.#########.',
+    '.#########.',
+    '.#########.',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '.#########.',
+    '.#########.',
+    '.########..',
   ],
   J: [
-    '..#######',
-    '..#######',
-    '.....###.',
-    '.....###.',
-    '.....###.',
-    '.....###.',
-    '.....###.',
-    '##...###.',
-    '##...###.',
-    '###..###.',
-    '.######..',
-    '..####...',
+    '..#########',
+    '..#########',
+    '..#########',
+    '......####.',
+    '......####.',
+    '......####.',
+    '......####.',
+    '......####.',
+    '###...####.',
+    '###...####.',
+    '####..####.',
+    '.########..',
+    '..#######..',
+    '...#####...',
   ],
   K: [
-    '##....##.',
-    '##...###.',
-    '##..###..',
-    '##.###...',
-    '#####....',
-    '#####....',
-    '##.###...',
-    '##..###..',
-    '##...###.',
-    '##....##.',
-    '##....###',
-    '##.....##',
+    '###....###.',
+    '###...####.',
+    '###..####..',
+    '###.####...',
+    '#######....',
+    '######.....',
+    '#######....',
+    '###.####...',
+    '###..####..',
+    '###...####.',
+    '###....###.',
+    '###....####',
+    '###.....###',
+    '##.......##',
   ],
   L: [
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '#########',
-    '########.',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '###########',
+    '###########',
+    '##########.',
   ],
   M: [
-    '##.....##',
-    '###...###',
-    '####.####',
-    '#########',
-    '##.###.##',
-    '##..#..##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
+    '###.....###',
+    '####...####',
+    '#####.#####',
+    '###########',
+    '###########',
+    '###.###.###',
+    '###..#..###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '##.......##',
   ],
   N: [
-    '##.....##',
-    '###....##',
-    '####...##',
-    '#####..##',
-    '##.###.##',
-    '##..#####',
-    '##...####',
-    '##....###',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
+    '###.....###',
+    '####....###',
+    '#####...###',
+    '######..###',
+    '#######.###',
+    '###.#######',
+    '###..######',
+    '###...#####',
+    '###....####',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '##.......##',
   ],
   O: [
-    '..#####..',
-    '.#######.',
-    '###...###',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '.#######.',
-    '..#####..',
+    '..#######..',
+    '.#########.',
+    '###########',
+    '####...####',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   P: [
-    '#######..',
-    '########.',
-    '##....###',
-    '##.....##',
-    '##....###',
-    '########.',
-    '#######..',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
-    '##.......',
+    '#########..',
+    '##########.',
+    '###########',
+    '###....####',
+    '###.....###',
+    '###....####',
+    '###########',
+    '##########.',
+    '########...',
+    '###........',
+    '###........',
+    '###........',
+    '###........',
+    '##.........',
   ],
   Q: [
-    '..#####..',
-    '.#######.',
-    '###...###',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##..##.##',
-    '##...####',
-    '###...###',
-    '.######.#',
-    '..####.##',
+    '..#######..',
+    '.#########.',
+    '###########',
+    '####...####',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###..##.###',
+    '###...#####',
+    '####..#####',
+    '##########.',
+    '.########.#',
+    '..#####.###',
   ],
   R: [
-    '#######..',
-    '########.',
-    '##....###',
-    '##.....##',
-    '##....###',
-    '########.',
-    '#######..',
-    '##..###..',
-    '##...###.',
-    '##....##.',
-    '##....###',
-    '##.....##',
+    '#########..',
+    '##########.',
+    '###########',
+    '###....####',
+    '###.....###',
+    '###....####',
+    '##########.',
+    '#########..',
+    '###..####..',
+    '###...####.',
+    '###....###.',
+    '###....####',
+    '###.....###',
+    '##.......##',
   ],
   S: [
-    '.#######.',
-    '#########',
-    '##.....##',
-    '##.......',
-    '.######..',
-    '..######.',
-    '......###',
-    '.......##',
-    '##.....##',
-    '###...###',
-    '########.',
-    '.######..',
+    '..########.',
+    '.##########',
+    '###########',
+    '###.....###',
+    '####.......',
+    '.########..',
+    '..########.',
+    '...########',
+    '........###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   T: [
-    '#########',
-    '#########',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
+    '###########',
+    '###########',
+    '###########',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....##.....',
   ],
   U: [
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '.#######.',
-    '..#####..',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   V: [
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '.##...##.',
-    '.##...##.',
-    '..##.##..',
-    '..#####..',
-    '...###...',
-    '...###...',
-    '....#....',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '.###...###.',
+    '.###...###.',
+    '..###.###..',
+    '..#######..',
+    '...#####...',
+    '...#####...',
+    '....###....',
+    '....###....',
+    '.....#.....',
   ],
   W: [
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '##..#..##',
-    '##.###.##',
-    '#########',
-    '####.####',
-    '###...###',
-    '##.....##',
-    '##.....##',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '###..#..###',
+    '###.###.###',
+    '###########',
+    '###########',
+    '#####.#####',
+    '####...####',
+    '###.....###',
+    '##.......##',
   ],
   X: [
-    '##.....##',
-    '###...###',
-    '.##...##.',
-    '..##.##..',
-    '...###...',
-    '...###...',
-    '...###...',
-    '..##.##..',
-    '.##...##.',
-    '###...###',
-    '##.....##',
-    '##.....##',
+    '###.....###',
+    '####...####',
+    '.###...###.',
+    '..###.###..',
+    '...#####...',
+    '....###....',
+    '...#####...',
+    '...#####...',
+    '..###.###..',
+    '.###...###.',
+    '####...####',
+    '###.....###',
+    '###.....###',
+    '##.......##',
   ],
   Y: [
-    '##.....##',
-    '###...###',
-    '.##...##.',
-    '..##.##..',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
+    '###.....###',
+    '####...####',
+    '.###...###.',
+    '..###.###..',
+    '...#####...',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....##.....',
   ],
   Z: [
-    '#########',
-    '#########',
-    '......###',
-    '.....###.',
-    '....###..',
-    '...###...',
-    '..###....',
-    '.###.....',
-    '###......',
-    '##.......',
-    '#########',
-    '#########',
+    '###########',
+    '###########',
+    '###########',
+    '.......####',
+    '......####.',
+    '.....####..',
+    '....####...',
+    '...####....',
+    '..####.....',
+    '.####......',
+    '####.......',
+    '###########',
+    '###########',
+    '##########.',
   ],
   '0': [
-    '..#####..',
-    '.#######.',
-    '##....###',
-    '##...####',
-    '##..##.##',
-    '##.##..##',
-    '####...##',
-    '###....##',
-    '##.....##',
-    '###...###',
-    '.#######.',
-    '..#####..',
+    '..#######..',
+    '.#########.',
+    '###....####',
+    '###...#####',
+    '###..######',
+    '###.###.###',
+    '######..###',
+    '#####...###',
+    '####....###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   '1': [
-    '...###...',
-    '..####...',
-    '.#####...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '.#######.',
-    '.#######.',
+    '....###....',
+    '...####....',
+    '..#####....',
+    '.######....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '....###....',
+    '.#########.',
+    '.#########.',
+    '.########..',
   ],
   '2': [
-    '.#######.',
-    '#########',
-    '##....###',
-    '......###',
-    '.....###.',
-    '...####..',
-    '..####...',
-    '.###.....',
-    '###......',
-    '##.......',
-    '#########',
-    '#########',
+    '.#########.',
+    '###########',
+    '###....####',
+    '.......####',
+    '......####.',
+    '....#####..',
+    '...#####...',
+    '..####.....',
+    '.####......',
+    '####.......',
+    '###........',
+    '###########',
+    '###########',
+    '##########.',
   ],
   '3': [
-    '.#######.',
-    '#########',
-    '##....###',
-    '......###',
-    '...#####.',
-    '...#####.',
-    '......###',
-    '.......##',
-    '##.....##',
-    '###...###',
-    '########.',
-    '.######..',
+    '.#########.',
+    '###########',
+    '###....####',
+    '.......####',
+    '.......####',
+    '...#######.',
+    '...#######.',
+    '.......####',
+    '........###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   '4': [
-    '.....###.',
-    '....####.',
-    '...#####.',
-    '..###.##.',
-    '.###..##.',
-    '###...##.',
-    '#########',
-    '#########',
-    '......##.',
-    '......##.',
-    '......##.',
-    '......##.',
+    '......####.',
+    '.....#####.',
+    '....######.',
+    '...###.###.',
+    '..###..###.',
+    '.###...###.',
+    '###########',
+    '###########',
+    '###########',
+    '.......###.',
+    '.......###.',
+    '.......###.',
+    '.......###.',
+    '.......##..',
   ],
   '5': [
-    '#########',
-    '#########',
-    '##.......',
-    '##.......',
-    '########.',
-    '#########',
-    '......###',
-    '.......##',
-    '##.....##',
-    '###...###',
-    '########.',
-    '.######..',
+    '###########',
+    '###########',
+    '###........',
+    '###........',
+    '#########..',
+    '##########.',
+    '........###',
+    '........###',
+    '........###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   '6': [
-    '..######.',
-    '.#######.',
-    '###......',
-    '##.......',
-    '########.',
-    '#########',
-    '##.....##',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '.#######.',
-    '..#####..',
+    '..########.',
+    '.#########.',
+    '####.......',
+    '###........',
+    '#########..',
+    '##########.',
+    '###....####',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '.#########.',
+    '..#######..',
   ],
   '7': [
-    '#########',
-    '#########',
-    '......###',
-    '.....###.',
-    '....###..',
-    '...###...',
-    '...###...',
-    '..###....',
-    '..###....',
-    '..###....',
-    '..###....',
-    '..###....',
+    '###########',
+    '###########',
+    '###########',
+    '.......####',
+    '......####.',
+    '.....####..',
+    '....####...',
+    '...####....',
+    '...###.....',
+    '..###......',
+    '..###......',
+    '..###......',
+    '..###......',
+    '..##.......',
   ],
   '8': [
-    '.#######.',
-    '#########',
-    '##.....##',
-    '###...###',
-    '.#######.',
-    '.#######.',
-    '###...###',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '#########',
-    '.#######.',
+    '.#########.',
+    '###########',
+    '###.....###',
+    '####...####',
+    '.#########.',
+    '.#########.',
+    '####...####',
+    '###.....###',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '###########',
+    '###########',
+    '.#########.',
   ],
   '9': [
-    '.#######.',
-    '#########',
-    '##.....##',
-    '##.....##',
-    '###...###',
-    '.########',
-    '......###',
-    '......###',
-    '##....###',
-    '###..###.',
-    '.######..',
-    '..####...',
+    '.#########.',
+    '###########',
+    '###.....###',
+    '###.....###',
+    '####...####',
+    '.##########',
+    '..#########',
+    '.......####',
+    '.......####',
+    '###....####',
+    '####..####.',
+    '.########..',
+    '..######...',
+    '...####....',
   ],
   '-': [
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.#######.',
-    '.#######.',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
+    '.#####.',
+    '#######',
+    '#######',
+    '.#####.',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
   ],
   ':': [
-    '.........',
-    '.........',
-    '...###...',
-    '...###...',
-    '...###...',
-    '.........',
-    '.........',
-    '...###...',
-    '...###...',
-    '...###...',
-    '.........',
-    '.........',
+    '.....',
+    '.....',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.....',
+    '.....',
+    '.....',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.....',
+    '.....',
+    '.....',
   ],
   '.': [
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '.........',
-    '...###...',
-    '...###...',
-    '...###...',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.....',
   ],
   '!': [
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '...###...',
-    '.........',
-    '...###...',
-    '...###...',
-    '...###...',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.....',
+    '.###.',
+    '.###.',
+    '.###.',
+    '.....',
   ],
   '/': [
-    '......##.',
-    '.....###.',
-    '.....##..',
-    '....###..',
-    '....##...',
-    '...###...',
-    '...##....',
-    '..###....',
-    '..##.....',
-    '.###.....',
-    '.##......',
-    '##.......',
+    '.......###.',
+    '......####.',
+    '......###..',
+    '.....####..',
+    '.....###...',
+    '....####...',
+    '....###....',
+    '...####....',
+    '...###.....',
+    '..####.....',
+    '..###......',
+    '.####......',
+    '.###.......',
+    '###........',
   ],
   ' ': [
+    '.....',
+    '.....',
     '.....',
     '.....',
     '.....',
@@ -1008,23 +1225,26 @@ const CHUNKY_GLYPHS_9X12: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-function measureChunkyTextWidth(text: string): number {
+function measureChunkyTextWidth(text: string, scale: number = 1): number {
   const upper = text.toUpperCase();
+  const s = Math.max(0.75, scale);
+  const gap = Math.max(1, Math.round(1 * s));
   let total = 0;
   for (let i = 0; i < upper.length; i++) {
     const ch = upper[i]!;
-    const g = CHUNKY_GLYPHS_9X12[ch];
-    const cw = g ? g[0]!.length : 6;
-    total += cw + (i + 1 < upper.length ? 2 : 0);
+    const g = CHUNKY_GLYPHS_11X14[ch];
+    const cw = Math.max(1, Math.round((g ? g[0]!.length : 7) * s));
+    total += cw + (i + 1 < upper.length ? gap : 0);
   }
   return total;
 }
 
 /**
- * Crisp chunky bold black-outlined jagged display text matching 01_title.png, 21_paused.png & 11_levelup.png:
- * - Unselected: stone-gray #9a9a9a with 2px crisp #000000 outline
- * - Hovered/Selected: bright #ffffff (or custom color) with 1px upward pop + crisp 2px #000000 outline
- * - Optional slimeDrips mode for radioactive green `LEVEL UP`!
+ * Crisp chunky bold black-outlined jagged hand-drawn display text matching
+ * 01_title.png, 21_paused.png, 11a_levelup.png & 23_victory.png:
+ * - Unselected: exact stone-gray #9c9c9c with rough lower shade & 2px crisp #000000 outline
+ * - Hovered/Selected: bright #ffffff (or custom color) with 1px upward pop + 2px #000000 outline
+ * - Optional scale (nearest-neighbor 1x rasterized — zero blur!), slimeDrips mode, and per-char tilt!
  */
 export function drawChunkyMenuText(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -1037,11 +1257,15 @@ export function drawChunkyMenuText(
     slimeDrips?: boolean;
     timeSec?: number;
     align?: 'center' | 'left' | 'right';
+    scale?: number;
+    tilt?: number;
   } = {},
 ): { x: number; y: number; w: number; h: number } {
   const upper = text.toUpperCase();
-  const totalW = measureChunkyTextWidth(upper);
-  const h = 12;
+  const s = Math.max(0.75, opts.scale ?? 1);
+  const gap = Math.max(1, Math.round(1 * s));
+  const totalW = measureChunkyTextWidth(upper, s);
+  const h = Math.round(14 * s);
   const align = opts.align ?? 'center';
   const startX =
     align === 'left'
@@ -1051,37 +1275,49 @@ export function drawChunkyMenuText(
         : Math.round(cx - totalW * 0.5);
   const popY = hovered ? -1 : 0;
   const baseY = Math.round(y) + popY;
-  const fillCol = color ?? (hovered ? '#ffffff' : '#9a9a9a');
+  const tilt = opts.tilt ?? 0;
+  const fillCol = color ?? (hovered ? '#ffffff' : '#9c9c9c');
   const shadeCol = opts.slimeDrips
-    ? '#288818'
+    ? '#2a8c16'
     : color
       ? color
       : hovered
-        ? '#dcdce2'
-        : '#7d7d84';
-  const hiCol = opts.slimeDrips ? '#a8ff60' : null;
+        ? '#e2e2ea'
+        : '#84848a';
+  const hiCol = opts.slimeDrips ? '#9eff64' : null;
 
   const paintCharMask = (
     gx0: number,
     gy0: number,
     glyph: readonly string[],
     col: string,
-    onlyRows?: { min: number; max: number },
+    onlySrcRows?: { min: number; max: number },
   ): void => {
     ctx.fillStyle = col;
-    const minR = onlyRows ? onlyRows.min : 0;
-    const maxR = onlyRows ? onlyRows.max : glyph.length - 1;
-    for (let r = minR; r <= maxR; r++) {
-      const row = glyph[r]!;
-      let c = 0;
-      while (c < row.length) {
-        if (row[c] === '#') {
-          let end = c + 1;
-          while (end < row.length && row[end] === '#') end++;
-          ctx.fillRect(gx0 + c, gy0 + r, end - c, 1);
-          c = end;
+    const srcH = glyph.length;
+    const srcW = glyph[0]!.length;
+    const dstH = Math.max(1, Math.round(srcH * s));
+    const dstW = Math.max(1, Math.round(srcW * s));
+    const minSR = onlySrcRows ? onlySrcRows.min : 0;
+    const maxSR = onlySrcRows ? onlySrcRows.max : srcH - 1;
+    for (let dr = 0; dr < dstH; dr++) {
+      const sr = Math.min(srcH - 1, Math.floor((dr * srcH) / dstH));
+      if (sr < minSR || sr > maxSR) continue;
+      const row = glyph[sr]!;
+      let dc = 0;
+      while (dc < dstW) {
+        const sc = Math.min(srcW - 1, Math.floor((dc * srcW) / dstW));
+        if (row[sc] === '#') {
+          let end = dc + 1;
+          while (end < dstW) {
+            const nextSc = Math.min(srcW - 1, Math.floor((end * srcW) / dstW));
+            if (row[nextSc] !== '#') break;
+            end++;
+          }
+          ctx.fillRect(gx0 + dc, gy0 + dr, end - dc, 1);
+          dc = end;
         } else {
-          c++;
+          dc++;
         }
       }
     }
@@ -1097,60 +1333,78 @@ export function drawChunkyMenuText(
     [-1, 0], [1, 0], [0, -1], [0, 1],
   ];
 
+  const charYOffset = (i: number): number => {
+    const wobbleY =
+      hovered && opts.timeSec !== undefined
+        ? Math.round(Math.sin(opts.timeSec * 14 + i * 1.3) * 0.6)
+        : i % 3 === 1
+          ? 1
+          : i % 5 === 3
+            ? -1
+            : 0;
+    const tiltY = tilt !== 0 ? Math.round((i - (upper.length - 1) * 0.5) * tilt) : 0;
+    return wobbleY + tiltY;
+  };
+
   let curX = startX;
   for (let i = 0; i < upper.length; i++) {
     const ch = upper[i]!;
-    const g = CHUNKY_GLYPHS_9X12[ch];
+    const g = CHUNKY_GLYPHS_11X14[ch];
+    const cw = Math.max(1, Math.round((g ? g[0]!.length : 7) * s));
     if (g && ch !== ' ') {
-      const wobbleY =
-        hovered && opts.timeSec !== undefined
-          ? Math.round(Math.sin(opts.timeSec * 14 + i * 1.3) * 0.6)
-          : (i % 3 === 1 ? 1 : 0) - 0;
-      const charY = baseY + wobbleY;
+      const charY = baseY + charYOffset(i);
       for (const [ox, oy] of outlineOffsets) {
         paintCharMask(curX + ox, charY + oy, g, '#000000');
       }
       if (opts.slimeDrips) {
-        const dripH = 3 + ((i * 5 + 2) % 4);
+        const dripH = Math.round((3 + ((i * 5 + 2) % 4)) * s);
         ctx.fillStyle = '#000000';
-        ctx.fillRect(curX + 1, charY + h - 1, 4, dripH + 2);
+        ctx.fillRect(curX + 1, charY + h - 1, Math.max(4, Math.round(4 * s)), dripH + 2);
         if (i % 2 === 0) {
-          ctx.fillRect(curX + g[0]!.length - 4, charY + h - 1, 3, Math.max(2, dripH - 1) + 2);
+          ctx.fillRect(
+            curX + cw - Math.max(4, Math.round(4 * s)),
+            charY + h - 1,
+            Math.max(3, Math.round(3 * s)),
+            Math.max(2, dripH - 1) + 2,
+          );
         }
       }
     }
-    curX += (g ? g[0]!.length : 6) + 2;
+    curX += cw + gap;
   }
 
-  // Pass 2: Bold interior fill + rough jagged edge shading & optional slime drips
+  // Pass 2: Bold interior fill + rough hand-drawn lower edge shading & optional slime drips
   curX = startX;
   for (let i = 0; i < upper.length; i++) {
     const ch = upper[i]!;
-    const g = CHUNKY_GLYPHS_9X12[ch];
+    const g = CHUNKY_GLYPHS_11X14[ch];
+    const cw = Math.max(1, Math.round((g ? g[0]!.length : 7) * s));
     if (g && ch !== ' ') {
-      const wobbleY =
-        hovered && opts.timeSec !== undefined
-          ? Math.round(Math.sin(opts.timeSec * 14 + i * 1.3) * 0.6)
-          : (i % 3 === 1 ? 1 : 0);
-      const charY = baseY + wobbleY;
+      const charY = baseY + charYOffset(i);
       paintCharMask(curX, charY, g, fillCol);
-      paintCharMask(curX, charY, g, shadeCol, { min: 9, max: 11 });
+      paintCharMask(curX, charY, g, shadeCol, { min: 11, max: 13 });
       if (hiCol) {
         paintCharMask(curX, charY, g, hiCol, { min: 0, max: 2 });
       }
       if (opts.slimeDrips) {
-        const dripH = 3 + ((i * 5 + 2) % 4);
+        const dripH = Math.round((3 + ((i * 5 + 2) % 4)) * s);
+        const dripW = Math.max(2, Math.round(2 * s));
         ctx.fillStyle = fillCol;
-        ctx.fillRect(curX + 2, charY + h - 1, 2, dripH);
+        ctx.fillRect(curX + 2, charY + h - 1, dripW, dripH);
         ctx.fillStyle = '#a8ff60';
-        ctx.fillRect(curX + 2, charY + h + dripH - 2, 1, 1);
+        ctx.fillRect(curX + 2, charY + h + dripH - 2, Math.max(1, dripW - 1), 1);
         if (i % 2 === 0) {
           ctx.fillStyle = shadeCol;
-          ctx.fillRect(curX + g[0]!.length - 3, charY + h - 1, 1, Math.max(2, dripH - 1));
+          ctx.fillRect(
+            curX + cw - Math.max(3, Math.round(3 * s)),
+            charY + h - 1,
+            Math.max(1, Math.round(1.5 * s)),
+            Math.max(2, dripH - 1),
+          );
         }
       }
     }
-    curX += (g ? g[0]!.length : 6) + 2;
+    curX += cw + gap;
   }
 
   return { x: startX - 4, y: baseY - 3, w: totalW + 8, h: h + 6 };
@@ -2420,12 +2674,20 @@ export class MenuSystem {
     y: number,
     label: string,
     onActivate: () => MenuAction | null,
-    opts: { focused?: boolean; align?: 'center' | 'left' | 'right'; color?: string } = {},
+    opts: {
+      focused?: boolean;
+      align?: 'center' | 'left' | 'right';
+      color?: string;
+      scale?: number;
+      tilt?: number;
+    } = {},
   ): void {
     const hovered = this.hoveredId === id || Boolean(opts.focused);
     const bounds = drawChunkyMenuText(ctx, label, cx, y, hovered, opts.color, {
       timeSec: this.renderTimeSec,
       align: opts.align ?? 'center',
+      scale: opts.scale,
+      tilt: opts.tilt,
     });
     this.regions.push({
       id,
@@ -2458,12 +2720,12 @@ export class MenuSystem {
     }
 
     this.fonts.draw(ctx, label, labelX, y + 1, 'fntM1', {
-      color: hovered ? '#ffffff' : '#96969e',
+      color: hovered ? '#ffffff' : '#969696',
       outline: true,
     });
 
     const valRes = this.fonts.draw(ctx, valueText, valueX, y + 1, 'fntM1', {
-      color: hovered ? '#ffffff' : '#96969e',
+      color: hovered ? '#ffffff' : '#969696',
       outline: true,
     });
 
@@ -2505,7 +2767,7 @@ export class MenuSystem {
     }
 
     this.fonts.draw(ctx, label, labelX, y + 1, 'fntM1', {
-      color: hovered ? '#ffffff' : '#96969e',
+      color: hovered ? '#ffffff' : '#969696',
       outline: true,
     });
 
@@ -2666,7 +2928,7 @@ export class MenuSystem {
       ctx,
       'title_play',
       cx,
-      62,
+      56,
       'PLAY',
       () => ({ type: 'open_screen', screen: 'campfire' }),
       { focused: this.focusedIndex === 0 },
@@ -2676,7 +2938,7 @@ export class MenuSystem {
       ctx,
       'title_options',
       cx,
-      91,
+      86,
       'OPTIONS',
       () => ({ type: 'open_screen', screen: 'options' }),
       { focused: this.focusedIndex === 1 },
@@ -2687,7 +2949,7 @@ export class MenuSystem {
         ctx,
         'title_loading_assets',
         cx,
-        120,
+        116,
         'LOADING...',
         () => null,
         { focused: this.focusedIndex === 2, color: '#ffe047' },
@@ -2697,7 +2959,7 @@ export class MenuSystem {
         ctx,
         'title_use_builtin',
         cx,
-        120,
+        116,
         'PACK: CUSTOM',
         () => ({ type: 'use_builtin_art' }),
         { focused: this.focusedIndex === 2 },
@@ -2707,7 +2969,7 @@ export class MenuSystem {
         ctx,
         'title_use_local',
         cx,
-        120,
+        116,
         'PACK: BUILT-IN',
         () => ({ type: 'use_local_art' }),
         { focused: this.focusedIndex === 2 },
@@ -2717,7 +2979,7 @@ export class MenuSystem {
         ctx,
         'title_use_local',
         cx,
-        120,
+        116,
         'PACK: BUILT-IN',
         () => ({ type: 'request_load_local' }),
         { focused: this.focusedIndex === 2 },
@@ -2728,7 +2990,7 @@ export class MenuSystem {
       ctx,
       'title_load_local',
       cx,
-      149,
+      146,
       'LOAD PACK',
       () => ({ type: 'request_load_local' }),
       { focused: this.focusedIndex === 3 },
@@ -3014,22 +3276,42 @@ export class MenuSystem {
       portSprDef?.frames.length ?? 24,
     );
     let drewPort = false;
-    if (portSprDef && portSprDef.width <= portW && portSprDef.height <= portH && this.sprites.hasSprite(portSpriteName)) {
-      drewPort = this.drawSpriteIntegerCentered(ctx, portSpriteName, portraitFrame, portX, portY, portW, portH);
-    } else if (portSprDef && this.sprites.hasSprite(portSpriteName)) {
-      // Crisp 1x integer clipped portrait (preserves zero fractional scaling on Campfire!)
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(portX + 1, portY + 1, portW - 2, portH - 2);
-      ctx.clip();
-      drewPort = this.sprites.draw(
-        ctx,
-        portSpriteName,
-        portX + Math.round(portW * 0.5),
-        portY + Math.round(portH * 0.5),
-        { frame: portraitFrame, scaleX: 1, scaleY: 1, pixelSnap: true },
-      );
-      ctx.restore();
+    if (portSprDef && portSprDef.frames.length > 0 && this.sprites.hasSprite(portSpriteName)) {
+      const fIdx = Math.max(0, Math.min(portSprDef.frames.length - 1, portraitFrame));
+      const rect = portSprDef.frames[fIdx];
+      if (rect && rect.srcW > 0 && rect.srcH > 0) {
+        if (rect.targetW <= portW && rect.targetH <= portH) {
+          // Built-In 96x80 portrait fits natively at exact 1x integer scale!
+          drewPort = this.drawSpriteIntegerCentered(ctx, portSpriteName, fIdx, portX, portY, portW, portH);
+        } else {
+          // Oversized Steam sprBigPortrait (e.g. 240x200 with originX=80, originY=243 below sprite bounds!):
+          // Anchor the sprite's actual trimmed bounding box (rect.targetX/Y/W/H) cleanly inside the 96x80 frame!
+          const innerX = portX + 1;
+          const innerY = portY + 1;
+          const innerW = portW - 2;
+          const innerH = portH - 2;
+          const fitScale = Math.min(innerW / rect.targetW, innerH / rect.targetH);
+          const drawW = rect.targetW * fitScale;
+          const drawH = rect.targetH * fitScale;
+          const left = Math.round(innerX + (innerW - drawW) * 0.5);
+          const top = Math.round(innerY + (innerH - drawH));
+          const localX = Math.round(rect.targetX - portSprDef.originX);
+          const localY = Math.round(rect.targetY - portSprDef.originY);
+          const drawX = Math.round(left - localX * fitScale);
+          const drawY = Math.round(top - localY * fitScale);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(innerX, innerY, innerW, innerH);
+          ctx.clip();
+          drewPort = this.sprites.draw(ctx, portSpriteName, drawX, drawY, {
+            frame: fIdx,
+            scaleX: fitScale,
+            scaleY: fitScale,
+            pixelSnap: true,
+          });
+          ctx.restore();
+        }
+      }
     }
     if (!drewPort) {
       this.drawSpriteIntegerCentered(ctx, idleSpr, Math.floor(timeSec * 4), portX + 8, portY + 8, portW - 16, portH - 16, {
@@ -3336,7 +3618,7 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // 3. LEVEL UP / MUTATION & ULTRA SELECT (MATCHES 11_levelup.png & part_2.mp4 00:11!)
+  // 3. LEVEL UP / MUTATION & ULTRA SELECT (EXACT MATCH TO 11a_levelup.png!)
   // --------------------------------------------------------------------------
 
   private renderMutationSelect(
@@ -3348,33 +3630,55 @@ export class MenuSystem {
     const rawList = simState?.pendingMutations ?? [];
     const list = rawList.length > 0 ? rawList : FALLBACK_MUTATION_DECK;
 
-    // 1. Opaque backdrop base (preserves UI selftest invariant) + animated swirling purple portal vortex!
+    // 1. Opaque backdrop base (preserves UI selftest invariant) + animated 5-arm swirling purple portal vortex!
     ctx.fillStyle = OPAQUE_MENU_BACKDROP;
     ctx.fillRect(0, 0, width, height);
     drawPortalVortex(ctx, width, height, timeSec, false);
 
-    // 2. Top-right owned mutations cleanly visible
-    this.drawTopRightHudIcons(ctx, simState, width);
+    // 2. Full-bright Top-Left Gameplay HUD (Rad canister, HP bar, weapons, 5 ammo icons — exact match to 11a_levelup.png!)
+    if (simState) {
+      renderTopLeftGameplayHud(ctx, {
+        sprites: this.sprites,
+        fonts: this.fonts,
+        data: this.data,
+        isSteamMode: this.isSteamMode,
+        state: simState,
+        inputMode: mctx.inputMode ?? 'kbm',
+        gamepadFamily: mctx.gamepadFamily ?? 'generic',
+      });
+    }
 
-    // 3. Huge jagged radioactive slime-green outlined `LEVEL UP` header near top!
-    drawChunkyMenuText(ctx, 'LEVEL UP', cx, 36, false, '#58e830', {
+    // 3. Sleek jagged Top-Right black ink-splat + owned mutation/ultra/crown icons (exact match to 11a_levelup.png!)
+    if (simState) {
+      const iconCount =
+        simState.player.mutations.length +
+        (simState.player.ultra ? 1 : 0) +
+        (simState.crown !== 'none' ? 1 : 0);
+      const topRightSpan = Math.max(82, iconCount * 18 + 38);
+      drawCornerEdgeInkSplat(ctx, width, 'right', 0, topRightSpan, 24, 31);
+      this.drawTopRightHudIcons(ctx, simState, width);
+    }
+
+    // 4. HUGE jagged radioactive slime-green outlined `LEVEL UP` header (scale 1.45, exact match to 11a_levelup.png!)
+    drawChunkyMenuText(ctx, 'LEVEL UP', cx, 50, false, '#5ce828', {
       slimeDrips: true,
       timeSec,
+      scale: 1.45,
     });
 
     if (list.length >= 5) {
-      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', cx, 55, 'fntSmall', {
+      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', cx, 78, 'fntSmall', {
         align: 'center',
         outline: true,
       });
     } else if (rawList.length === 1 && simState?.crown === 'destiny') {
-      this.fonts.draw(ctx, '@pCROWN OF DESTINY', cx, 55, 'fntSmall', {
+      this.fonts.draw(ctx, '@pCROWN OF DESTINY', cx, 78, 'fntSmall', {
         align: 'center',
         outline: true,
       });
     }
 
-    // 4. Player's mutant sprite floating/tumbling gently in the center of the vortex!
+    // 5. Player's mutant sprite floating/tumbling gently in the center of the vortex!
     const mutantId = simState?.player.mutant ?? save.selectedMutant;
     const mutantDef = this.data.getMutant(mutantId);
     const skin = simState?.player.skin ?? save.selectedSkins[mutantId] ?? 'a';
@@ -3383,7 +3687,7 @@ export class MenuSystem {
         ? mutantDef.sprites.bIdle
         : mutantDef.sprites.idle;
     const floatX = cx + Math.round(Math.sin(timeSec * 1.4) * 5);
-    const floatY = 98 + Math.round(Math.sin(timeSec * 2.4) * 5);
+    const floatY = 112 + Math.round(Math.sin(timeSec * 2.4) * 5);
     const floatRot = Math.sin(timeSec * 1.8) * 0.35;
     this.sprites.draw(ctx, floatSpr, floatX, floatY, {
       frame: Math.floor(timeSec * 6),
@@ -3393,16 +3697,16 @@ export class MenuSystem {
       pixelSnap: true,
     });
 
-    // 5. Jagged black ink-splat across the entire bottom edge!
-    drawEdgeInkSplats(ctx, width, height, 0, 38, 8);
-
-    // 6. Crisp square/vertical pixel-art Mutation cards rising along the bottom ink-splat!
-    const cardW = 28;
-    const cardH = 36;
+    // 6. FULL-BLEED 24x32 Mutation Cards + sleek Bottom-Left jagged ink-splat (exact match to 11a_levelup.png!)
+    const cardW = 24;
+    const cardH = 32;
     const gap = 8;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const baseCardY = height - 44;
+    const baseCardY = height - 34;
+
+    // Sleek jagged black ink-splat sweeping in cleanly from the left edge right up to the cards (matches 11a_levelup.png!)
+    drawCornerEdgeInkSplat(ctx, width, 'left', height - 30, Math.max(88, startX + 12), 30, 59);
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
     for (let i = 0; i < list.length; i++) {
@@ -3437,34 +3741,31 @@ export class MenuSystem {
       const x = startX + i * (cardW + gap);
       const y = isFocused ? baseCardY - 6 : baseCardY;
 
-      // Crisp black backing + bright selection rim when lifted
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(x - 1, y - 1, cardW + 2, cardH + 2);
-      ctx.fillStyle = isFocused ? '#1c2c1e' : '#101018';
-      ctx.fillRect(x, y, cardW, cardH);
+      // ZERO inner gray padding box! Crisp 1px #000000 frame (and crisp #ffffff highlight rim on lifted selected card)
+      if (isFocused) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x - 2, y - 2, cardW + 4, cardH + 4);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x - 1, y - 1, cardW + 2, cardH + 2);
+      } else {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x - 1, y - 1, cardW + 2, cardH + 2);
+      }
 
       const drewIcon = def
         ? this.drawSpriteIntegerCentered(
             ctx,
             def.sprite || 'sprSkillIcon',
             def.iconFrame,
-            x + 2,
-            y + 2,
-            24,
-            32,
+            x,
+            y,
+            cardW,
+            cardH,
           )
         : false;
       if (!drewIcon) {
         ctx.fillStyle = '#48e048';
-        ctx.fillRect(x + 4, y + 4, cardW - 8, cardH - 8);
-      }
-
-      if (isFocused) {
-        drawPixelBorder(ctx, x - 1, y - 1, cardW + 2, cardH + 2, '#ffffff', 1);
-        ctx.fillStyle = '#58f048';
-        ctx.fillRect(x, y + cardH, cardW, 2);
-      } else {
-        drawPixelBorder(ctx, x, y, cardW, cardH, '#262430', 1);
+        ctx.fillRect(x, y, cardW, cardH);
       }
 
       this.regions.push({
@@ -3477,7 +3778,7 @@ export class MenuSystem {
       });
     }
 
-    // Compact bottom-right timer (matching part_2.mp4 00:11!)
+    // Compact bottom-right timer (exact match to 11a_levelup.png!)
     if (simState) {
       this.fonts.draw(ctx, formatRunTimer(simState.stats.timeTicks), width - 4, height - 10, 'fntM1', {
         align: 'right',
@@ -3614,10 +3915,10 @@ export class MenuSystem {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Jagged pure-black ink-splat bottom bar with rising corner wings (exact match to 21_paused.png!)
-    drawEdgeInkSplats(ctx, width, height, 0, 38, 24);
+    // 2. Sleek ragged top HUD ink bar (matches 21_paused.png top bar!)
+    drawPauseCornerInkSplats(ctx, width, height, 'top');
 
-    // 3. HUGE Mutant Portrait rising cleanly on the LEFT side (x = 0..156, y = 38..208)!
+    // 3. HUGE Mutant Portrait rising cleanly on the LEFT side (unclipped revolver & arm, exact match to 21_paused.png!)
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
     const skin: 'a' | 'b' = simState?.player.skin ?? save.selectedSkins[mutant.id] ?? 'a';
     const portSpriteName =
@@ -3630,27 +3931,28 @@ export class MenuSystem {
       skin,
       portDef?.frames.length ?? 24,
     );
-    const portZoneW = isWide ? 156 : 108;
-    const portTopY = 38;
-    const portBotY = height - 32;
+    const portZoneW = isWide ? 186 : 122;
+    const portTopY = 34;
+    const portBotY = height - 22;
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, portTopY, portZoneW, portBotY - portTopY);
     ctx.clip();
     let drewBigPort = false;
     if (portDef && this.sprites.hasSprite(portSpriteName)) {
-      const fRect = portDef.frames[Math.min(portraitFrame, portDef.frames.length - 1)];
+      const fIdx = Math.max(0, Math.min(portDef.frames.length - 1, portraitFrame));
+      const fRect = portDef.frames[fIdx];
       const srcH = fRect?.targetH ?? portDef.height;
       const srcW = fRect?.targetW ?? portDef.width;
       const scale = srcH <= 92 ? (isWide ? 2 : 1) : 1;
       const drawW = srcW * scale;
       const drawH = srcH * scale;
-      const left = Math.round(Math.min(0, (portZoneW - drawW) * 0.28));
-      const top = Math.max(portTopY, portBotY - drawH + 10);
-      const drawX = left - ((fRect?.targetX ?? 0) - portDef.originX) * scale;
-      const drawY = top - ((fRect?.targetY ?? 0) - portDef.originY) * scale;
+      const left = Math.max(-10, Math.round(Math.min(0, (portZoneW - drawW) * 0.25)));
+      const top = Math.max(portTopY, Math.round(portBotY - drawH + 8));
+      const drawX = Math.round(left - Math.round((fRect?.targetX ?? 0) - portDef.originX) * scale);
+      const drawY = Math.round(top - Math.round((fRect?.targetY ?? 0) - portDef.originY) * scale);
       drewBigPort = this.sprites.draw(ctx, portSpriteName, drawX, drawY, {
-        frame: portraitFrame,
+        frame: fIdx,
         scaleX: scale,
         scaleY: scale,
         pixelSnap: true,
@@ -3661,29 +3963,31 @@ export class MenuSystem {
     }
     ctx.restore();
 
-    // Sweeping jagged black ink splat rising smoothly OVER the lower base of portrait & right corner!
-    drawInkSplatBanner(ctx, -6, height - 62, isWide ? 164 : 118, 34, 41);
-    drawInkSplatBanner(ctx, width - (isWide ? 128 : 108), height - 64, isWide ? 136 : 116, 38, 73);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, height - 34, width, 34);
+    // 4. Organic angled diagonal spiky corner ink-splats OVER portrait base (leaving CENTER arena visible!)
+    drawPauseCornerInkSplats(ctx, width, height, 'bottom');
 
-    // 4. Crisp top-right interactive mutation + ultra icons (bright on dark top-right ink backing)
+    // 5. Full-bright Top-Left Gameplay HUD + Top-Right interactive mutations on top of top ink bar!
     if (simState) {
+      renderTopLeftGameplayHud(ctx, {
+        sprites: this.sprites,
+        fonts: this.fonts,
+        data: this.data,
+        isSteamMode: this.isSteamMode,
+        state: simState,
+        inputMode: mctx.inputMode ?? 'kbm',
+        gamepadFamily: mctx.gamepadFamily ?? 'generic',
+      });
+
       const ownedTotal = simState.player.mutations.length + (simState.player.ultra ? 1 : 0);
       if (this.pauseInspectIdx >= ownedTotal) {
         this.pauseInspectIdx = ownedTotal > 0 ? ownedTotal - 1 : -1;
       }
-      if (ownedTotal > 0 || simState.crown !== 'none') {
-        const stripW = (ownedTotal + (simState.crown !== 'none' ? 1 : 0)) * 18 + 8;
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(width - stripW, 0, stripW, 24);
-      }
       this.drawTopRightHudIcons(ctx, simState, width, { interactivePause: true });
     }
 
-    // 5. Centered bold chunky white-outlined `PAUSED` + Area/Kills ink-splats + Road Map!
+    // 6. Larger bold chunky white-outlined `PAUSED` (1.25x!) + Area/Kills ink-splats + Road Map!
     const centerAnchorX = isWide ? cx + 16 : cx + 22;
-    drawChunkyMenuText(ctx, 'PAUSED', centerAnchorX, 62, false, '#ffffff');
+    drawChunkyMenuText(ctx, 'PAUSED', centerAnchorX, 56, false, '#ffffff', { scale: 1.25 });
 
     const areaText = simState
       ? simState.loop > 0
@@ -3759,47 +4063,47 @@ export class MenuSystem {
       }
     }
 
-    // 6. Bottom-left jagged chunky menu items: MENU & RETRY
+    // 7. Bottom-left bold jagged chunky menu items with authentic subtle diagonal tilt: MENU & RETRY
     this.drawChunkyButton(
       ctx,
       'pause_campfire',
-      10,
-      height - 56,
+      8,
+      height - 62,
       'MENU',
       () => ({ type: 'open_screen', screen: 'campfire' }),
-      { focused: this.focusedIndex === 3, align: 'left' },
+      { focused: this.focusedIndex === 3, align: 'left', tilt: -0.45 },
     );
     this.drawChunkyButton(
       ctx,
       'pause_restart',
-      18,
-      height - 34,
+      16,
+      height - 36,
       'RETRY',
       () => ({ type: 'restart' }),
-      { focused: this.focusedIndex === 2, align: 'left' },
+      { focused: this.focusedIndex === 2, align: 'left', tilt: -0.45 },
     );
 
-    // 7. Bottom-right jagged chunky menu items: SETTINGS & CONTINUE
+    // 8. Bottom-right bold jagged chunky menu items with authentic subtle diagonal tilt: SETTINGS & CONTINUE
     this.drawChunkyButton(
       ctx,
       'pause_options',
-      width - 10,
-      height - 56,
+      width - 8,
+      height - 64,
       'SETTINGS',
       () => ({ type: 'open_screen', screen: 'options' }),
-      { focused: this.focusedIndex === 1, align: 'right' },
+      { focused: this.focusedIndex === 1, align: 'right', tilt: 0.45 },
     );
     this.drawChunkyButton(
       ctx,
       'pause_resume',
-      width - 10,
-      height - 34,
+      width - 8,
+      height - 36,
       'CONTINUE',
       () => ({ type: 'resume' }),
-      { focused: this.focusedIndex === 0, align: 'right' },
+      { focused: this.focusedIndex === 0, align: 'right', tilt: 0.45 },
     );
 
-    // 8. Bottom black bar labels + run timer (matches 21_paused.png!)
+    // 9. Bottom thin black footer labels + run timer (matches 21_paused.png!)
     const pauseMode = mctx.inputMode ?? 'kbm';
     const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const leftFooter =
@@ -3921,7 +4225,7 @@ export class MenuSystem {
     });
 
     // 4. Bold chunky centered OPTIONS header
-    drawChunkyMenuText(ctx, 'OPTIONS', cx, 6, false, '#ffffff');
+    drawChunkyMenuText(ctx, 'OPTIONS', cx, 5, false, '#ffffff');
 
     if (inputMode === 'gamepad') {
       this.fonts.draw(ctx, `@d[${g.prevTab}/${g.nextTab}]`, width - 8, 8, 'fntSmall', {
@@ -3953,7 +4257,7 @@ export class MenuSystem {
       }
       this.fonts.draw(ctx, t.label, tx + Math.floor(tabW * 0.5), tabY + 2, 'fntSmall', {
         align: 'center',
-        color: active || hov ? '#ffffff' : '#8a8a96',
+        color: active || hov ? '#ffffff' : '#969696',
         outline: true,
       });
       this.regions.push({
@@ -4221,7 +4525,7 @@ export class MenuSystem {
         colLeft,
         y + 1,
         'fntM1',
-        { color: touchHovered ? '#ffffff' : '#96969e', outline: true },
+        { color: touchHovered ? '#ffffff' : '#969696', outline: true },
       );
       this.regions.push({
         id: 'opt_ctrl_touch',
@@ -4238,7 +4542,7 @@ export class MenuSystem {
 
       // Color-coded A B X Y Gamepad Style row (matches part_5.mp4 00:05!)
       this.fonts.draw(ctx, 'GAMEPAD STYLE', colLeft, y + 1, 'fntM1', {
-        color: '#96969e',
+        color: '#969696',
         outline: true,
       });
       this.drawGamepadABXYBadges(ctx, colVal, y);
@@ -4350,7 +4654,7 @@ export class MenuSystem {
         }
 
         this.fonts.draw(ctx, entry.label, colLeft, ry + 1, 'fntM1', {
-          color: hovered ? '#ffffff' : '#96969e',
+          color: hovered ? '#ffffff' : '#969696',
           outline: true,
         });
 
@@ -4367,7 +4671,7 @@ export class MenuSystem {
           });
         } else {
           this.fonts.draw(ctx, keyText, colVal, ry + 1, 'fntM1', {
-            color: '#b8b8c2',
+            color: '#969696',
             outline: true,
           });
         }
@@ -4389,7 +4693,7 @@ export class MenuSystem {
       }
       this.fonts.draw(ctx, 'RESET DEFAULTS', cx, resetY + 1, 'fntM1', {
         align: 'center',
-        color: resetHovered ? '#ff8a38' : '#96969e',
+        color: resetHovered ? '#ff8a38' : '#969696',
         outline: true,
       });
       this.regions.push({
@@ -4569,20 +4873,20 @@ export class MenuSystem {
       });
     }
 
-    // 6. Centered bottom spiky ink-splatter burst holding chunky `MENU` & `RETRY` (matches 03_portal_gen.png & part_6.mp4 00:20!)
+    // 6. Centered bottom spiky ink-splatter burst holding bold chunky `MENU` & `RETRY` (matches 03_portal_gen.png & 23_victory.png!)
     ctx.fillStyle = '#000000';
-    drawInkSplatBanner(ctx, cx - 34, height - 46, 68, 22, 109);
-    drawPixelLine(ctx, cx - 18, height - 42, cx - 28, height - 66, 2);
-    drawPixelLine(ctx, cx - 4, height - 44, cx - 8, height - 68, 2);
-    drawPixelLine(ctx, cx + 12, height - 44, cx + 22, height - 64, 2);
-    drawPixelLine(ctx, cx + 26, height - 42, cx + 44, height - 58, 2);
-    drawPixelLine(ctx, cx - 30, height - 38, cx - 48, height - 52, 2);
+    drawInkSplatBanner(ctx, cx - 38, height - 52, 76, 26, 109);
+    drawPixelLine(ctx, cx - 22, height - 48, cx - 34, height - 72, 2);
+    drawPixelLine(ctx, cx - 4, height - 50, cx - 10, height - 74, 2);
+    drawPixelLine(ctx, cx + 14, height - 50, cx + 26, height - 70, 2);
+    drawPixelLine(ctx, cx + 30, height - 46, cx + 52, height - 62, 2);
+    drawPixelLine(ctx, cx - 34, height - 44, cx - 54, height - 58, 2);
 
     this.drawChunkyButton(
       ctx,
       'end_campfire',
       cx,
-      height - 54,
+      height - 58,
       'MENU',
       () => ({ type: 'open_screen', screen: 'campfire' }),
       { focused: this.focusedIndex === 1 },
@@ -4591,7 +4895,7 @@ export class MenuSystem {
       ctx,
       'end_retry',
       cx,
-      height - 32,
+      height - 34,
       'RETRY',
       () => ({ type: 'restart' }),
       { focused: this.focusedIndex === 0 },
