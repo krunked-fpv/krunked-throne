@@ -20,6 +20,7 @@ export interface DrawTextOptions {
   color?: string;
   shadow?: boolean;
   outline?: boolean;
+  outlineWidth?: 1 | 2;
   shadowColor?: string;
   scale?: number;
   lineSpacing?: number;
@@ -418,7 +419,8 @@ export class BitmapFontRenderer {
     const baseColor = options.color ?? DEFAULT_NT_TEXT_COLOR;
     const shadow = options.shadow !== false;
     const outline = options.outline ?? false;
-    const shadowColor = options.shadowColor ?? '#08060c';
+    const outlineWidth = options.outlineWidth ?? 1;
+    const shadowColor = options.shadowColor ?? '#000000';
     const scale = options.scale ?? 1;
     const lineSpacing = options.lineSpacing ?? 1;
     const alpha = options.alpha ?? 1;
@@ -463,12 +465,30 @@ export class BitmapFontRenderer {
       const lineY = startY + li * stepY;
 
       if (outline) {
-        ctx.globalAlpha = computeShadowPassAlpha(effectiveAlpha, 5);
-        this.drawLinePass(ctx, font, tex, line.runs, lineX - 1, lineY, sx, sy, shadowColor);
-        this.drawLinePass(ctx, font, tex, line.runs, lineX + 1, lineY, sx, sy, shadowColor);
-        this.drawLinePass(ctx, font, tex, line.runs, lineX, lineY - 1, sx, sy, shadowColor);
-        this.drawLinePass(ctx, font, tex, line.runs, lineX, lineY + 1, sx, sy, shadowColor);
-        this.drawLinePass(ctx, font, tex, line.runs, lineX + 1, lineY + 1, sx, sy, shadowColor);
+        if (outlineWidth >= 2) {
+          ctx.globalAlpha = computeShadowPassAlpha(effectiveAlpha, 12);
+          for (const [ox, oy] of [
+            [-2, -1], [-2, 0], [-2, 1],
+            [2, -1], [2, 0], [2, 1],
+            [-1, -2], [0, -2], [1, -2],
+            [-1, 2], [0, 2], [1, 2],
+            [-1, -1], [1, -1], [-1, 1], [1, 1],
+            [-1, 0], [1, 0], [0, -1], [0, 1],
+          ] as const) {
+            this.drawLinePass(ctx, font, tex, line.runs, lineX + ox, lineY + oy, sx, sy, shadowColor);
+          }
+        } else {
+          // Authentic Nuclear Throne crisp 8-way 1px pure-black pixel outline
+          ctx.globalAlpha = computeShadowPassAlpha(effectiveAlpha, 8);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX - 1, lineY - 1, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX, lineY - 1, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX + 1, lineY - 1, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX - 1, lineY, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX + 1, lineY, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX - 1, lineY + 1, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX, lineY + 1, sx, sy, shadowColor);
+          this.drawLinePass(ctx, font, tex, line.runs, lineX + 1, lineY + 1, sx, sy, shadowColor);
+        }
         ctx.globalAlpha = effectiveAlpha;
       } else if (shadow) {
         ctx.globalAlpha = computeShadowPassAlpha(effectiveAlpha, 2);

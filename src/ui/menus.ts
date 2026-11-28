@@ -1,4 +1,5 @@
 import type {
+  AreaCode,
   AudioSettings,
   ControlSettings,
   CrownId,
@@ -31,7 +32,6 @@ import {
   DEFAULT_UI_DATA_PROVIDER,
   resolveWeaponLabel,
   resolveWeaponSpriteName,
-  selectLoadingTip,
   type UiDataProvider,
 } from './data-provider';
 import { computeUltraIconFrame } from './hud';
@@ -48,9 +48,27 @@ const MAIN_PATH_AREAS = [
   '7-1', '7-2', '7-3',
 ] as const;
 
+const FALLBACK_MUTATION_DECK: readonly MutationId[] = [
+  'rhino_skin',
+  'trigger_fingers',
+  'strong_spirit',
+  'laser_brain',
+];
+
+/**
+ * Formats simulation ticks (30 Hz) as Nuclear Throne's exact `MM:SS.cc` run timer (`00:26.35`).
+ */
+export function formatRunTimer(timeTicks: number): string {
+  const totalSec = Math.max(0, timeTicks) / 30;
+  const mins = Math.floor(totalSec / 60);
+  const secs = Math.floor(totalSec % 60);
+  const centis = Math.floor((totalSec - Math.floor(totalSec)) * 100);
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
+}
+
 /**
  * Maps any area code (main path, secrets, Crown Vault, Campfire 0-1, IDPD HQ)
- * onto the 0..14 Game Over progression road map.
+ * onto the 0..14 progression road map.
  * Crown Vault maps to mid-run index 7 (matching AREA_RANK alongside 4-1), never 1-1!
  */
 export function resolveRunProgressIndex(areaCode: string): number {
@@ -65,6 +83,1182 @@ export function resolveRunProgressIndex(areaCode: string): number {
   if (areaCode === '5-?') return 10;
   if (areaCode === 'hq-1') return 13;
   return 0;
+}
+
+// ============================================================================
+// SHARED NUCLEAR THRONE 1x PIXEL PRIMITIVES:
+// - drawPortalVortex (swirling purple spiral + crackling 1px white lightning + 28px letterbox)
+// - drawInkSplatBanner & drawEdgeInkSplats (hand-brushed ragged #000000 ink strokes)
+// - drawChunkyMenuText (iconic bold jagged black-outlined display lettering)
+// - drawRunRoadMap (authentic red/white horizontal run progression rail + mutant head + Throne)
+// ============================================================================
+
+type VortexSurface = HTMLCanvasElement | OffscreenCanvas;
+
+let cachedVortexCanvas: VortexSurface | null = null;
+let cachedVortexW = 0;
+let cachedVortexH = 0;
+let cachedVortexTick = -1;
+
+function createVortexCanvas(w: number, h: number): VortexSurface | null {
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    return c;
+  }
+  if (typeof OffscreenCanvas !== 'undefined') {
+    return new OffscreenCanvas(w, h);
+  }
+  return null;
+}
+
+function drawPixelLine(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  thickness = 1,
+): void {
+  let ix0 = Math.round(x0);
+  let iy0 = Math.round(y0);
+  const ix1 = Math.round(x1);
+  const iy1 = Math.round(y1);
+  const dx = Math.abs(ix1 - ix0);
+  const dy = Math.abs(iy1 - iy0);
+  const sx = ix0 < ix1 ? 1 : -1;
+  const sy = iy0 < iy1 ? 1 : -1;
+  let err = dx - dy;
+  for (let steps = 0; steps < 280; steps++) {
+    ctx.fillRect(ix0, iy0, thickness, thickness);
+    if (ix0 === ix1 && iy0 === iy1) break;
+    const e2 = err * 2;
+    if (e2 > -dy) {
+      err -= dy;
+      ix0 += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      iy0 += sy;
+    }
+  }
+}
+
+/**
+ * Authentic Nuclear Throne concentric stepped purple spiral vortex (#4a275f & #3a1f4a
+ * spiral arms twisting into an off-center dark core #14091c) with sporadic crackling
+ * jagged 1px white pixel lightning arcs + optional 28px pure #000000 letterbox bars!
+ */
+export function drawPortalVortex(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  w: number,
+  h: number,
+  timeSec: number,
+  letterbox: boolean = true,
+): void {
+  const iw = Math.max(1, Math.round(w));
+  const ih = Math.max(1, Math.round(h));
+  const frameBucket = Math.floor(Math.max(0, timeSec) * 24);
+  const coreX = iw * 0.43 + Math.sin(timeSec * 0.65) * 14;
+  const coreY = ih * 0.56 + Math.cos(timeSec * 0.52) * 9;
+
+  let drewRasterVortex = false;
+  if (!cachedVortexCanvas || cachedVortexW !== iw || cachedVortexH !== ih) {
+    cachedVortexCanvas = createVortexCanvas(iw, ih);
+    cachedVortexW = iw;
+    cachedVortexH = ih;
+    cachedVortexTick = -1;
+  }
+
+  if (cachedVortexCanvas) {
+    const vctx = cachedVortexCanvas.getContext('2d') as
+      | CanvasRenderingContext2D
+      | OffscreenCanvasRenderingContext2D
+      | null;
+    if (vctx && typeof vctx.createImageData === 'function' && typeof vctx.putImageData === 'function') {
+      if (cachedVortexTick !== frameBucket) {
+        cachedVortexTick = frameBucket;
+        const img = vctx.createImageData(iw, ih);
+        const data = img.data;
+        const phaseShift = timeSec * 2.6;
+
+        // Stepped tunnel shading bands from abyssal core to outer purple spiral (#512a68 / #391c4b)
+        const lightR = [0x14, 0x28, 0x38, 0x47, 0x51];
+        const lightG = [0x09, 0x12, 0x1c, 0x24, 0x2a];
+        const lightB = [0x1c, 0x36, 0x4c, 0x5d, 0x68];
+        const darkR = [0x12, 0x1c, 0x27, 0x31, 0x39];
+        const darkG = [0x08, 0x0c, 0x13, 0x18, 0x1c];
+        const darkB = [0x18, 0x28, 0x37, 0x42, 0x4b];
+
+        let off = 0;
+        for (let y = 0; y < ih; y++) {
+          const dy = (y - coreY) * 1.1;
+          const dy2 = dy * dy;
+          for (let x = 0; x < iw; x++) {
+            const dx = x - coreX;
+            const dist = Math.sqrt(dx * dx + dy2);
+            let tier: number;
+            if (dist < 14) tier = 0;
+            else if (dist < 30) tier = 1;
+            else if (dist < 54) tier = 2;
+            else if (dist < 90) tier = 3;
+            else tier = 4;
+
+            if (tier === 0) {
+              data[off] = 0x14;
+              data[off + 1] = 0x09;
+              data[off + 2] = 0x1c;
+              data[off + 3] = 0xff;
+            } else {
+              const ang = Math.atan2(dy, dx);
+              const twist = Math.log(dist + 14) * 3.55 + dist * 0.015;
+              const arm = Math.sin(ang * 2 + twist - phaseShift) >= 0;
+              if (arm) {
+                data[off] = lightR[tier]!;
+                data[off + 1] = lightG[tier]!;
+                data[off + 2] = lightB[tier]!;
+              } else {
+                data[off] = darkR[tier]!;
+                data[off + 1] = darkG[tier]!;
+                data[off + 2] = darkB[tier]!;
+              }
+              data[off + 3] = 0xff;
+            }
+            off += 4;
+          }
+        }
+        vctx.putImageData(img, 0, 0);
+      }
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(cachedVortexCanvas, 0, 0);
+      drewRasterVortex = true;
+    }
+  }
+
+  if (!drewRasterVortex) {
+    // Headless test fallback: crisp stepped purple concentric spiral bands via integer fillRect
+    ctx.fillStyle = '#4a275f';
+    ctx.fillRect(0, 0, iw, ih);
+    const rings: ReadonlyArray<[number, string]> = [
+      [130, '#3a1f4a'],
+      [98, '#4a275f'],
+      [72, '#341a44'],
+      [48, '#281336'],
+      [28, '#1d0d29'],
+      [15, '#14091c'],
+    ];
+    for (const [r, col] of rings) {
+      ctx.fillStyle = col;
+      for (let dy = -r; dy <= r; dy += 3) {
+        const span = Math.round(Math.sqrt(Math.max(0, r * r - dy * dy)));
+        ctx.fillRect(Math.round(coreX) - span, Math.round(coreY) + dy, span * 2, 3);
+      }
+    }
+  }
+
+  // Swirling tiny white/pale-lavender pixel debris specks orbiting into the vortex core
+  for (let i = 0; i < 8; i++) {
+    const cycle = (timeSec * (0.45 + (i % 3) * 0.14) + i * 0.21) % 1;
+    const rad = (1 - cycle) * (Math.max(iw, ih) * 0.54) + 10;
+    const theta = i * 1.65 - timeSec * 1.45 - cycle * 3.4;
+    const sx = Math.round(coreX + Math.cos(theta) * rad);
+    const sy = Math.round(coreY + Math.sin(theta) * rad * 0.85);
+    const sz = rad > 85 ? 2 : 1;
+    ctx.fillStyle = i % 2 === 0 ? '#dcd4ea' : '#9c8db5';
+    ctx.fillRect(sx, sy, sz, sz);
+  }
+
+  // Sporadic jagged 1px white pixel lightning arcs crackling across the purple tunnel!
+  const zapBucket = Math.floor(Math.max(0, timeSec) * 14);
+  for (let bolt = 0; bolt < 3; bolt++) {
+    const hVal = Math.imul((zapBucket + bolt * 37) ^ 0x5bf03635, 0x27d4eb2d) >>> 0;
+    if (bolt > 0 && (hVal & 7) > 3) continue; // Keep at least 1 crisp crackling bolt alive like NT!
+    const baseAngle = ((hVal >>> 4) % 360) * (Math.PI / 180);
+    const startR = 16 + ((hVal >>> 12) % 42);
+    const endR = startR + 34 + ((hVal >>> 18) % 66);
+    let px = coreX + Math.cos(baseAngle) * startR;
+    let py = coreY + Math.sin(baseAngle) * startR * 0.88;
+    const segs = 5;
+    for (let s = 1; s <= segs; s++) {
+      const frac = s / segs;
+      const segHash = Math.imul(hVal ^ (s * 2654435761), 0x45d9f3b) >>> 0;
+      const jitter = (((segHash & 31) - 15.5) / 15.5) * 14;
+      const rNow = startR + (endR - startR) * frac;
+      const perp = baseAngle + Math.PI * 0.5;
+      const nx = coreX + Math.cos(baseAngle) * rNow + Math.cos(perp) * jitter;
+      const ny = coreY + Math.sin(baseAngle) * rNow * 0.88 + Math.sin(perp) * jitter;
+      ctx.fillStyle = s === 2 || s === 3 ? '#ffffff' : '#e6dcf5';
+      drawPixelLine(ctx, px, py, nx, ny, s === 2 ? 2 : 1);
+      px = nx;
+      py = ny;
+    }
+  }
+
+  // Optional iconic 28px pure #000000 top & bottom letterbox bars (matches 01_title.png & 03_portal_gen.png!)
+  if (letterbox) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, iw, 28);
+    ctx.fillRect(0, ih - 28, iw, 28);
+  }
+}
+
+/**
+ * Authentic Nuclear Throne hand-drawn jagged pure-black #000000 ink-splat brush stroke
+ * (ragged horizontal strokes, sweeping top-right diagonal brush tails, and tiny ink flecks).
+ */
+export function drawInkSplatBanner(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  seed: number = 0,
+): void {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  const iw = Math.max(8, Math.round(w));
+  const ih = Math.max(6, Math.round(h));
+
+  const hash = (n: number): number => (Math.imul((seed + 17) ^ (n * 374761393), 668265263) >>> 0) % 100;
+
+  ctx.fillStyle = '#000000';
+  // Core ragged brushstroke body
+  ctx.fillRect(ix, iy, iw, ih);
+  ctx.fillRect(ix + 4, iy - 2, Math.max(4, iw - 10), 2);
+  ctx.fillRect(ix + 6, iy + ih, Math.max(4, iw - 14), 2);
+
+  // Tapered jagged horizontal brush rows extending organically past left & right bounds
+  const leftSpikes = [
+    [-(6 + (hash(1) % 9)), 0, 2],
+    [-(12 + (hash(2) % 11)), Math.floor(ih * 0.22), 3],
+    [-(8 + (hash(3) % 8)), Math.floor(ih * 0.52), 3],
+    [-(10 + (hash(4) % 9)), Math.max(0, ih - 3), 2],
+  ] as const;
+  for (const [dx, dy, sh] of leftSpikes) {
+    ctx.fillRect(ix + dx, iy + dy, -dx + 4, sh);
+  }
+
+  const rightSpikes = [
+    [10 + (hash(5) % 16), -2, 2],
+    [16 + (hash(6) % 18), Math.floor(ih * 0.14), 3],
+    [8 + (hash(7) % 12), Math.floor(ih * 0.48), 3],
+    [12 + (hash(8) % 14), Math.max(0, ih - 3), 3],
+  ] as const;
+  for (const [ext, dy, sh] of rightSpikes) {
+    ctx.fillRect(ix + iw - 3, iy + dy, ext + 3, sh);
+  }
+
+  // Iconic sweeping top-right ink whip-streak (seen in 03_portal_gen.png & 23_victory.png!)
+  const whipLen = Math.min(34, Math.max(16, Math.round(iw * 0.52)));
+  drawPixelLine(ctx, ix + Math.round(iw * 0.25), iy - 1, ix + Math.round(iw * 0.25) + whipLen, iy - 7, 2);
+  drawPixelLine(ctx, ix + Math.round(iw * 0.45), iy - 1, ix + Math.round(iw * 0.45) + Math.round(whipLen * 0.7), iy - 4, 1);
+
+  // Scattered 1-2px ink flecks
+  ctx.fillRect(ix - 15 - (hash(9) % 7), iy + Math.floor(ih * 0.3), 2, 1);
+  ctx.fillRect(ix + iw + 18 + (hash(10) % 9), iy + Math.floor(ih * 0.2), 2, 2);
+  ctx.fillRect(ix + iw + 14 + (hash(11) % 7), iy + ih - 1, 3, 1);
+}
+
+/**
+ * Full-width jagged pure-black ink-splat banners along top & bottom edges of Pause,
+ * Level Up, Options, Game Over, and Victory screens (matching 21_paused.png & 22_settings_video.png!).
+ */
+function drawEdgeInkSplats(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  w: number,
+  h: number,
+  topH: number,
+  botH: number,
+  cornerRise: number = 0,
+): void {
+  const iw = Math.round(w);
+  const ih = Math.round(h);
+  ctx.fillStyle = '#000000';
+
+  if (topH > 0) {
+    ctx.fillRect(0, 0, iw, topH);
+    for (let x = 0; x < iw; x += 6) {
+      const hVal = (Math.imul((x + 13) ^ 0x5a3c, 2654435761) >>> 0) % 100;
+      const tooth = (hVal % 5) + (x < 70 || x > iw - 70 ? 2 : 0);
+      ctx.fillRect(x, topH, 6, tooth);
+      if (hVal % 7 === 0) {
+        ctx.fillRect(x + 2, topH + tooth + 1, 2, 1);
+      }
+    }
+  }
+
+  if (botH > 0) {
+    ctx.fillRect(0, ih - botH, iw, botH);
+    for (let x = 0; x < iw; x += 5) {
+      const hVal = (Math.imul((x + 31) ^ 0x7c11, 2654435761) >>> 0) % 100;
+      const edgeProx = Math.min(x, iw - x);
+      const wingLift = cornerRise > 0 && edgeProx < 115
+        ? Math.round(((115 - edgeProx) / 115) * cornerRise)
+        : 0;
+      const tooth = (hVal % 6) + wingLift;
+      ctx.fillRect(x, ih - botH - tooth, 5, tooth);
+      if (hVal % 9 === 0) {
+        ctx.fillRect(x + 1, ih - botH - tooth - 2, 2, 1);
+      }
+    }
+    if (cornerRise > 0) {
+      // Sweeping diagonal brush strokes on lower-left and lower-right corners (21_paused.png!)
+      drawPixelLine(ctx, 0, ih - botH - cornerRise - 6, 86, ih - botH + 2, 3);
+      drawPixelLine(ctx, 18, ih - botH - cornerRise - 2, 108, ih - botH + 4, 2);
+      drawPixelLine(ctx, iw, ih - botH - cornerRise - 8, iw - 92, ih - botH + 2, 3);
+      drawPixelLine(ctx, iw - 14, ih - botH - cornerRise - 2, iw - 114, ih - botH + 4, 2);
+    }
+  }
+}
+
+// ============================================================================
+// BESPOKE 1x JAGGED NUCLEAR THRONE CHUNKY DISPLAY FONT (9x12 NATIVE 1x PIXELS)
+// Matches 01_title.png, 21_paused.png, 11_levelup.png, 22_settings_video.png!
+// ============================================================================
+
+const CHUNKY_GLYPHS_9X12: Readonly<Record<string, readonly string[]>> = {
+  A: [
+    '...###...',
+    '..#####..',
+    '.###.###.',
+    '.##...##.',
+    '###...###',
+    '#########',
+    '#########',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##....###',
+    '.#.....#.',
+  ],
+  B: [
+    '#######..',
+    '########.',
+    '##....###',
+    '##....##.',
+    '#######..',
+    '########.',
+    '##....###',
+    '##.....##',
+    '##.....##',
+    '##....###',
+    '########.',
+    '######...',
+  ],
+  C: [
+    '..######.',
+    '.########',
+    '###....##',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.....##',
+    '###...###',
+    '.#######.',
+    '..#####..',
+  ],
+  D: [
+    '######...',
+    '#######..',
+    '##...###.',
+    '##....###',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##....###',
+    '##...###.',
+    '#######..',
+    '#####....',
+  ],
+  E: [
+    '#########',
+    '########.',
+    '##.......',
+    '##.......',
+    '#######..',
+    '#######..',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '#########',
+    '########.',
+  ],
+  F: [
+    '#########',
+    '########.',
+    '##.......',
+    '##.......',
+    '#######..',
+    '#######..',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+  ],
+  G: [
+    '..######.',
+    '.########',
+    '###....##',
+    '##.......',
+    '##.......',
+    '##..#####',
+    '##..#####',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '.########',
+    '..#####.#',
+  ],
+  H: [
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '#########',
+    '#########',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+  ],
+  I: [
+    '.#######.',
+    '.#######.',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '.#######.',
+    '.#######.',
+  ],
+  J: [
+    '..#######',
+    '..#######',
+    '.....###.',
+    '.....###.',
+    '.....###.',
+    '.....###.',
+    '.....###.',
+    '##...###.',
+    '##...###.',
+    '###..###.',
+    '.######..',
+    '..####...',
+  ],
+  K: [
+    '##....##.',
+    '##...###.',
+    '##..###..',
+    '##.###...',
+    '#####....',
+    '#####....',
+    '##.###...',
+    '##..###..',
+    '##...###.',
+    '##....##.',
+    '##....###',
+    '##.....##',
+  ],
+  L: [
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '#########',
+    '########.',
+  ],
+  M: [
+    '##.....##',
+    '###...###',
+    '####.####',
+    '#########',
+    '##.###.##',
+    '##..#..##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+  ],
+  N: [
+    '##.....##',
+    '###....##',
+    '####...##',
+    '#####..##',
+    '##.###.##',
+    '##..#####',
+    '##...####',
+    '##....###',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+  ],
+  O: [
+    '..#####..',
+    '.#######.',
+    '###...###',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '.#######.',
+    '..#####..',
+  ],
+  P: [
+    '#######..',
+    '########.',
+    '##....###',
+    '##.....##',
+    '##....###',
+    '########.',
+    '#######..',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+    '##.......',
+  ],
+  Q: [
+    '..#####..',
+    '.#######.',
+    '###...###',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##..##.##',
+    '##...####',
+    '###...###',
+    '.######.#',
+    '..####.##',
+  ],
+  R: [
+    '#######..',
+    '########.',
+    '##....###',
+    '##.....##',
+    '##....###',
+    '########.',
+    '#######..',
+    '##..###..',
+    '##...###.',
+    '##....##.',
+    '##....###',
+    '##.....##',
+  ],
+  S: [
+    '.#######.',
+    '#########',
+    '##.....##',
+    '##.......',
+    '.######..',
+    '..######.',
+    '......###',
+    '.......##',
+    '##.....##',
+    '###...###',
+    '########.',
+    '.######..',
+  ],
+  T: [
+    '#########',
+    '#########',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+  ],
+  U: [
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '.#######.',
+    '..#####..',
+  ],
+  V: [
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '.##...##.',
+    '.##...##.',
+    '..##.##..',
+    '..#####..',
+    '...###...',
+    '...###...',
+    '....#....',
+  ],
+  W: [
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '##..#..##',
+    '##.###.##',
+    '#########',
+    '####.####',
+    '###...###',
+    '##.....##',
+    '##.....##',
+  ],
+  X: [
+    '##.....##',
+    '###...###',
+    '.##...##.',
+    '..##.##..',
+    '...###...',
+    '...###...',
+    '...###...',
+    '..##.##..',
+    '.##...##.',
+    '###...###',
+    '##.....##',
+    '##.....##',
+  ],
+  Y: [
+    '##.....##',
+    '###...###',
+    '.##...##.',
+    '..##.##..',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+  ],
+  Z: [
+    '#########',
+    '#########',
+    '......###',
+    '.....###.',
+    '....###..',
+    '...###...',
+    '..###....',
+    '.###.....',
+    '###......',
+    '##.......',
+    '#########',
+    '#########',
+  ],
+  '0': [
+    '..#####..',
+    '.#######.',
+    '##....###',
+    '##...####',
+    '##..##.##',
+    '##.##..##',
+    '####...##',
+    '###....##',
+    '##.....##',
+    '###...###',
+    '.#######.',
+    '..#####..',
+  ],
+  '1': [
+    '...###...',
+    '..####...',
+    '.#####...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '.#######.',
+    '.#######.',
+  ],
+  '2': [
+    '.#######.',
+    '#########',
+    '##....###',
+    '......###',
+    '.....###.',
+    '...####..',
+    '..####...',
+    '.###.....',
+    '###......',
+    '##.......',
+    '#########',
+    '#########',
+  ],
+  '3': [
+    '.#######.',
+    '#########',
+    '##....###',
+    '......###',
+    '...#####.',
+    '...#####.',
+    '......###',
+    '.......##',
+    '##.....##',
+    '###...###',
+    '########.',
+    '.######..',
+  ],
+  '4': [
+    '.....###.',
+    '....####.',
+    '...#####.',
+    '..###.##.',
+    '.###..##.',
+    '###...##.',
+    '#########',
+    '#########',
+    '......##.',
+    '......##.',
+    '......##.',
+    '......##.',
+  ],
+  '5': [
+    '#########',
+    '#########',
+    '##.......',
+    '##.......',
+    '########.',
+    '#########',
+    '......###',
+    '.......##',
+    '##.....##',
+    '###...###',
+    '########.',
+    '.######..',
+  ],
+  '6': [
+    '..######.',
+    '.#######.',
+    '###......',
+    '##.......',
+    '########.',
+    '#########',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '.#######.',
+    '..#####..',
+  ],
+  '7': [
+    '#########',
+    '#########',
+    '......###',
+    '.....###.',
+    '....###..',
+    '...###...',
+    '...###...',
+    '..###....',
+    '..###....',
+    '..###....',
+    '..###....',
+    '..###....',
+  ],
+  '8': [
+    '.#######.',
+    '#########',
+    '##.....##',
+    '###...###',
+    '.#######.',
+    '.#######.',
+    '###...###',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '#########',
+    '.#######.',
+  ],
+  '9': [
+    '.#######.',
+    '#########',
+    '##.....##',
+    '##.....##',
+    '###...###',
+    '.########',
+    '......###',
+    '......###',
+    '##....###',
+    '###..###.',
+    '.######..',
+    '..####...',
+  ],
+  '-': [
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.#######.',
+    '.#######.',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+  ],
+  ':': [
+    '.........',
+    '.........',
+    '...###...',
+    '...###...',
+    '...###...',
+    '.........',
+    '.........',
+    '...###...',
+    '...###...',
+    '...###...',
+    '.........',
+    '.........',
+  ],
+  '.': [
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '...###...',
+    '...###...',
+    '...###...',
+  ],
+  '!': [
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '...###...',
+    '.........',
+    '...###...',
+    '...###...',
+    '...###...',
+  ],
+  '/': [
+    '......##.',
+    '.....###.',
+    '.....##..',
+    '....###..',
+    '....##...',
+    '...###...',
+    '...##....',
+    '..###....',
+    '..##.....',
+    '.###.....',
+    '.##......',
+    '##.......',
+  ],
+  ' ': [
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+    '.....',
+  ],
+};
+
+function measureChunkyTextWidth(text: string): number {
+  const upper = text.toUpperCase();
+  let total = 0;
+  for (let i = 0; i < upper.length; i++) {
+    const ch = upper[i]!;
+    const g = CHUNKY_GLYPHS_9X12[ch];
+    const cw = g ? g[0]!.length : 6;
+    total += cw + (i + 1 < upper.length ? 2 : 0);
+  }
+  return total;
+}
+
+/**
+ * Crisp chunky bold black-outlined jagged display text matching 01_title.png, 21_paused.png & 11_levelup.png:
+ * - Unselected: stone-gray #9a9a9a with 2px crisp #000000 outline
+ * - Hovered/Selected: bright #ffffff (or custom color) with 1px upward pop + crisp 2px #000000 outline
+ * - Optional slimeDrips mode for radioactive green `LEVEL UP`!
+ */
+export function drawChunkyMenuText(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  y: number,
+  hovered: boolean,
+  color?: string,
+  opts: {
+    slimeDrips?: boolean;
+    timeSec?: number;
+    align?: 'center' | 'left' | 'right';
+  } = {},
+): { x: number; y: number; w: number; h: number } {
+  const upper = text.toUpperCase();
+  const totalW = measureChunkyTextWidth(upper);
+  const h = 12;
+  const align = opts.align ?? 'center';
+  const startX =
+    align === 'left'
+      ? Math.round(cx)
+      : align === 'right'
+        ? Math.round(cx - totalW)
+        : Math.round(cx - totalW * 0.5);
+  const popY = hovered ? -1 : 0;
+  const baseY = Math.round(y) + popY;
+  const fillCol = color ?? (hovered ? '#ffffff' : '#9a9a9a');
+  const shadeCol = opts.slimeDrips
+    ? '#288818'
+    : color
+      ? color
+      : hovered
+        ? '#dcdce2'
+        : '#7d7d84';
+  const hiCol = opts.slimeDrips ? '#a8ff60' : null;
+
+  const paintCharMask = (
+    gx0: number,
+    gy0: number,
+    glyph: readonly string[],
+    col: string,
+    onlyRows?: { min: number; max: number },
+  ): void => {
+    ctx.fillStyle = col;
+    const minR = onlyRows ? onlyRows.min : 0;
+    const maxR = onlyRows ? onlyRows.max : glyph.length - 1;
+    for (let r = minR; r <= maxR; r++) {
+      const row = glyph[r]!;
+      let c = 0;
+      while (c < row.length) {
+        if (row[c] === '#') {
+          let end = c + 1;
+          while (end < row.length && row[end] === '#') end++;
+          ctx.fillRect(gx0 + c, gy0 + r, end - c, 1);
+          c = end;
+        } else {
+          c++;
+        }
+      }
+    }
+  };
+
+  // Pass 1: Thick 2px pure #000000 outline for every character (plus slime drips outline!)
+  const outlineOffsets: ReadonlyArray<[number, number]> = [
+    [-2, -1], [-2, 0], [-2, 1],
+    [2, -1], [2, 0], [2, 1],
+    [-1, -2], [0, -2], [1, -2],
+    [-1, 2], [0, 2], [1, 2],
+    [-1, -1], [1, -1], [-1, 1], [1, 1],
+    [-1, 0], [1, 0], [0, -1], [0, 1],
+  ];
+
+  let curX = startX;
+  for (let i = 0; i < upper.length; i++) {
+    const ch = upper[i]!;
+    const g = CHUNKY_GLYPHS_9X12[ch];
+    if (g && ch !== ' ') {
+      const wobbleY =
+        hovered && opts.timeSec !== undefined
+          ? Math.round(Math.sin(opts.timeSec * 14 + i * 1.3) * 0.6)
+          : (i % 3 === 1 ? 1 : 0) - 0;
+      const charY = baseY + wobbleY;
+      for (const [ox, oy] of outlineOffsets) {
+        paintCharMask(curX + ox, charY + oy, g, '#000000');
+      }
+      if (opts.slimeDrips) {
+        const dripH = 3 + ((i * 5 + 2) % 4);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(curX + 1, charY + h - 1, 4, dripH + 2);
+        if (i % 2 === 0) {
+          ctx.fillRect(curX + g[0]!.length - 4, charY + h - 1, 3, Math.max(2, dripH - 1) + 2);
+        }
+      }
+    }
+    curX += (g ? g[0]!.length : 6) + 2;
+  }
+
+  // Pass 2: Bold interior fill + rough jagged edge shading & optional slime drips
+  curX = startX;
+  for (let i = 0; i < upper.length; i++) {
+    const ch = upper[i]!;
+    const g = CHUNKY_GLYPHS_9X12[ch];
+    if (g && ch !== ' ') {
+      const wobbleY =
+        hovered && opts.timeSec !== undefined
+          ? Math.round(Math.sin(opts.timeSec * 14 + i * 1.3) * 0.6)
+          : (i % 3 === 1 ? 1 : 0);
+      const charY = baseY + wobbleY;
+      paintCharMask(curX, charY, g, fillCol);
+      paintCharMask(curX, charY, g, shadeCol, { min: 9, max: 11 });
+      if (hiCol) {
+        paintCharMask(curX, charY, g, hiCol, { min: 0, max: 2 });
+      }
+      if (opts.slimeDrips) {
+        const dripH = 3 + ((i * 5 + 2) % 4);
+        ctx.fillStyle = fillCol;
+        ctx.fillRect(curX + 2, charY + h - 1, 2, dripH);
+        ctx.fillStyle = '#a8ff60';
+        ctx.fillRect(curX + 2, charY + h + dripH - 2, 1, 1);
+        if (i % 2 === 0) {
+          ctx.fillStyle = shadeCol;
+          ctx.fillRect(curX + g[0]!.length - 3, charY + h - 1, 1, Math.max(2, dripH - 1));
+        }
+      }
+    }
+    curX += (g ? g[0]!.length : 6) + 2;
+  }
+
+  return { x: startX - 4, y: baseY - 3, w: totalW + 8, h: h + 6 };
+}
+
+export interface RunRoadMapInput {
+  areaCode: string;
+  mutant: MutantId;
+  skin: 'a' | 'b';
+  loop: number;
+  victory?: boolean;
+}
+
+/**
+ * Authentic Nuclear Throne horizontal progression road map:
+ * red visited trail, white unvisited trail, crisp square checkpoint ticks,
+ * mutant sprite icon at current area (wearing crown on Victory), and tiny Throne icon at right!
+ */
+export function drawRunRoadMap(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  sprites: SpriteRenderer,
+  data: UiDataProvider,
+  info: RunRoadMapInput,
+  cx: number,
+  y: number,
+): void {
+  const mapW = 132;
+  const x0 = Math.round(cx - mapW * 0.5);
+  const x1 = x0 + mapW;
+  const iy = Math.round(y);
+  const nodeCount = MAIN_PATH_AREAS.length;
+  const progressIdx = info.victory ? nodeCount - 1 : resolveRunProgressIndex(info.areaCode);
+  const reachX = Math.round(x0 + (mapW * progressIdx) / Math.max(1, nodeCount - 1));
+
+  // Crisp black outline backing behind rail
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x0 - 1, iy - 1, mapW + 2, 3);
+
+  // White unvisited rail
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x0, iy, mapW, 1);
+
+  // Red visited trail from 1-1 up to current area (exact match to 21_paused.png & 23_victory.png!)
+  if (reachX > x0) {
+    ctx.fillStyle = '#d82820';
+    ctx.fillRect(x0, iy, reachX - x0, 1);
+    // Secret area/loop subtle red detour drop line (matches 21_paused.png red angled detour!)
+    if (info.areaCode.includes('?') || info.areaCode === 'vault' || info.loop > 0) {
+      const dipX = Math.max(x0 + 8, Math.min(reachX - 6, x0 + Math.round(mapW * 0.25)));
+      drawPixelLine(ctx, x0, iy, x0, iy + 8, 1);
+      drawPixelLine(ctx, x0, iy + 8, dipX, iy, 1);
+    }
+  }
+
+  // Checkpoint ticks along the road
+  for (let n = 0; n < nodeCount - 1; n++) {
+    const nx = Math.round(x0 + (mapW * n) / Math.max(1, nodeCount - 1));
+    const visited = n <= progressIdx;
+    const isMajor = n === 0 || n === 3 || n === 7 || n === 11 || MAIN_PATH_AREAS[n]!.endsWith('-3');
+    const sz = isMajor ? 3 : 2;
+    const half = Math.floor(sz / 2);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(nx - half - 1, iy - half - 1, sz + 2, sz + 2);
+    ctx.fillStyle = visited ? '#d82820' : '#ffffff';
+    ctx.fillRect(nx - half, iy - half, sz, sz);
+  }
+
+  // Tiny Throne icon at far right (x1, iy)
+  const throneDrawn = sprites.drawInBox(ctx, 'sprGameOverThrone', 0, x1 - 4, iy - 5, 9, 9, { maxScale: 1 });
+  if (!throneDrawn) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x1 - 4, iy - 5, 9, 9);
+    ctx.fillStyle = '#e8e8ee';
+    ctx.fillRect(x1 - 3, iy - 4, 7, 7);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x1 - 2, iy - 4, 1, 2);
+    ctx.fillRect(x1 + 1, iy - 4, 1, 2);
+  }
+
+  // Mutant head/character sprite sitting right on (reachX, iy)
+  const mDef = data.getMutant(info.mutant);
+  const sprName =
+    info.skin === 'b' && mDef.sprites.bIdle && sprites.hasSprite(mDef.sprites.bIdle)
+      ? mDef.sprites.bIdle
+      : mDef.sprites.idle;
+
+  // Crisp circular-stepped dark ink badge behind mutant head so it pops cleanly
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(reachX - 7, iy - 6, 14, 12);
+  ctx.fillRect(reachX - 6, iy - 7, 12, 14);
+  const drewMut = sprites.drawInBox(ctx, sprName, 0, reachX - 8, iy - 8, 16, 16, { maxScale: 1 });
+  if (!drewMut) {
+    ctx.fillStyle = '#f0c078';
+    ctx.fillRect(reachX - 5, iy - 5, 10, 10);
+  }
+
+  // Tiny white/gold Victory Crown perched atop mutant head (matches 23_victory.png!)
+  if (info.victory) {
+    const cx0 = reachX - 4;
+    const cy0 = iy - 12;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(cx0 - 1, cy0, 10, 6);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(cx0, cy0 + 2, 8, 3);
+    ctx.fillRect(cx0, cy0, 2, 2);
+    ctx.fillRect(cx0 + 3, cy0, 2, 2);
+    ctx.fillRect(cx0 + 6, cy0, 2, 2);
+  }
 }
 
 export interface HitRegion {
@@ -193,7 +1387,7 @@ function drawPixelBorder(
 }
 
 /**
- * Authentic Nuclear Throne hand-brushed jagged ink-splat panel (100% crisp integer fillRect, ZERO sci-fi screws!).
+ * Authentic Nuclear Throne dark hand-brushed jagged ink-splat backing plate (zero yellow wireframes!).
  */
 function drawWastelandPlate(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -206,8 +1400,6 @@ function drawWastelandPlate(
     border?: string;
     borderThickness?: number;
     topAccent?: string;
-    rivets?: boolean;
-    rivetColor?: string;
   } = {},
 ): void {
   const ix = Math.round(x);
@@ -216,32 +1408,28 @@ function drawWastelandPlate(
   const ih = Math.round(h);
   const bt = opts.borderThickness ?? 1;
 
-  // Ragged Nuclear Throne outer ink brush-splat silhouette tails behind the panel!
-  ctx.fillStyle = '#07050c';
-  ctx.fillRect(ix - 2, iy + 4, iw + 4, Math.max(4, ih - 8));
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(ix - 2, iy + 3, iw + 4, Math.max(4, ih - 6));
   ctx.fillRect(ix + 5, iy - 2, Math.max(4, iw - 10), ih + 4);
-  if (iw >= 50 && ih >= 24) {
-    ctx.fillRect(ix - 5, iy + Math.round(ih * 0.20), 6, 3);
-    ctx.fillRect(ix + iw - 1, iy + Math.round(ih * 0.16), 7, 3);
-    ctx.fillRect(ix - 4, iy + Math.round(ih * 0.72), 5, 2);
+  if (iw >= 50 && ih >= 20) {
+    ctx.fillRect(ix - 6, iy + Math.round(ih * 0.20), 7, 3);
+    ctx.fillRect(ix + iw - 1, iy + Math.round(ih * 0.16), 8, 3);
+    ctx.fillRect(ix - 4, iy + Math.round(ih * 0.74), 5, 2);
     ctx.fillRect(ix + iw - 1, iy + Math.round(ih * 0.78), 6, 2);
-    // Tiny ink splatter flecks
-    ctx.fillRect(ix - 8, iy + Math.round(ih * 0.21), 2, 1);
-    ctx.fillRect(ix + iw + 7, iy + Math.round(ih * 0.17), 2, 2);
+    ctx.fillRect(ix - 9, iy + Math.round(ih * 0.21), 2, 1);
+    ctx.fillRect(ix + iw + 8, iy + Math.round(ih * 0.17), 2, 2);
   }
 
-  // Deep charcoal-ink core fill
-  ctx.fillStyle = opts.fill ?? 'rgba(11, 8, 16, 0.94)';
+  ctx.fillStyle = opts.fill ?? 'rgba(8, 6, 12, 0.90)';
   ctx.fillRect(ix, iy, iw, ih);
 
-  // Stark high-contrast top accent slash (optional)
   if (opts.topAccent) {
     ctx.fillStyle = opts.topAccent;
-    ctx.fillRect(ix + bt, iy + bt, iw - bt * 2, 2);
+    ctx.fillRect(ix + bt, iy + bt, iw - bt * 2, 1);
   }
-  drawPixelBorder(ctx, ix, iy, iw, ih, opts.border ?? '#4d455c', bt);
-  void opts.rivets;
-  void opts.rivetColor;
+  if (opts.border) {
+    drawPixelBorder(ctx, ix, iy, iw, ih, opts.border, bt);
+  }
 }
 
 /**
@@ -297,7 +1485,7 @@ export function computePortraitFrame(
 
 /**
  * Title logo intro frame: reveals frames 0..6 then clamps permanently on frame 7
- * (the complete title logo) so it never loops back to partial letters.
+ * (preserved for backwards-compatible exports).
  */
 export function computeTitleLogoFrame(timeSec: number, frameCount: number = 8): number {
   const maxFrame = Math.max(0, Math.min(7, frameCount - 1));
@@ -313,13 +1501,7 @@ export function resolveCorpseFrame(frameCount: number): number {
 }
 
 /**
- * Resolves a visible, non-blank, non-white-flash frame index for Game Over killer/corpse portraits:
- * - Explosion sprites (`sprExplosion`, `sprSmallExplosion`, `sprGreenExplosion`, `sprPlasmaImpact`):
- *   skips solid-white flash frame 0 and selects fiery mid-frame `3` (or closest non-blank mid-frame).
- * - Death/corpse sprites (`sprMutant*Dead`, `spr*Dead`):
- *   scans backwards from last frame skipping `srcW <= 2 || srcH <= 2` dissolve frames
- *   (fixes Horror `sprMutant11Dead` frame 5/6 & Y.V. `sprMutant6Dead` frame 18 empty black box!).
- * - All other sprites: picks first frame with `srcW > 2 && srcH > 2`.
+ * Resolves a visible, non-blank, non-white-flash frame index for Game Over killer/corpse portraits.
  */
 export function resolveDisplaySpriteFrame(
   sprite: SpriteDef | undefined,
@@ -368,8 +1550,7 @@ export interface CampfireDetailsLayout {
 
 /**
  * Pure dynamic Y layout calculator for Campfire mutant details (PASSIVE, ACTIVE, TB, BEST).
- * Guarantees zero pixel overlap across all 12 mutants (including Rogue, Horror, Melting, Y.V., Robot)
- * in both Steam Pack and Built-In Art bitmap fonts.
+ * Guarantees zero pixel overlap across all 12 mutants in both Steam Pack and Built-In Art bitmap fonts.
  */
 export function computeCampfireDetailsLayout(
   fonts: BitmapFontRenderer,
@@ -439,9 +1620,9 @@ export function formatTargetFpsLabel(targetFps: TargetFps): string {
 }
 
 /**
- * Complete Interactive Canvas UI Screen Controller with hit-tested clickable regions,
- * hover feedback, slider dragging, and keyboard/gamepad navigation across all screens:
- * Title, Campfire Mutant Select, Mutation/Ultra Select, Pause, Options, Game Over, Victory.
+ * Complete Interactive Canvas UI Screen Controller matching Nuclear Throne 1:1 visual parity:
+ * Title (purple portal vortex), Campfire, Level Up / Mutation Select, Ultra Select,
+ * Pause (huge portrait + ink splats + road map), Borderless Settings/Options, Game Over, Victory.
  */
 export class MenuSystem {
   private bundle: AssetBundle;
@@ -452,10 +1633,9 @@ export class MenuSystem {
   private regions: HitRegion[] = [];
   private hoveredId: string | null = null;
   private focusedIndex = 0;
-  private titleSubCol = 0;
   private campfireRow: 'roster' | 'actions' = 'roster';
   private campfireActionIndex = 3; // 0=skin, 1=crown, 2=gold, 3=go, 4=back
-  private pauseInspectIdx = -1; // -1 = mutant summary, 0..muts-1 = mutation, muts = ultra
+  private pauseInspectIdx = -1; // -1 = none, 0..muts-1 = mutation, muts = ultra
   private optionsTab: OptionsTab = 'general';
   private activeDragRegionId: string | null = null;
   private lastScreen: GameScreen | null = null;
@@ -512,8 +1692,7 @@ export class MenuSystem {
   }
 
   /**
-   * Draws a sprite at crisp integer scale (1x or optional integer scale) centered inside a box
-   * whenever it fits, avoiding non-integer mixels.
+   * Draws a sprite at crisp integer scale (1x or optional 2x) centered inside a box.
    */
   private drawSpriteIntegerCentered(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -569,7 +1748,6 @@ export class MenuSystem {
     if (this.lastScreen !== ctx.screen) {
       this.lastScreen = ctx.screen;
       this.focusedIndex = 0;
-      this.titleSubCol = 0;
       this.campfireRow = 'roster';
       this.campfireActionIndex = 3;
       this.pauseInspectIdx = -1;
@@ -577,7 +1755,6 @@ export class MenuSystem {
       this.hoveredId = null;
     }
 
-    // Complete pending key rebind immediately if a key was captured
     if (ctx.rebindingField && input.capturedKeyCode) {
       actions.push({
         type: 'rebind_key',
@@ -588,14 +1765,12 @@ export class MenuSystem {
       return actions;
     }
 
-    // Cancel pending key rebind cleanly on Back/B/Escape without leaving Options
     if (ctx.rebindingField && input.back) {
       actions.push({ type: 'cancel_rebind' });
       actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
       return actions;
     }
 
-    // Clear pointer hover when user navigates via keyboard/gamepad so focus never fights parked cursor
     const hadDirectionalNav =
       input.navUp ||
       input.navDown ||
@@ -607,7 +1782,6 @@ export class MenuSystem {
       this.hoveredId = null;
     }
 
-    // Pointer hover detection
     const px = input.pointer.logicalX;
     const py = input.pointer.logicalY;
     const pointerShouldHitTest =
@@ -641,7 +1815,6 @@ export class MenuSystem {
       }
     }
 
-    // Slider dragging (works smoothly for both mouse and touch)
     if (!input.pointer.down) {
       this.activeDragRegionId = null;
     }
@@ -666,7 +1839,6 @@ export class MenuSystem {
       }
     }
 
-    // Screen-specific keyboard & gamepad navigation
     this.handleNavigation(input, ctx, actions);
 
     return actions;
@@ -686,18 +1858,12 @@ export class MenuSystem {
 
     switch (ctx.screen) {
       case 'title': {
-        const hasSplitArtRow =
-          !ctx.assetLoading &&
-          (this.bundle.sourceMode === 'steam' || Boolean(ctx.hasCachedLocal || ctx.hasServerSteam));
-
+        const rowCount = 4; // 0=PLAY, 1=OPTIONS, 2=PACK TOGGLE, 3=LOAD PACK
         if (input.navUp) {
-          this.focusedIndex = (this.focusedIndex - 1 + 3) % 3;
+          this.focusedIndex = (this.focusedIndex - 1 + rowCount) % rowCount;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (input.navDown) {
-          this.focusedIndex = (this.focusedIndex + 1) % 3;
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
-        } else if (this.focusedIndex === 2 && hasSplitArtRow && (input.navLeft || input.navRight)) {
-          this.titleSubCol = this.titleSubCol === 0 ? 1 : 0;
+          this.focusedIndex = (this.focusedIndex + 1) % rowCount;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         }
 
@@ -706,12 +1872,14 @@ export class MenuSystem {
             actions.push({ type: 'open_screen', screen: 'campfire' });
           } else if (this.focusedIndex === 1) {
             actions.push({ type: 'open_screen', screen: 'options' });
-          } else if (hasSplitArtRow && this.titleSubCol === 1) {
-            actions.push({ type: 'request_load_local' });
-          } else if (this.bundle.sourceMode === 'steam') {
-            actions.push({ type: 'use_builtin_art' });
-          } else if (ctx.hasCachedLocal || ctx.hasServerSteam) {
-            actions.push({ type: 'use_local_art' });
+          } else if (this.focusedIndex === 2) {
+            if (this.bundle.sourceMode === 'steam') {
+              actions.push({ type: 'use_builtin_art' });
+            } else if (ctx.hasCachedLocal || ctx.hasServerSteam) {
+              actions.push({ type: 'use_local_art' });
+            } else {
+              actions.push({ type: 'request_load_local' });
+            }
           } else {
             actions.push({ type: 'request_load_local' });
           }
@@ -725,7 +1893,6 @@ export class MenuSystem {
         const selectedId = ctx.save.selectedMutant;
         const hasGold = Boolean(ctx.save.mutants[selectedId]?.goldenWeapon) || selectedId === 'yv';
 
-        // Instant shoulder/face shortcuts — do NOT double-emit sndClick alongside sndMenu* SFX!
         if (input.prevTab) {
           actions.push({ type: 'toggle_bskin', mutant: selectedId });
         }
@@ -736,7 +1903,6 @@ export class MenuSystem {
           actions.push({ type: 'toggle_golden', enabled: !ctx.save.useGoldenWeapon });
         }
 
-        // Up/Down switches between 12-Mutant Roster and Loadout Action Bar
         if (input.navUp && this.campfireRow === 'roster') {
           this.campfireRow = 'actions';
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
@@ -744,7 +1910,6 @@ export class MenuSystem {
           this.campfireRow = 'roster';
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (this.campfireRow === 'roster') {
-          // Do NOT double-emit sndHover alongside select_mutant (which plays sndMutant*Slct!)
           if (input.navLeft) {
             const next = mutants[(curIdx - 1 + mutants.length) % mutants.length]!;
             actions.push({ type: 'select_mutant', mutant: next.id });
@@ -811,8 +1976,8 @@ export class MenuSystem {
       }
 
       case 'mutation_select': {
-        const list = ctx.simState?.pendingMutations ?? [];
-        if (list.length === 0) break;
+        const rawList = ctx.simState?.pendingMutations ?? [];
+        const list = rawList.length > 0 ? rawList : FALLBACK_MUTATION_DECK;
         if (input.selectIndex !== undefined && input.selectIndex < list.length) {
           actions.push({
             type: 'pick_mutation',
@@ -871,7 +2036,6 @@ export class MenuSystem {
           this.focusedIndex = (this.focusedIndex + 1) % 4;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if ((input.navLeft || input.navRight) && ownedCount > 0) {
-          // Keyboard/gamepad inspection across owned mutations + Ultra!
           if (this.pauseInspectIdx < 0) {
             this.pauseInspectIdx = input.navRight ? 0 : ownedCount - 1;
           } else {
@@ -941,7 +2105,6 @@ export class MenuSystem {
       return;
     }
 
-    // LB / RB cycles between VIDEO/AUDIO <-> CONTROLS <-> KEYBINDS
     if (input.prevTab || input.nextTab) {
       const curTabIdx = OPTIONS_TABS.indexOf(this.optionsTab);
       const delta = input.nextTab ? 1 : -1;
@@ -969,12 +2132,29 @@ export class MenuSystem {
 
       if (input.navLeft || input.navRight) {
         const dir = input.navRight ? 1 : -1;
-        if (this.focusedIndex === 0 || this.focusedIndex === 1) {
-          this.focusedIndex = this.focusedIndex === 0 ? 1 : 0;
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
-        } else if (this.focusedIndex >= 2 && this.focusedIndex <= 4) {
-          this.focusedIndex = 2 + ((this.focusedIndex - 2 + dir + 3) % 3);
-          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        if (this.focusedIndex === 0) {
+          actions.push({ type: 'update_render', partial: { widescreen: !save.render.widescreen } });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (this.focusedIndex === 1) {
+          const curFps: TargetFps = save.render.targetFps ?? (save.render.classic30Fps ? 30 : 120);
+          const nextFps = cycleTargetFps(curFps);
+          actions.push({
+            type: 'update_render',
+            partial: { targetFps: nextFps, classic30Fps: nextFps === 30 },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (this.focusedIndex === 2) {
+          actions.push({
+            type: 'update_render',
+            partial: { crosshairStyle: (save.render.crosshairStyle + dir + 9) % 9 },
+          });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (this.focusedIndex === 3) {
+          actions.push({ type: 'update_render', partial: { showFps: !save.render.showFps } });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
+        } else if (this.focusedIndex === 4) {
+          actions.push({ type: 'update_audio', partial: { muted: !save.audio.muted } });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (this.focusedIndex === 5) {
           actions.push({
             type: 'update_render',
@@ -1064,12 +2244,13 @@ export class MenuSystem {
           });
           actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         } else if (this.focusedIndex === 2) {
-          const nextDz = Math.round(
-            Math.max(
-              MIN_GAMEPAD_DEADZONE,
-              Math.min(MAX_GAMEPAD_DEADZONE, controls.gamepadDeadzone + dir * 0.02),
-            ) * 100,
-          ) / 100;
+          const nextDz =
+            Math.round(
+              Math.max(
+                MIN_GAMEPAD_DEADZONE,
+                Math.min(MAX_GAMEPAD_DEADZONE, controls.gamepadDeadzone + dir * 0.02),
+              ) * 100,
+            ) / 100;
           actions.push({ type: 'update_controls', partial: { gamepadDeadzone: nextDz } });
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (this.focusedIndex === 3) {
@@ -1108,28 +2289,13 @@ export class MenuSystem {
       return;
     }
 
-    // Keybinds tab (0..7 in 2-col grid, 8 = Reset Defaults)
+    // Keybinds tab (0..7 rows + 8 = Reset Defaults)
     const count = KEYBINDS_OPTION_COUNT;
     if (input.navUp) {
-      if (this.focusedIndex === 8) {
-        this.focusedIndex = 6;
-      } else if (this.focusedIndex >= 2) {
-        this.focusedIndex -= 2;
-      } else {
-        this.focusedIndex = 8;
-      }
+      this.focusedIndex = (this.focusedIndex - 1 + count) % count;
       actions.push({ type: 'ui_sfx', sound: 'sndHover' });
     } else if (input.navDown) {
-      if (this.focusedIndex === 8) {
-        this.focusedIndex = 0;
-      } else if (this.focusedIndex >= 6) {
-        this.focusedIndex = 8;
-      } else {
-        this.focusedIndex += 2;
-      }
-      actions.push({ type: 'ui_sfx', sound: 'sndHover' });
-    } else if ((input.navLeft || input.navRight) && this.focusedIndex < 8) {
-      this.focusedIndex = this.focusedIndex % 2 === 0 ? this.focusedIndex + 1 : this.focusedIndex - 1;
+      this.focusedIndex = (this.focusedIndex + 1) % count;
       actions.push({ type: 'ui_sfx', sound: 'sndHover' });
     }
 
@@ -1188,7 +2354,7 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // Reusable Crisp Integer Pixel UI Primitives
+  // Reusable Nuclear Throne Crisp Pixel UI Helpers
   // --------------------------------------------------------------------------
 
   private drawButton(
@@ -1208,27 +2374,23 @@ export class MenuSystem {
     const ih = Math.round(h);
     const isFocused = Boolean(opts.focused);
     const hovered = this.hoveredId === id || isFocused;
-    const accent = opts.accent ?? '#ffe047';
+    const accent = opts.accent ?? '#ffffff';
 
-    // Stark Nuclear Throne ink-charcoal button (jagged ink brush streaks on hover/focus, ZERO sci-fi screws!)
-    ctx.fillStyle = '#07050c';
-    ctx.fillRect(ix - 1, iy + 2, iw + 2, Math.max(2, ih - 4));
-    ctx.fillRect(ix + 1, iy + ih, iw, 1);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(ix - 2, iy + 2, iw + 4, Math.max(2, ih - 4));
+    ctx.fillRect(ix + 1, iy + ih, iw - 2, 1);
     if (hovered) {
       ctx.fillRect(ix - 5, iy + Math.floor(ih * 0.25), 5, 3);
       ctx.fillRect(ix + iw, iy + Math.floor(ih * 0.62), 6, 3);
     }
 
-    ctx.fillStyle = hovered ? 'rgba(22, 17, 28, 0.98)' : 'rgba(13, 10, 18, 0.90)';
+    ctx.fillStyle = hovered ? 'rgba(18, 15, 22, 0.96)' : 'rgba(8, 6, 12, 0.88)';
     ctx.fillRect(ix, iy, iw, ih);
-    drawPixelBorder(ctx, ix, iy, iw, ih, hovered ? accent : '#4a4257', 1);
+    drawPixelBorder(ctx, ix, iy, iw, ih, hovered ? accent : '#342e3e', 1);
 
     if (hovered) {
       ctx.fillStyle = accent;
       ctx.fillRect(ix + 2, iy + 2, 2, ih - 4);
-      if (isFocused) {
-        ctx.fillRect(ix + iw - 4, iy + 2, 2, ih - 4);
-      }
     }
 
     this.fonts.draw(
@@ -1240,7 +2402,7 @@ export class MenuSystem {
       {
         align: 'center',
         baseline: 'middle',
-        color: hovered ? '#ffffff' : '#c8c6d4',
+        color: hovered ? '#ffffff' : '#b8b6c2',
         outline: true,
       },
     );
@@ -1249,158 +2411,134 @@ export class MenuSystem {
   }
 
   /**
-   * Bold Nuclear Throne wasteland menu entry for the Title Screen (replaces generic SaaS boxes!):
-   * renders Steam sprMainMenuSplat or crisp jagged pixel accent splat + chevron pointers on hover/focus.
+   * Renders a clickable chunky Nuclear Throne display menu item (zero rectangular button frames!).
    */
-  private drawTitleMenuItem(
+  private drawChunkyButton(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     id: string,
     cx: number,
     y: number,
-    w: number,
-    h: number,
     label: string,
     onActivate: () => MenuAction | null,
-    opts: { accent: string; focused: boolean },
+    opts: { focused?: boolean; align?: 'center' | 'left' | 'right'; color?: string } = {},
   ): void {
-    const ix = Math.round(cx - w * 0.5);
-    const iy = Math.round(y);
-    const hovered = this.hoveredId === id || opts.focused;
-
-    if (hovered) {
-      const hasSplat = this.isSteamMode && this.sprites.hasSprite('sprMainMenuSplat');
-      if (hasSplat) {
-        // sprMainMenuSplat frame 3 (151x48, orig=(60,34)) -> center around (cx, iy + h/2)
-        this.sprites.draw(ctx, 'sprMainMenuSplat', cx - 16, iy + Math.floor(h * 0.5) + 7, {
-          frame: 3,
-          alpha: 0.92,
-          pixelSnap: true,
-        });
-      } else {
-        // Sweeping dynamic Vlambeer/Nuclear Throne jagged black ink brush-splat (ZERO boxy rectangle!)
-        ctx.fillStyle = '#07050c';
-        // Core sweeping brushstroke body
-        ctx.fillRect(ix - 2, iy + 2, w + 6, h - 4);
-        ctx.fillRect(ix + 8, iy, w - 12, h);
-        // Sweeping tapered horizontal ink tails & brush slashes
-        ctx.fillRect(ix - 18, iy + 5, w + 40, 4);
-        ctx.fillRect(ix - 26, iy + 10, w + 56, 4);
-        ctx.fillRect(ix - 12, iy + 15, w + 34, 3);
-        ctx.fillRect(ix + 14, iy - 2, w - 26, 2);
-        ctx.fillRect(ix + 4, iy + h, w - 18, 2);
-        // Raw ink splatter flecks flying off right & left tips
-        ctx.fillRect(ix - 31, iy + 11, 3, 2);
-        ctx.fillRect(ix - 22, iy + 17, 2, 2);
-        ctx.fillRect(ix + w + 33, iy + 10, 4, 2);
-        ctx.fillRect(ix + w + 25, iy + 5, 3, 2);
-        ctx.fillRect(ix + w + 22, iy + 17, 2, 2);
-      }
-
-      // Animated pixel pointer chevron on left
-      const nudge = Math.round(Math.sin(this.renderTimeSec * 9) * 1.5);
-      const ptrX = ix - 11 + nudge;
-      const ptrY = iy + Math.floor(h * 0.5) - 2;
-      if (this.isSteamMode && this.sprites.hasSprite('sprMenuPointer')) {
-        this.sprites.draw(ctx, 'sprMenuPointer', ptrX, ptrY, { frame: 0, pixelSnap: true });
-      } else {
-        ctx.fillStyle = '#09060d';
-        ctx.fillRect(ptrX - 1, ptrY - 1, 5, 7);
-        ctx.fillStyle = opts.accent;
-        ctx.fillRect(ptrX, ptrY, 2, 5);
-        ctx.fillRect(ptrX + 2, ptrY + 1, 2, 3);
-        ctx.fillRect(ptrX + 4, ptrY + 2, 1, 1);
-      }
-    } else {
-      // Sleek minimal dark wasteland shadow underline (keeps sunset skyline visible!)
-      ctx.fillStyle = 'rgba(10, 7, 15, 0.52)';
-      ctx.fillRect(ix + 16, iy + h - 5, w - 32, 3);
-    }
-
-    this.fonts.draw(
-      ctx,
-      label,
-      cx + (hovered ? 2 : 0),
-      iy + Math.floor(h * 0.5),
-      hovered ? 'fntL' : 'fntM1',
-      {
-        align: 'center',
-        baseline: 'middle',
-        color: hovered ? opts.accent : '#d8d4e3',
-        outline: true,
-      },
-    );
-
-    this.regions.push({ id, x: ix - 6, y: iy, w: w + 12, h, onActivate });
+    const hovered = this.hoveredId === id || Boolean(opts.focused);
+    const bounds = drawChunkyMenuText(ctx, label, cx, y, hovered, opts.color, {
+      timeSec: this.renderTimeSec,
+      align: opts.align ?? 'center',
+    });
+    this.regions.push({
+      id,
+      x: bounds.x - 4,
+      y: bounds.y - 2,
+      w: bounds.w + 8,
+      h: bounds.h + 4,
+      onActivate,
+    });
   }
 
-  private drawSliderRow(
+  /**
+   * Borderless Nuclear Throne Video/Settings toggle row (matches 22_settings_video.png!).
+   */
+  private drawSettingsToggleRow(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     id: string,
-    x: number,
+    labelX: number,
+    valueX: number,
     y: number,
-    w: number,
+    rowW: number,
+    label: string,
+    valueText: string,
+    onActivate: () => MenuAction | null,
+    opts: { focused?: boolean; afterDraw?: (valRightX: number, rowY: number) => void } = {},
+  ): void {
+    const hovered = this.hoveredId === id || Boolean(opts.focused);
+    if (hovered) {
+      drawInkSplatBanner(ctx, labelX - 6, y - 1, rowW + 12, 12, label.length * 7 + y);
+    }
+
+    this.fonts.draw(ctx, label, labelX, y + 1, 'fntM1', {
+      color: hovered ? '#ffffff' : '#96969e',
+      outline: true,
+    });
+
+    const valRes = this.fonts.draw(ctx, valueText, valueX, y + 1, 'fntM1', {
+      color: hovered ? '#ffffff' : '#96969e',
+      outline: true,
+    });
+
+    opts.afterDraw?.(valueX + valRes.width, y);
+
+    this.regions.push({
+      id,
+      x: labelX - 6,
+      y: y - 2,
+      w: rowW + 12,
+      h: 14,
+      onActivate,
+    });
+  }
+
+  /**
+   * Borderless Nuclear Throne green-filled slider row matching `FREEZE FRAMES  [80% ====|]` in 22_settings_video.png!
+   */
+  private drawSettingsSliderRow(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    id: string,
+    labelX: number,
+    barX: number,
+    y: number,
+    rowW: number,
     label: string,
     value: number,
     onChange: (val: number) => MenuAction,
     opts: { focused?: boolean; valueText?: string } = {},
   ): void {
-    const isFocused = Boolean(opts.focused);
-    const hovered = this.hoveredId === id || this.activeDragRegionId === id || isFocused;
+    const hovered = this.hoveredId === id || this.activeDragRegionId === id || Boolean(opts.focused);
     const clamped = Math.max(0, Math.min(1, value));
-    const barW = 86;
-    const barH = 8;
-    const barX = Math.round(x + w - barW - 30);
-    const barY = Math.round(y + 3);
+    const barW = 78;
+    const barH = 9;
+    const barY = Math.round(y + 1);
 
-    if (isFocused) {
-      ctx.fillStyle = 'rgba(255, 224, 71, 0.12)';
-      ctx.fillRect(x - 3, y - 1, w + 6, 15);
-      ctx.fillStyle = '#ffe047';
-      ctx.fillRect(x - 3, y, 2, 13);
+    if (hovered) {
+      drawInkSplatBanner(ctx, labelX - 6, y - 1, rowW + 12, 12, label.length * 11 + y);
     }
 
-    this.fonts.draw(ctx, label, x + (isFocused ? 2 : 0), y + 2, 'fntSmall', {
-      color: hovered ? '#ffe047' : '#d2d0dc',
+    this.fonts.draw(ctx, label, labelX, y + 1, 'fntM1', {
+      color: hovered ? '#ffffff' : '#96969e',
       outline: true,
     });
 
-    // Track
-    ctx.fillStyle = '#100c16';
-    ctx.fillRect(barX, barY, barW, barH);
-    const fillW = Math.round((barW - 2) * clamped);
+    // Black ink backing strip behind slider bar
+    drawInkSplatBanner(ctx, barX, barY, barW, barH, y + 5);
+
+    // Bright Nuclear Throne green filled slider bar (#44d844) + crisp white vertical thumb bar!
+    const fillW = Math.round(barW * clamped);
     if (fillW > 0) {
-      ctx.fillStyle = hovered ? '#ffe047' : '#52e864';
-      ctx.fillRect(barX + 1, barY + 1, fillW, barH - 2);
-      ctx.fillStyle = hovered ? '#fff6a6' : '#96ff9e';
-      ctx.fillRect(barX + 1, barY + 1, fillW, 2);
+      ctx.fillStyle = hovered ? '#54f054' : '#44d844';
+      ctx.fillRect(barX, barY, fillW, barH);
+      ctx.fillStyle = '#88ff78';
+      ctx.fillRect(barX, barY, fillW, 1);
     }
-    drawPixelBorder(ctx, barX, barY, barW, barH, hovered ? '#ffffff' : '#6b637a', 1);
 
-    // Crisp visible pixel thumb knob!
-    const knobW = 5;
-    const knobH = 12;
-    const knobX = Math.max(barX, Math.min(barX + barW - knobW, barX + 1 + fillW - Math.floor(knobW / 2)));
-    const knobY = barY - 2;
-    ctx.fillStyle = '#09070e';
-    ctx.fillRect(knobX - 1, knobY - 1, knobW + 2, knobH + 2);
-    ctx.fillStyle = hovered ? '#ffe047' : '#d4d8e6';
-    ctx.fillRect(knobX, knobY, knobW, knobH);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(knobX + 1, knobY + 1, knobW - 2, 2);
-    ctx.fillStyle = hovered ? '#b88212' : '#7a8094';
-    ctx.fillRect(knobX, knobY + knobH - 2, knobW, 2);
+    // Crisp white right-edge vertical slider handle bar (exact match to 22_settings_video.png!)
+    const thumbX = Math.max(barX, Math.min(barX + barW - 3, barX + fillW - 2));
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(thumbX - 1, barY - 1, 5, barH + 2);
+    ctx.fillStyle = hovered ? '#ffffff' : '#d8d8de';
+    ctx.fillRect(thumbX, barY, 3, barH);
 
+    // Crisp white-outlined percentage sitting cleanly over the bar!
     const pct = opts.valueText ?? `${Math.round(clamped * 100)}%`;
-    this.fonts.draw(ctx, pct, x + w, y + 2, 'fntSmall', {
-      align: 'right',
-      color: hovered ? '#ffe047' : '#ffffff',
+    this.fonts.draw(ctx, pct, barX + 3, barY + 1, 'fntM1', {
+      color: '#ffffff',
       outline: true,
     });
 
     this.regions.push({
       id,
       x: barX - 4,
-      y,
+      y: y - 2,
       w: barW + 8,
       h: 14,
       onActivate: () => onChange(clamped),
@@ -1408,396 +2546,217 @@ export class MenuSystem {
     });
   }
 
-  // --------------------------------------------------------------------------
-  // 1. TITLE SCREEN
-  // --------------------------------------------------------------------------
-
-  private renderTitleWastelandBackdrop(
+  /**
+   * Draws top-right owned mutations + ultra + crown icons (used on Pause, Level Up, Victory, Game Over).
+   */
+  private drawTopRightHudIcons(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    simState: SimState | null,
     width: number,
-    height: number,
-    timeSec: number,
+    opts: { interactivePause?: boolean } = {},
   ): void {
-    // Steam bakMenu (320x240) when Steam Pack is active!
-    if (this.isSteamMode && this.sprites.hasSprite('bakMenu')) {
-      // Seamless color-matched wasteland sky & desert side extension behind 320x240 bakMenu in 16:9!
-      const steamSky: ReadonlyArray<[number, string]> = [
-        [0, '#5a5a4e'],
-        [44, '#666457'],
-        [94, '#706c5d'],
-        [114, '#8d7244'],
-        [168, '#9b7b43'],
-      ];
-      for (let i = 0; i < steamSky.length; i++) {
-        const [sy, col] = steamSky[i]!;
-        const ny = i + 1 < steamSky.length ? steamSky[i + 1]![0] : height;
-        ctx.fillStyle = col;
-        ctx.fillRect(0, sy, width, ny - sy);
-      }
-      // Subtle atmospheric dim on outer widescreen wings so focus stays naturally centered
-      const bx = Math.round((width - 320) * 0.5);
-      this.sprites.draw(ctx, 'bakMenu', bx, 0, { frame: 0, pixelSnap: true });
-      if (bx > 0) {
-        // Smooth 1px-stepped soft dark cinematic edge vignette (ZERO blocky vertical bars!)
-        for (let step = 0; step < bx + 20; step++) {
-          const distFromEdge = Math.max(0, bx + 20 - step) / (bx + 20);
-          const a = distFromEdge * distFromEdge * 0.78;
-          ctx.fillStyle = `rgba(10, 7, 14, ${a.toFixed(3)})`;
-          ctx.fillRect(step, 0, 1, height);
-          ctx.fillRect(width - 1 - step, 0, 1, height);
+    if (!simState) return;
+    const iconSize = 16;
+    const stride = 18;
+    let cursorRight = width - 4;
+    const topY = 4;
+
+    if (simState.crown !== 'none') {
+      const cDef = this.data.getCrown(simState.crown);
+      const x = cursorRight - iconSize;
+      this.drawSpriteIntegerCentered(ctx, cDef.spriteIdle, 0, x, topY, iconSize, iconSize);
+      cursorRight -= stride;
+    }
+
+    const muts = simState.player.mutations;
+    const mutant = this.data.getMutant(simState.player.mutant);
+
+    if (simState.player.ultra) {
+      const uDef = this.data.getUltra(simState.player.ultra);
+      const egHudDef = this.sprites.getSprite('sprEGIconHUD');
+      const uFrame = uDef
+        ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
+        : 0;
+      const x = cursorRight - iconSize;
+      const rid = 'pause_ultra';
+      const idx = muts.length;
+      if (opts.interactivePause) {
+        const hovered = this.hoveredId === rid;
+        if (hovered) this.pauseInspectIdx = idx;
+        if (hovered || this.pauseInspectIdx === idx) {
+          drawPixelBorder(ctx, x - 1, topY - 1, iconSize + 2, iconSize + 2, '#ffe047', 1);
         }
+        this.regions.push({
+          id: rid,
+          x: x - 1,
+          y: topY - 1,
+          w: iconSize + 2,
+          h: iconSize + 2,
+          onActivate: () => {
+            this.pauseInspectIdx = idx;
+            return { type: 'ui_sfx', sound: 'sndHover' };
+          },
+        });
       }
-      ctx.fillStyle = 'rgba(10, 7, 14, 0.20)';
-      ctx.fillRect(0, 0, width, height);
-      return;
+      const drew = uDef
+        ? this.drawSpriteIntegerCentered(ctx, 'sprEGIconHUD', uFrame, x, topY, iconSize, iconSize)
+        : false;
+      if (!drew) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x, topY, iconSize, iconSize);
+        ctx.fillStyle = '#ffe047';
+        ctx.fillRect(x + 2, topY + 2, iconSize - 4, iconSize - 4);
+      }
+      cursorRight -= stride;
     }
 
-    // Built-In Art: Iconic Nuclear Throne-inspired sun-bleached dusty wasteland hill, ruined skyline & buried crown!
-    const skyBands: ReadonlyArray<[number, string]> = [
-      [0, '#5a5648'],
-      [28, '#666050'],
-      [56, '#756c57'],
-      [82, '#87785c'],
-      [104, '#9c8662'],
-      [122, '#b39564'],
-    ];
-    for (let i = 0; i < skyBands.length; i++) {
-      const [sy, col] = skyBands[i]!;
-      const nextY = i + 1 < skyBands.length ? skyBands[i + 1]![0] : 134;
-      ctx.fillStyle = col;
-      ctx.fillRect(0, sy, width, nextY - sy);
-      if (i > 0) {
-        ctx.fillStyle = skyBands[i - 1]![1];
-        for (let dx = (i % 2) * 2; dx < width; dx += 4) {
-          ctx.fillRect(dx, sy, 2, 1);
+    for (let i = 0; i < muts.length; i++) {
+      const def = this.data.getMutation(muts[i]!);
+      const x = cursorRight - iconSize;
+      if (x < 120) break;
+      const rid = `pause_mut_${i}`;
+      if (opts.interactivePause) {
+        const hovered = this.hoveredId === rid;
+        if (hovered) this.pauseInspectIdx = i;
+        if (hovered || this.pauseInspectIdx === i) {
+          drawPixelBorder(ctx, x - 1, topY - 1, iconSize + 2, iconSize + 2, '#58f048', 1);
         }
+        this.regions.push({
+          id: rid,
+          x: x - 1,
+          y: topY - 1,
+          w: iconSize + 2,
+          h: iconSize + 2,
+          onActivate: () => {
+            this.pauseInspectIdx = i;
+            return { type: 'ui_sfx', sound: 'sndHover' };
+          },
+        });
       }
-    }
-
-    // Soft drifting dusty wasteland cloud haze across upper sky
-    const drawDustCloud = (cx0: number, cy0: number, cw: number, ch: number): void => {
-      const wx = ((cx0 + Math.floor(timeSec * 2.5)) % (width + cw + 40)) - cw - 20;
-      ctx.fillStyle = 'rgba(218, 204, 168, 0.16)';
-      ctx.fillRect(wx, cy0, cw, ch);
-      ctx.fillRect(wx + 10, cy0 - 3, cw - 20, 3);
-      ctx.fillStyle = 'rgba(72, 64, 52, 0.14)';
-      ctx.fillRect(wx + 4, cy0 + ch - 2, cw - 8, 2);
-    };
-    drawDustCloud(24, 34, 88, 9);
-    drawDustCloud(220, 22, 74, 8);
-    drawDustCloud(330, 56, 96, 10);
-
-    // Distant hazy ruined wasteland city skyline & jagged girders silhouetted along desert ridge!
-    const ridgeY = 128;
-    const skyline: ReadonlyArray<[number, number, number]> = [
-      [0.06, 18, 26], [0.11, 14, 16], [0.17, 10, 32],
-      [0.64, 16, 22], [0.69, 22, 34], [0.75, 12, 18], [0.80, 18, 28], [0.87, 14, 20],
-    ];
-    for (const [fx, bw, bh] of skyline) {
-      const bx = Math.round(fx * width);
-      ctx.fillStyle = '#5e5245';
-      ctx.fillRect(bx, ridgeY - bh, bw, bh + 10);
-      // Ruined jagged broken roofline & hollow window slits
-      ctx.fillStyle = '#4d4238';
-      ctx.fillRect(bx + Math.floor(bw * 0.55), ridgeY - bh + 2, Math.ceil(bw * 0.45), bh + 8);
-      ctx.fillStyle = '#87785c';
-      ctx.fillRect(bx + 3, ridgeY - bh + 4, 2, 3);
-      ctx.fillRect(bx + 7, ridgeY - bh + 4, 2, 3);
-      ctx.fillRect(bx + 3, ridgeY - bh + 11, 2, 3);
-      // Protruding rusty rebar spikes on roof
-      ctx.fillStyle = '#4d4238';
-      ctx.fillRect(bx + 2, ridgeY - bh - 5, 1, 5);
-      ctx.fillRect(bx + bw - 4, ridgeY - bh - 3, 1, 3);
-    }
-
-    // Mid-ground sweeping warm ochre desert hill (left slope)
-    for (let x = 0; x < width; x += 2) {
-      const slopeL = Math.round(122 + Math.sin(x * 0.011 + 0.5) * 14 + (x / width) * 26);
-      ctx.fillStyle = '#99743f';
-      ctx.fillRect(x, slopeL, 2, height - slopeL);
-      ctx.fillStyle = '#ab8449';
-      ctx.fillRect(x, slopeL, 2, 2);
-    }
-
-    // Foreground sunlit sweeping golden wasteland dune (right-to-left diagonal rise!)
-    for (let x = 0; x < width; x += 2) {
-      const duneY = Math.round(166 - (x / width) * 34 + Math.sin(x * 0.022) * 5);
-      ctx.fillStyle = '#ba9146';
-      ctx.fillRect(x, duneY, 2, height - duneY);
-      ctx.fillStyle = '#cfa655';
-      ctx.fillRect(x, duneY, 2, 3);
-      // Warm sunlit sand band in lower foreground
-      if (duneY + 26 < height) {
-        ctx.fillStyle = '#ad843e';
-        ctx.fillRect(x, duneY + 28, 2, height - (duneY + 28));
+      const drew = def
+        ? this.drawSpriteIntegerCentered(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, x, topY, iconSize, iconSize)
+        : false;
+      if (!drew) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x, topY, iconSize, iconSize);
+        ctx.fillStyle = '#48e048';
+        ctx.fillRect(x + 2, topY + 2, iconSize - 4, iconSize - 4);
       }
+      cursorRight -= stride;
     }
-
-    // Subtle organic desert wind-carved sand troughs & scattered wasteland pebbles
-    ctx.fillStyle = '#967035';
-    ctx.fillRect(Math.round(width * 0.58), 166, 36, 2);
-    ctx.fillRect(Math.round(width * 0.62), 168, 22, 2);
-    ctx.fillRect(Math.round(width * 0.42), 206, 28, 2);
-    ctx.fillRect(Math.round(width * 0.78), 192, 24, 2);
-    ctx.fillStyle = '#deb764';
-    ctx.fillRect(Math.round(width * 0.58), 165, 34, 1);
-    ctx.fillRect(Math.round(width * 0.42), 205, 26, 1);
-
-    // Iconic Half-Buried Gilded Wasteland Crown in bottom-left desert sand!
-    const crX = Math.round(width * 0.14);
-    const crY = 186;
-    // Soft sand shadow beneath crown
-    ctx.fillStyle = '#87622e';
-    ctx.fillRect(crX - 18, crY + 20, 40, 6);
-    ctx.fillRect(crX - 14, crY + 25, 32, 3);
-    // Bold dark ink silhouette of tilted royal crown
-    ctx.fillStyle = '#120b0d';
-    ctx.fillRect(crX - 15, crY + 2, 30, 20);
-    ctx.fillRect(crX - 12, crY - 4, 24, 8);
-    ctx.fillRect(crX - 5, crY - 9, 10, 6);
-    // Crimson velvet dome with curved gold ribs
-    ctx.fillStyle = '#9e1c2c';
-    ctx.fillRect(crX - 13, crY + 3, 26, 16);
-    ctx.fillStyle = '#cf2a3c';
-    ctx.fillRect(crX - 11, crY - 2, 20, 14);
-    // Gold crown arches & top orb
-    ctx.fillStyle = '#e8b632';
-    ctx.fillRect(crX - 3, crY - 7, 6, 4);
-    ctx.fillRect(crX - 2, crY - 3, 4, 18);
-    ctx.fillRect(crX - 10, crY + 1, 3, 14);
-    ctx.fillRect(crX + 7, crY + 1, 3, 14);
-    // Golden jeweled rim band tilted into sand
-    ctx.fillStyle = '#d99e26';
-    ctx.fillRect(crX - 14, crY + 13, 28, 8);
-    ctx.fillStyle = '#fff08a';
-    ctx.fillRect(crX - 12, crY + 14, 24, 2);
-    ctx.fillRect(crX - 2, crY - 7, 3, 2);
-    // Center ruby jewel on rim
-    ctx.fillStyle = '#ff384c';
-    ctx.fillRect(crX - 2, crY + 16, 4, 4);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(crX - 1, crY + 16, 1, 1);
-    // Sunlit desert sand mound lapping organically over lower crown base!
-    ctx.fillStyle = '#cfa655';
-    ctx.fillRect(crX - 18, crY + 18, 12, 6);
-    ctx.fillRect(crX + 6, crY + 19, 14, 5);
-    ctx.fillRect(crX - 10, crY + 21, 24, 5);
-    ctx.fillStyle = '#e6c270';
-    ctx.fillRect(crX - 16, crY + 18, 10, 2);
-    ctx.fillRect(crX + 8, crY + 19, 10, 2);
-
-    // Subtle warm dusk edge vignette so logo & bright menu text pop cleanly
-    ctx.fillStyle = 'rgba(18, 12, 14, 0.14)';
-    ctx.fillRect(0, 0, width, height);
   }
+
+  // --------------------------------------------------------------------------
+  // 1. TITLE SCREEN (EXACT MATCH TO 01_title.png & part_6.mp4 00:27..00:44!)
+  // --------------------------------------------------------------------------
 
   private renderTitleScreen(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, timeSec, save } = mctx;
+    const { width, height, timeSec } = mctx;
     const cx = Math.round(width * 0.5);
+    const isCustomPack = this.bundle.sourceMode === 'steam';
 
-    this.renderTitleWastelandBackdrop(ctx, width, height, timeSec);
+    // 1. Full-screen animated swirling purple portal vortex + white pixel lightning + 28px black letterbox!
+    drawPortalVortex(ctx, width, height, timeSec, true);
 
-    // Animated floating ash embers
-    for (let i = 0; i < 18; i++) {
-      const ex = ((i * 47 + Math.floor(timeSec * (12 + (i % 4) * 5))) % (width + 16)) - 8;
-      const ey = height - ((i * 29 + Math.floor(timeSec * (16 + (i % 3) * 6))) % height);
-      ctx.fillStyle = i % 3 === 0 ? '#ffe047' : '#ff6b35';
-      ctx.fillRect(Math.round(ex), Math.round(ey), 2, 2);
-    }
-
-    // Logo (sprLogoGlow softly pulsing behind sprLogo; intro clamps permanently at frame 7)
-    const logoY = 56;
-    const hasLogo = this.sprites.hasSprite('sprLogo');
-    if (hasLogo) {
-      if (this.sprites.hasSprite('sprLogoGlow')) {
-        const glowPulse = 0.22 + 0.12 * Math.sin(timeSec * 3.0);
-        this.sprites.draw(ctx, 'sprLogoGlow', cx, logoY, { alpha: glowPulse, pixelSnap: true });
-      }
-      const logoSpr = this.sprites.getSprite('sprLogo');
-      let logoFrame = computeTitleLogoFrame(timeSec, logoSpr?.frames.length ?? 8);
-      // In Steam data.win, sprLogo frame 0 is a 1x1 blank placeholder; skip straight to frame 1 when tiny
-      const f0 = logoSpr?.frames[logoFrame];
-      if (logoFrame === 0 && f0 && f0.srcW <= 2 && f0.srcH <= 2 && (logoSpr?.frames.length ?? 0) > 1) {
-        logoFrame = 1;
-      }
-      this.sprites.draw(ctx, 'sprLogo', cx, logoY, {
-        frame: logoFrame,
-        pixelSnap: true,
-      });
-    } else {
-      ctx.fillStyle = 'rgba(255, 110, 40, 0.22)';
-      ctx.fillRect(cx - 118, 20, 236, 60);
-      ctx.fillStyle = '#160f1c';
-      ctx.fillRect(cx - 114, 24, 228, 52);
-      drawPixelBorder(ctx, cx - 114, 24, 228, 52, '#ff9838', 2);
-
-      this.fonts.draw(ctx, 'KRUNKED', cx, 33, 'fntL', {
-        align: 'center',
-        color: '#ffe047',
-        outline: true,
-      });
-      this.fonts.draw(ctx, 'THRONE', cx, 53, 'fntL', {
-        align: 'center',
-        color: '#ff5238',
-        outline: true,
-      });
-    }
-
-    // Bold NT Wasteland Primary Menu Items (PLAY & OPTIONS)
-    this.drawTitleMenuItem(
+    // 2. Centered vertical stack of bold chunky outlined Nuclear Throne menu items (ZERO boxes!)
+    this.drawChunkyButton(
       ctx,
       'title_play',
       cx,
-      112,
-      124,
-      24,
+      62,
       'PLAY',
       () => ({ type: 'open_screen', screen: 'campfire' }),
-      { accent: '#52e864', focused: this.focusedIndex === 0 },
+      { focused: this.focusedIndex === 0 },
     );
 
-    this.drawTitleMenuItem(
+    this.drawChunkyButton(
       ctx,
       'title_options',
       cx,
-      141,
-      124,
-      22,
+      91,
       'OPTIONS',
       () => ({ type: 'open_screen', screen: 'options' }),
-      { accent: '#ffe047', focused: this.focusedIndex === 1 },
+      { focused: this.focusedIndex === 1 },
     );
 
-    // Custom Pack / Built-In Art Pack Toggle Row
-    const isCustomPack = this.bundle.sourceMode === 'steam';
-    const toggleY = 171;
-    const toggleH = 16;
     if (mctx.assetLoading) {
-      this.drawButton(
+      this.drawChunkyButton(
         ctx,
         'title_loading_assets',
-        cx - 68,
-        toggleY,
-        136,
-        toggleH,
-        '@yLOADING CUSTOM PACK...',
+        cx,
+        120,
+        'LOADING...',
         () => null,
-        { font: 'fntSmall', accent: '#ffe047' },
+        { focused: this.focusedIndex === 2, color: '#ffe047' },
       );
     } else if (isCustomPack) {
-      const leftW = 92;
-      const rightW = 74;
-      const totalW = leftW + 4 + rightW;
-      const startX = cx - Math.floor(totalW / 2);
-      this.drawButton(
+      this.drawChunkyButton(
         ctx,
         'title_use_builtin',
-        startX,
-        toggleY,
-        leftW,
-        toggleH,
-        'USE BUILT-IN ART',
+        cx,
+        120,
+        'PACK: CUSTOM',
         () => ({ type: 'use_builtin_art' }),
-        { font: 'fntSmall', accent: '#52e864', focused: this.focusedIndex === 2 && this.titleSubCol === 0 },
-      );
-      this.drawButton(
-        ctx,
-        'title_load_local',
-        startX + leftW + 4,
-        toggleY,
-        rightW,
-        toggleH,
-        'LOAD FOLDER',
-        () => ({ type: 'request_load_local' }),
-        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 && this.titleSubCol === 1 },
+        { focused: this.focusedIndex === 2 },
       );
     } else if (mctx.hasCachedLocal || mctx.hasServerSteam) {
-      const leftW = 90;
-      const rightW = 74;
-      const totalW = leftW + 4 + rightW;
-      const startX = cx - Math.floor(totalW / 2);
-      this.drawButton(
+      this.drawChunkyButton(
         ctx,
         'title_use_local',
-        startX,
-        toggleY,
-        leftW,
-        toggleH,
-        'USE CUSTOM PACK',
+        cx,
+        120,
+        'PACK: BUILT-IN',
         () => ({ type: 'use_local_art' }),
-        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 && this.titleSubCol === 0 },
-      );
-      this.drawButton(
-        ctx,
-        'title_load_local',
-        startX + leftW + 4,
-        toggleY,
-        rightW,
-        toggleH,
-        'LOAD FOLDER',
-        () => ({ type: 'request_load_local' }),
-        { font: 'fntSmall', accent: '#ffe047', focused: this.focusedIndex === 2 && this.titleSubCol === 1 },
+        { focused: this.focusedIndex === 2 },
       );
     } else {
-      this.drawButton(
+      this.drawChunkyButton(
         ctx,
-        'title_load_local',
-        cx - 68,
-        toggleY,
-        136,
-        toggleH,
-        'LOAD CUSTOM PACK',
-        () => ({ type: 'request_load_local' }),
-        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 },
-      );
-    }
-
-    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
-
-    // Best run footer
-    if (save.totalRuns > 0) {
-      const best =
-        save.bestLoop > 0
-          ? `@dBEST: @yL${save.bestLoop} ${save.bestArea}@d  KILLS: @w${save.bestKills}`
-          : `@dBEST: @w${save.bestArea}@d  KILLS: @w${save.bestKills}`;
-      this.fonts.draw(ctx, best, cx, 196, 'fntSmall', { align: 'center', outline: true });
-    } else if (mctx.inputMode === 'gamepad' || mctx.gamepadConnected) {
-      this.fonts.draw(
-        ctx,
-        `@g${g.familyLabel} READY  @d[LS/DPAD] MOVE  [${g.confirm}] SELECT`,
+        'title_use_local',
         cx,
-        196,
-        'fntSmall',
-        { align: 'center', outline: true },
+        120,
+        'PACK: BUILT-IN',
+        () => ({ type: 'request_load_local' }),
+        { focused: this.focusedIndex === 2 },
       );
     }
 
-    // Subtle top-right connected controller badge when active
-    if (mctx.gamepadConnected) {
-      this.fonts.draw(ctx, `@g${g.familyLabel} READY`, width - 6, 5, 'fntSmall', {
-        align: 'right',
-        outline: true,
-      });
-    }
+    this.drawChunkyButton(
+      ctx,
+      'title_load_local',
+      cx,
+      149,
+      'LOAD PACK',
+      () => ({ type: 'request_load_local' }),
+      { focused: this.focusedIndex === 3 },
+    );
 
-    // Clean atmospheric footer (NO debug "(823 SPRITES)" text!)
+    // 3. Subtle muted labels on the bottom pure-black letterbox bar (matches `Bobot roi` / `u100r7s`!)
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
+    const bottomLeft = mctx.gamepadConnected
+      ? `KRUNKED THRONE  @g${g.familyLabel}`
+      : 'KRUNKED THRONE';
+    this.fonts.draw(ctx, bottomLeft, 8, height - 12, 'fntSmall', {
+      color: '#a8a8b2',
+      shadow: false,
+    });
+
     const cleanedStatus = mctx.assetStatusText
       ? mctx.assetStatusText.replace(/\s*\(\d+\s*SPRITES\)/gi, '').trim()
       : '';
-    const footerText =
-      cleanedStatus ||
-      (isCustomPack ? '@dCUSTOM ART PACK ACTIVE' : '@dTHE WASTELAND CALLS YOU');
-    this.fonts.draw(ctx, footerText, cx, height - 13, 'fntSmall', {
-      align: 'center',
-      outline: true,
+    const bottomRight = cleanedStatus || (isCustomPack ? 'CUSTOM PACK' : 'BUILT-IN v1');
+    this.fonts.draw(ctx, bottomRight, width - 8, height - 12, 'fntSmall', {
+      align: 'right',
+      color: '#7c7c86',
+      shadow: false,
     });
   }
 
   // --------------------------------------------------------------------------
-  // 2. CAMPFIRE MUTANT SELECT (ALL 12 MUTANTS)
+  // 2. CAMPFIRE MUTANT SELECT (ALL 12 MUTANTS, CLEAN INK-SPLAT AESTHETIC)
   // --------------------------------------------------------------------------
 
   private renderCampfireGround(
@@ -1810,168 +2769,68 @@ export class MenuSystem {
     seatRy: number,
     timeSec: number,
   ): void {
-    if (this.isSteamMode && this.sprites.hasSprite('sprFloor0')) {
-      // Tile authentic Steam 32x32 sprFloor0 across the campsite clearing!
+    if (this.sprites.hasSprite('sprFloor0')) {
       const floorSpr = this.sprites.getSprite('sprFloor0')!;
       const fCount = Math.max(1, floorSpr.frames.length);
       for (let ty = 0; ty < height; ty += 32) {
         for (let tx = 0; tx < width; tx += 32) {
           const hash = ((tx * 73) ^ (ty * 151) ^ 0x5a) & 0xff;
-          const frame = hash % fCount;
-          this.sprites.draw(ctx, 'sprFloor0', tx, ty, { frame, pixelSnap: true });
-        }
-      }
-
-      // Stepped night atmospheric darkening around outer edges (bright warm clearing in center)
-      ctx.fillStyle = 'rgba(10, 7, 14, 0.56)';
-      ctx.fillRect(0, 0, width, height);
-
-      // Stepped pixel warm firelight pools around campfire
-      const flick = Math.round(Math.sin(timeSec * 12) * 3 + Math.cos(timeSec * 19) * 2);
-      const rings: ReadonlyArray<[number, number, string]> = [
-        [seatRx + 38 + flick, seatRy + 28 + flick, 'rgba(255, 130, 42, 0.14)'],
-        [seatRx + 18 + flick, seatRy + 16 + flick, 'rgba(255, 145, 48, 0.16)'],
-        [Math.round(seatRx * 0.65) + flick, Math.round(seatRy * 0.7) + flick, 'rgba(255, 178, 66, 0.18)'],
-      ];
-      for (const [rx, ry, col] of rings) {
-        ctx.fillStyle = col;
-        for (let dy = -ry; dy <= ry; dy += 2) {
-          const norm = dy / Math.max(1, ry);
-          const span = Math.round(rx * Math.sqrt(Math.max(0, 1 - norm * norm)));
-          ctx.fillRect(fireX - span, fireY + 4 + dy, span * 2, 2);
-        }
-      }
-
-      // Authentic Steam sprLogMenu sitting logs placed around the campfire!
-      if (this.sprites.hasSprite('sprLogMenu')) {
-        const logAngles = [-2.5, -0.6, 0.55, 2.55];
-        for (let i = 0; i < logAngles.length; i++) {
-          const a = logAngles[i]!;
-          const lx = Math.round(fireX + Math.cos(a) * (seatRx * 0.92));
-          const ly = Math.round(fireY + 10 + Math.sin(a) * (seatRy * 0.92));
-          this.sprites.draw(ctx, 'sprLogMenu', lx, ly, {
-            frame: i % 2,
-            flipX: lx > fireX,
-            pixelSnap: true,
-          });
-        }
-      }
-      return;
-    }
-
-    // Built-In Mode: Rich Hi-Bit tiled wasteland night campsite with starry mesa horizon, warm firelight & organic logs!
-    const horizonY = 38;
-    // 1. Tile our 2x Hi-Bit 64x64 (32x32 logical) sprFloor0 desert clearing floor!
-    if (this.sprites.hasSprite('sprFloor0')) {
-      const floorSpr = this.sprites.getSprite('sprFloor0')!;
-      const fCount = Math.max(1, floorSpr.frames.length);
-      for (let ty = horizonY - 6; ty < height; ty += 32) {
-        for (let tx = 0; tx < width; tx += 32) {
-          const hash = ((tx * 73) ^ (ty * 151) ^ 0x5a) & 0xff;
           this.sprites.draw(ctx, 'sprFloor0', tx, ty, { frame: hash % fCount, pixelSnap: true });
         }
       }
-      // Deep atmospheric wasteland night tint over the desert tiles
-      ctx.fillStyle = 'rgba(13, 9, 18, 0.70)';
-      ctx.fillRect(0, horizonY - 6, width, height - (horizonY - 6));
+      ctx.fillStyle = this.isSteamMode ? 'rgba(10, 7, 14, 0.56)' : 'rgba(12, 9, 16, 0.62)';
+      ctx.fillRect(0, 0, width, height);
     } else {
-      ctx.fillStyle = '#1f1514';
-      ctx.fillRect(0, horizonY, width, height - horizonY);
+      ctx.fillStyle = '#241b16';
+      ctx.fillRect(0, 0, width, height);
     }
 
-    // 2. Night twilight sky band at top with pixel stars & silhouetted mesas
-    ctx.fillStyle = '#0c0814';
-    ctx.fillRect(0, 0, width, 16);
-    ctx.fillStyle = '#160e20';
-    ctx.fillRect(0, 16, width, 12);
-    ctx.fillStyle = '#241624';
-    ctx.fillRect(0, 28, width, horizonY - 28);
-    // Soft twilight transition strip onto tiled desert clearing
-    ctx.fillStyle = '#181016';
-    ctx.fillRect(0, horizonY - 2, width, 3);
-
-    for (let s = 0; s < 18; s++) {
-      const sx = (s * 59 + 13) % width;
-      const sy = 4 + ((s * 17) % 22);
-      ctx.fillStyle = (s + Math.floor(timeSec * 2)) % 4 === 0 ? '#ffe9a8' : '#71658a';
-      ctx.fillRect(sx, sy, 1, 1);
-    }
-
-    // Distant jagged wasteland mesas along horizon
-    ctx.fillStyle = '#160e16';
-    const mesas: ReadonlyArray<[number, number, number]> = [
-      [0.24, 0.34, 12],
-      [0.33, 0.42, 7],
-      [0.44, 0.56, 11],
-      [0.57, 0.66, 15],
+    // Crisp stepped warm firelight pools around campfire
+    const flick = Math.round(Math.sin(timeSec * 12) * 3 + Math.cos(timeSec * 19) * 2);
+    const rings: ReadonlyArray<[number, number, string]> = [
+      [seatRx + 38 + flick, seatRy + 28 + flick, 'rgba(255, 130, 42, 0.14)'],
+      [seatRx + 18 + flick, seatRy + 16 + flick, 'rgba(255, 145, 48, 0.16)'],
+      [Math.round(seatRx * 0.65) + flick, Math.round(seatRy * 0.7) + flick, 'rgba(255, 178, 66, 0.18)'],
     ];
-    for (const [m0, m1, mh] of mesas) {
-      const mx = Math.round(m0 * width);
-      const mw = Math.round((m1 - m0) * width);
-      ctx.fillRect(mx, horizonY - mh, mw, mh + 2);
-      ctx.fillRect(mx + 3, horizonY - mh - 3, Math.max(4, mw - 6), 3);
-      ctx.fillStyle = '#38212b';
-      ctx.fillRect(mx + 3, horizonY - mh - 3, Math.max(4, mw - 6), 1);
-      ctx.fillStyle = '#160e16';
-    }
-
-    // 3. Smooth multi-ring warm amber-orange pixel firelight falloff over the textured tiles!
-    const flick = Math.round(Math.sin(timeSec * 12) * 2.5 + Math.cos(timeSec * 21) * 1.5);
-    const firePools: ReadonlyArray<[number, number, string]> = [
-      [seatRx + 52 + flick, seatRy + 34 + flick, 'rgba(255, 118, 36, 0.07)'],
-      [seatRx + 36 + flick, seatRy + 24 + flick, 'rgba(255, 128, 40, 0.08)'],
-      [seatRx + 20 + flick, seatRy + 15 + flick, 'rgba(255, 142, 46, 0.09)'],
-      [seatRx + 4 + flick, seatRy + 6 + flick, 'rgba(255, 160, 54, 0.10)'],
-      [Math.round(seatRx * 0.72) + flick, Math.round(seatRy * 0.74) + flick, 'rgba(255, 180, 66, 0.11)'],
-      [Math.round(seatRx * 0.42) + flick, Math.round(seatRy * 0.46) + flick, 'rgba(255, 212, 92, 0.14)'],
-      [Math.round(seatRx * 0.22) + flick, Math.round(seatRy * 0.26) + flick, 'rgba(255, 236, 148, 0.16)'],
-    ];
-    for (const [rx, ry, col] of firePools) {
+    for (const [rx, ry, col] of rings) {
       ctx.fillStyle = col;
-      for (let dy = -ry; dy <= ry; dy++) {
+      for (let dy = -ry; dy <= ry; dy += 2) {
         const norm = dy / Math.max(1, ry);
         const span = Math.round(rx * Math.sqrt(Math.max(0, 1 - norm * norm)));
-        if (span > 0) ctx.fillRect(fireX - span, fireY + 5 + dy, span * 2, 1);
+        ctx.fillRect(fireX - span, fireY + 4 + dy, span * 2, 2);
       }
     }
 
-    // 4. Sculpted stone fire-pit ring + rustic bark-textured sitting logs around clearing
-    const pitRocks: ReadonlyArray<[number, number]> = [
-      [-13, 3], [-8, 8], [-2, 10], [5, 9], [11, 4], [10, -2], [-10, -2],
-    ];
-    for (const [ox, oy] of pitRocks) {
-      ctx.fillStyle = '#100a0c';
-      ctx.fillRect(fireX + ox - 2, fireY + oy - 1, 6, 4);
-      ctx.fillStyle = '#5c4b47';
-      ctx.fillRect(fireX + ox - 1, fireY + oy, 4, 2);
-      ctx.fillStyle = '#a8846c';
-      ctx.fillRect(fireX + ox - 1, fireY + oy, 2, 1);
+    if (this.isSteamMode && this.sprites.hasSprite('sprLogMenu')) {
+      const logAngles = [-2.5, -0.6, 0.55, 2.55];
+      for (let i = 0; i < logAngles.length; i++) {
+        const a = logAngles[i]!;
+        const lx = Math.round(fireX + Math.cos(a) * (seatRx * 0.92));
+        const ly = Math.round(fireY + 10 + Math.sin(a) * (seatRy * 0.92));
+        this.sprites.draw(ctx, 'sprLogMenu', lx, ly, {
+          frame: i % 2,
+          flipX: lx > fireX,
+          pixelSnap: true,
+        });
+      }
+    } else {
+      const drawSittingLog = (lx: number, ly: number): void => {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(lx - 11, ly + 4, 23, 2);
+        ctx.fillStyle = '#0e0908';
+        ctx.fillRect(lx - 11, ly - 2, 22, 7);
+        ctx.fillStyle = '#5a3a24';
+        ctx.fillRect(lx - 10, ly - 1, 20, 5);
+        ctx.fillStyle = '#825638';
+        ctx.fillRect(lx - 10, ly - 1, 18, 2);
+        ctx.fillStyle = '#a3754e';
+        ctx.fillRect(lx + 8, ly, 2, 3);
+      };
+      drawSittingLog(fireX - Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
+      drawSittingLog(fireX + Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
+      drawSittingLog(fireX - Math.round(seatRx * 0.72), fireY - Math.round(seatRy * 0.45));
+      drawSittingLog(fireX + Math.round(seatRx * 0.72), fireY - Math.round(seatRy * 0.45));
     }
-
-    const drawSittingLog = (lx: number, ly: number): void => {
-      ctx.fillStyle = 'rgba(6, 4, 10, 0.55)';
-      ctx.fillRect(lx - 11, ly + 4, 23, 2);
-      ctx.fillStyle = '#120b09';
-      ctx.fillRect(lx - 11, ly - 2, 22, 7);
-      ctx.fillStyle = '#4e3120';
-      ctx.fillRect(lx - 10, ly - 1, 20, 5);
-      ctx.fillStyle = '#7d5034';
-      ctx.fillRect(lx - 10, ly - 1, 18, 2);
-      ctx.fillStyle = '#9e6b46';
-      ctx.fillRect(lx - 8, ly - 1, 12, 1);
-      ctx.fillStyle = '#331e13';
-      ctx.fillRect(lx - 6, ly + 1, 4, 1);
-      ctx.fillRect(lx + 2, ly + 2, 5, 1);
-      // Cut log wood grain end cap
-      ctx.fillStyle = '#a3754e';
-      ctx.fillRect(lx + 8, ly, 2, 3);
-      ctx.fillStyle = '#d4a678';
-      ctx.fillRect(lx + 8, ly, 1, 1);
-    };
-    drawSittingLog(fireX - Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
-    drawSittingLog(fireX + Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
-    drawSittingLog(fireX - Math.round(seatRx * 0.72), fireY - Math.round(seatRy * 0.45));
-    drawSittingLog(fireX + Math.round(seatRx * 0.72), fireY - Math.round(seatRy * 0.45));
   }
 
   private renderCampfireScreen(
@@ -1991,7 +2850,6 @@ export class MenuSystem {
 
     const isWide = width >= 380;
 
-    // Geometry: exact 1x 96x80 portrait + spacious Details Panel + wide non-squished campfire arc!
     const portW = 96;
     const portH = 80;
     const portX = isWide ? 8 : 4;
@@ -2002,19 +2860,16 @@ export class MenuSystem {
     const infoY = isWide ? 20 : 17;
     const infoH = isWide ? 138 : 143;
 
-    // Wide campfire clearing:
-    // - 16:9: centered cleanly between Portrait (x=104) and Details (x=276)
-    // - 4:3: spacious lower-left clearing below Portrait (y=97) and left of Details (x=178),
-    //   widening seatRx from 36 -> 70 so Fish & Rogue NEVER squish!
     const fireX = isWide ? 190 : 90;
     const fireY = isWide ? 90 : 131;
     const seatRx = isWide ? 66 : 70;
     const seatRy = isWide ? 38 : 21;
 
-    // 1. Atmospheric tiled wasteland campsite ground, logs & stepped firelight
+    // 1. Campfire ground + dark ink top/bottom bars
     this.renderCampfireGround(ctx, width, height, fireX, fireY, seatRx, seatRy, timeSec);
+    drawEdgeInkSplats(ctx, width, height, 14, 48, 0);
 
-    // 2. Depth-sorted campfire + ALL 12 mutants at CRISP 1.0x INTEGER SCALE!
+    // 2. Depth-sorted campfire + ALL 12 mutants at CRISP 1.0x INTEGER SCALE
     const sceneItems: Array<{ y: number; draw: () => void }> = [];
 
     sceneItems.push({
@@ -2032,7 +2887,6 @@ export class MenuSystem {
           ctx.fillStyle = '#ffe047';
           ctx.fillRect(fireX - 3, fireY - 3, 6, 5);
         }
-        // Rising flickering embers above flame
         for (let e = 0; e < 7; e++) {
           const phase = (timeSec * (0.85 + (e % 3) * 0.25) + e * 0.17) % 1;
           const ex = Math.round(fireX + Math.sin(timeSec * 4 + e * 2.1) * (4 + phase * 8));
@@ -2071,15 +2925,9 @@ export class MenuSystem {
       sceneItems.push({
         y: my,
         draw: () => {
-          // Crisp pixel ground shadow under mutant (zero smooth anti-aliased ellipse!)
-          ctx.fillStyle = isSel ? 'rgba(255, 224, 71, 0.34)' : 'rgba(8, 6, 12, 0.50)';
+          ctx.fillStyle = isSel ? 'rgba(255, 224, 71, 0.34)' : 'rgba(0, 0, 0, 0.44)';
           ctx.fillRect(mx - 6, my + 6, 12, 3);
           ctx.fillRect(mx - 4, my + 5, 8, 5);
-          if (isSel) {
-            ctx.fillStyle = '#ffe047';
-            ctx.fillRect(mx - 7, my + 7, 2, 1);
-            ctx.fillRect(mx + 5, my + 7, 2, 1);
-          }
 
           let sprName: string;
           if (isSel) {
@@ -2101,10 +2949,8 @@ export class MenuSystem {
             }
           }
 
-          // CRISP 1.0x INTEGER PIXEL SCALE FOR ALL 12 MUTANTS (fixes 0.5x Horror & 0.75x mixels!)
           const standLift = isSel ? Math.round(Math.sin(timeSec * 5) * 1) - 3 : 0;
 
-          // Selected Crown floating behind the standing mutant at crisp integer 1x scale!
           if (isSel && crown.id !== 'none') {
             const crX = mx + (faceLeft ? 8 : -8);
             const crY = Math.round(my + standLift - 9 + Math.sin(timeSec * 4.2) * 1.5);
@@ -2125,7 +2971,6 @@ export class MenuSystem {
             pixelSnap: true,
           });
 
-          // Starting or Golden weapon held at crisp 1.0x integer scale!
           if (isSel) {
             const startWepId = goldActive && storedGoldId ? storedGoldId : m.startingWeapon;
             const wepSpr = resolveWeaponSpriteName(startWepId, this.data);
@@ -2153,9 +2998,11 @@ export class MenuSystem {
         ? selected.sprites.bIdle
         : selected.sprites.idle;
 
-    // 3. Tightly framed integer 1x Big Portrait (96x80 — ZERO giant letterbox bars!)
-    ctx.fillStyle = '#0c0912';
-    ctx.fillRect(portX, portY, portW, portH);
+    // 3. Crisp Left Mutant Portrait (integer 1x for Built-In 96x80, clean integer fit for Steam!)
+    drawWastelandPlate(ctx, portX, portY, portW, portH, {
+      fill: '#08060c',
+      border: skin === 'b' ? '#d4b84a' : '#2a2434',
+    });
     const portSpriteName =
       skin === 'b' && selected.sprites.bPortrait && this.sprites.hasSprite(selected.sprites.bPortrait)
         ? selected.sprites.bPortrait
@@ -2167,25 +3014,20 @@ export class MenuSystem {
       portSprDef?.frames.length ?? 24,
     );
     let drewPort = false;
-    if (portSprDef && portSprDef.width === portW && portSprDef.height === portH && this.sprites.hasSprite(portSpriteName)) {
-      // Exact 1:1 integer pixel draw for 96x80 Built-In portraits (zero scaling, zero letterbox!)
-      drewPort = this.sprites.draw(ctx, portSpriteName, portX + portSprDef.originX, portY + portSprDef.originY, {
-        frame: portraitFrame,
-        pixelSnap: true,
-      });
-    } else {
+    if (portSprDef && portSprDef.width <= portW && portSprDef.height <= portH && this.sprites.hasSprite(portSpriteName)) {
+      drewPort = this.drawSpriteIntegerCentered(ctx, portSpriteName, portraitFrame, portX, portY, portW, portH);
+    } else if (portSprDef && this.sprites.hasSprite(portSpriteName)) {
+      // Crisp 1x integer clipped portrait (preserves zero fractional scaling on Campfire!)
       ctx.save();
       ctx.beginPath();
       ctx.rect(portX + 1, portY + 1, portW - 2, portH - 2);
       ctx.clip();
-      drewPort = this.sprites.drawInBox(
+      drewPort = this.sprites.draw(
         ctx,
         portSpriteName,
-        portraitFrame,
-        portX + 1,
-        portY + 1,
-        portW - 2,
-        portH - 2,
+        portX + Math.round(portW * 0.5),
+        portY + Math.round(portH * 0.5),
+        { frame: portraitFrame, scaleX: 1, scaleY: 1, pixelSnap: true },
       );
       ctx.restore();
     }
@@ -2194,21 +3036,12 @@ export class MenuSystem {
         allow2x: true,
       });
     }
-    drawPixelBorder(ctx, portX, portY, portW, portH, skin === 'b' ? '#ffe047' : '#635675', 1);
-    // Corner accent rivets on portrait frame
-    ctx.fillStyle = skin === 'b' ? '#ffe047' : '#9687ad';
-    ctx.fillRect(portX, portY, 3, 1);
-    ctx.fillRect(portX, portY, 1, 3);
-    ctx.fillRect(portX + portW - 3, portY, 3, 1);
-    ctx.fillRect(portX + portW - 1, portY, 1, 3);
 
-    // 16:9 under-portrait loadout summary badge (stored Golden weapon & active Crown icon)
     if (isWide) {
       const subY = portY + portH + 4;
       const subH = 54;
       drawWastelandPlate(ctx, portX, subY, portW, subH, {
-        fill: 'rgba(13, 10, 20, 0.90)',
-        border: '#5a4e6e',
+        fill: 'rgba(8, 6, 12, 0.88)',
       });
       const startWepId = goldActive && storedGoldId ? storedGoldId : selected.startingWeapon;
       const startWepLabel = resolveWeaponLabel(startWepId, this.data);
@@ -2230,7 +3063,7 @@ export class MenuSystem {
       }
     }
 
-    // 4. Right-Side Mutant Details Panel with DYNAMIC Y layout (ZERO text collisions!)
+    // 4. Right-Side Mutant Details Ink-Splat Panel (borderless dark ink — ZERO yellow wireframe!)
     if (this.isSteamMode && this.sprites.hasSprite('sprLoadoutSplat')) {
       this.sprites.draw(ctx, 'sprLoadoutSplat', infoX + infoW + 4, infoY + infoH + 2, {
         frame: 3,
@@ -2239,13 +3072,11 @@ export class MenuSystem {
       });
     }
     drawWastelandPlate(ctx, infoX, infoY, infoW, infoH, {
-      fill: 'rgba(14, 11, 22, 0.92)',
-      border: '#685b80',
-      topAccent: '#ffe047',
+      fill: 'rgba(8, 6, 12, 0.88)',
     });
 
     this.fonts.draw(ctx, selected.name, infoX + 6, infoY + 5, 'fntM1', {
-      color: '#ffe047',
+      color: '#ffffff',
       outline: true,
     });
     this.fonts.draw(ctx, `@r${selected.maxHp} HP`, infoX + infoW - 6, infoY + 6, 'fntSmall', {
@@ -2253,8 +3084,7 @@ export class MenuSystem {
       outline: true,
     });
 
-    // Subtle divider below header
-    ctx.fillStyle = 'rgba(130, 118, 156, 0.35)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.14)';
     ctx.fillRect(infoX + 5, infoY + 15, infoW - 10, 1);
 
     const hasBestLine = Boolean(mProg && mProg.runs > 0);
@@ -2315,7 +3145,7 @@ export class MenuSystem {
       () => ({ type: 'open_screen', screen: 'title' }),
       {
         font: 'fntSmall',
-        accent: '#ff8a38',
+        accent: '#ff7038',
         focused: inActions && this.campfireActionIndex === 4,
       },
     );
@@ -2326,12 +3156,12 @@ export class MenuSystem {
       outline: true,
     });
 
-    // 6. Uniform-Height Loadout Action Row: SKIN | FULL CROWN NAME | GOLD | GO! (ALL h=18, same rowY!)
+    // 6. Uniform-Height Loadout Action Row: SKIN | CROWN | GOLD | GO! (exact same y and h!)
     const rowY = 164;
     const btnH = 18;
     const gap = 4;
     const skinW = isWide ? 58 : 48;
-    const crownW = isWide ? 124 : 106; // Fits full "CROWN OF PROTECTION" (96px fallback / 76px steam) with ZERO truncation!
+    const crownW = isWide ? 124 : 106;
     const goldW = isWide ? 116 : 70;
     const goW = isWide ? 86 : 76;
     const barTotalW = skinW + crownW + goldW + goW + gap * 3;
@@ -2348,7 +3178,7 @@ export class MenuSystem {
       () => ({ type: 'toggle_bskin', mutant: selected.id }),
       {
         font: 'fntSmall',
-        accent: '#ffe047',
+        accent: '#ffffff',
         focused: inActions && this.campfireActionIndex === 0,
       },
     );
@@ -2391,7 +3221,7 @@ export class MenuSystem {
       () => (hasGold ? { type: 'toggle_golden', enabled: !save.useGoldenWeapon } : null),
       {
         font: 'fntSmall',
-        accent: hasGold ? '#ffe047' : '#5a5268',
+        accent: hasGold ? '#ffe047' : '#4a4456',
         focused: inActions && this.campfireActionIndex === 2,
       },
     );
@@ -2420,16 +3250,13 @@ export class MenuSystem {
       }),
       {
         font: 'fntSmall',
-        accent: '#52e864',
+        accent: '#48e048',
         focused: !inActions || this.campfireActionIndex === 3,
       },
     );
 
-    // 7. Active Crown Effect Description Line + Stored Golden Weapon Info Strip (y = 184..195)
+    // 7. Crown / Gold effect description strip (borderless dark ink!)
     const effectY = rowY + btnH + 2;
-    ctx.fillStyle = 'rgba(10, 8, 16, 0.80)';
-    ctx.fillRect(4, effectY, width - 8, 11);
-    drawPixelBorder(ctx, 4, effectY, width - 8, 11, crown.id !== 'none' ? 'rgba(201, 107, 255, 0.45)' : 'rgba(92, 82, 112, 0.35)', 1);
     const crownEffectText = crown.description.replace(/#/g, ' - ');
     const statusInfo =
       crown.id !== 'none'
@@ -2440,10 +3267,10 @@ export class MenuSystem {
     this.fonts.draw(ctx, statusInfo, Math.round(width * 0.5), effectY + 2, 'fntSmall', {
       align: 'center',
       maxWidth: width - 16,
-      shadow: true,
+      outline: true,
     });
 
-    // 8. Bottom 12-Mutant Roster Strip (crisp integer 1x 16x24 sprCharSelect!)
+    // 8. Bottom 12-Mutant Roster Strip over pure black ink-splat bottom bar
     const count = mutants.length;
     const slotGap = isWide ? 4 : 3;
     const slotW = Math.min(24, Math.floor((width - 12 - (count - 1) * slotGap) / count));
@@ -2461,11 +3288,7 @@ export class MenuSystem {
       const rid = `camp_mutant_${m.id}`;
       const hovered = this.hoveredId === rid;
 
-      ctx.fillStyle = isSelected
-        ? 'rgba(72, 54, 30, 0.96)'
-        : hovered
-          ? 'rgba(42, 36, 56, 0.92)'
-          : 'rgba(16, 13, 22, 0.88)';
+      ctx.fillStyle = isSelected ? '#28202e' : hovered ? '#1e1a26' : '#0c0a10';
       ctx.fillRect(sx, stripY, slotW, slotH);
       drawPixelBorder(
         ctx,
@@ -2473,11 +3296,10 @@ export class MenuSystem {
         stripY,
         slotW,
         slotH,
-        isSelected ? '#ffe047' : hovered ? '#ffffff' : '#4a4358',
+        isSelected ? '#ffffff' : hovered ? '#b8b8c4' : '#302c38',
         isSelected ? 2 : 1,
       );
 
-      // Draw sprCharSelect (16x24) at exact crisp integer 1x scale!
       const useCharSelect =
         charSelectSpr &&
         charSelectSpr.frames.length >= 12 &&
@@ -2501,7 +3323,6 @@ export class MenuSystem {
       });
     }
 
-    // Active mutant short name & adaptive input hint under strip
     const campHint =
       inputMode === 'gamepad'
         ? `@y[${g.confirm}] @w${selected.name}  @d[${g.prevTab}]SKIN [${g.nextTab}]CRN [${g.swap}]GOLD [UP]BAR`
@@ -2515,212 +3336,154 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // 3. MUTATION & ULTRA SELECTION SCREEN
+  // 3. LEVEL UP / MUTATION & ULTRA SELECT (MATCHES 11_levelup.png & part_2.mp4 00:11!)
   // --------------------------------------------------------------------------
 
   private renderMutationSelect(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, simState } = mctx;
-    const list = simState?.pendingMutations ?? [];
+    const { width, height, simState, save, timeSec } = mctx;
+    const cx = Math.round(width * 0.5);
+    const rawList = simState?.pendingMutations ?? [];
+    const list = rawList.length > 0 ? rawList : FALLBACK_MUTATION_DECK;
 
-    // Opaque dark backdrop (alpha >= 0.94) so world & portal warp text NEVER bleed through!
+    // 1. Opaque backdrop base (preserves UI selftest invariant) + animated swirling purple portal vortex!
     ctx.fillStyle = OPAQUE_MENU_BACKDROP;
     ctx.fillRect(0, 0, width, height);
+    drawPortalVortex(ctx, width, height, timeSec, false);
 
-    if (this.isSteamMode && this.sprites.hasSprite('bakMut')) {
-      const bx = Math.round((width - 320) * 0.5);
-      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.18, pixelSnap: true });
-    } else {
-      // Subtle stepped radioactive emerald radial stage & wasteland scanlines
-      ctx.fillStyle = 'rgba(32, 128, 54, 0.14)';
-      ctx.fillRect(Math.round(width * 0.12), 26, Math.round(width * 0.76), height - 56);
-      ctx.fillStyle = 'rgba(72, 232, 98, 0.08)';
-      ctx.fillRect(Math.round(width * 0.24), 44, Math.round(width * 0.52), height - 92);
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
-      for (let sy = 4; sy < height; sy += 6) {
-        ctx.fillRect(0, sy, width, 1);
-      }
-      ctx.fillStyle = 'rgba(82, 232, 100, 0.35)';
-      ctx.fillRect(10, 4, width - 20, 1);
-      ctx.fillRect(10, height - 5, width - 20, 1);
-    }
+    // 2. Top-right owned mutations cleanly visible
+    this.drawTopRightHudIcons(ctx, simState, width);
 
-    this.fonts.draw(ctx, '@gMUTATION', width * 0.5, 10, 'fntL', {
-      align: 'center',
-      outline: true,
-    });
-    const mutInputMode = mctx.inputMode ?? 'kbm';
-    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
-    const mutPrompt =
-      mutInputMode === 'gamepad'
-        ? `@dCHOOSE ONE  ([LS/DPAD] BROWSE  [${g.confirm}] PICK)`
-        : mutInputMode === 'touch'
-          ? '@dTAP A MUTATION TO SELECT'
-          : list.length <= 1
-            ? '@dPRESS 1 OR ENTER TO SELECT'
-            : `@dCHOOSE ONE  (CLICK OR KEYS 1-${list.length})`;
-    this.fonts.draw(ctx, mutPrompt, width * 0.5, 28, 'fntSmall', {
-      align: 'center',
-      outline: true,
+    // 3. Huge jagged radioactive slime-green outlined `LEVEL UP` header near top!
+    drawChunkyMenuText(ctx, 'LEVEL UP', cx, 36, false, '#58e830', {
+      slimeDrips: true,
+      timeSec,
     });
 
-    // Context badge for Horror's 5th choice or Crown of Destiny's single forced choice
     if (list.length >= 5) {
-      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', width * 0.5, 38, 'fntSmall', {
+      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', cx, 55, 'fntSmall', {
         align: 'center',
         outline: true,
       });
-    } else if (list.length === 1 && simState?.crown === 'destiny') {
-      this.fonts.draw(ctx, '@pCROWN OF DESTINY', width * 0.5, 38, 'fntSmall', {
+    } else if (rawList.length === 1 && simState?.crown === 'destiny') {
+      this.fonts.draw(ctx, '@pCROWN OF DESTINY', cx, 55, 'fntSmall', {
         align: 'center',
         outline: true,
       });
     }
 
-    if (list.length === 0) return;
+    // 4. Player's mutant sprite floating/tumbling gently in the center of the vortex!
+    const mutantId = simState?.player.mutant ?? save.selectedMutant;
+    const mutantDef = this.data.getMutant(mutantId);
+    const skin = simState?.player.skin ?? save.selectedSkins[mutantId] ?? 'a';
+    const floatSpr =
+      skin === 'b' && mutantDef.sprites.bIdle && this.sprites.hasSprite(mutantDef.sprites.bIdle)
+        ? mutantDef.sprites.bIdle
+        : mutantDef.sprites.idle;
+    const floatX = cx + Math.round(Math.sin(timeSec * 1.4) * 5);
+    const floatY = 98 + Math.round(Math.sin(timeSec * 2.4) * 5);
+    const floatRot = Math.sin(timeSec * 1.8) * 0.35;
+    this.sprites.draw(ctx, floatSpr, floatX, floatY, {
+      frame: Math.floor(timeSec * 6),
+      rotation: floatRot,
+      scaleX: 1,
+      scaleY: 1,
+      pixelSnap: true,
+    });
 
-    const isWide = width >= 380;
-    const cardW = list.length >= 5 ? (isWide ? 66 : 58) : 64;
-    const cardH = 74;
-    const gap = list.length >= 5 ? (isWide ? 10 : 5) : 10;
+    // 5. Jagged black ink-splat across the entire bottom edge!
+    drawEdgeInkSplats(ctx, width, height, 0, 38, 8);
+
+    // 6. Crisp square/vertical pixel-art Mutation cards rising along the bottom ink-splat!
+    const cardW = 28;
+    const cardH = 36;
+    const gap = 8;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const cardY = 54;
+    const baseCardY = height - 44;
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
+    for (let i = 0; i < list.length; i++) {
+      if (this.hoveredId === `mut_card_${i}`) {
+        activeIdx = i;
+        this.focusedIndex = i;
+        break;
+      }
+    }
+
+    // Selected mutation name & clean description text directly ABOVE the cards!
+    const focusedDef = this.data.getMutation(list[activeIdx]!);
+    if (focusedDef) {
+      this.fonts.draw(ctx, focusedDef.name, cx, baseCardY - 34, 'fntM1', {
+        align: 'center',
+        color: '#ffe047',
+        outline: true,
+      });
+      this.fonts.draw(ctx, focusedDef.description, cx, baseCardY - 22, 'fntSmall', {
+        align: 'center',
+        maxWidth: width - 24,
+        outline: true,
+      });
+    }
 
     for (let i = 0; i < list.length; i++) {
       const mutId = list[i]!;
       const def = this.data.getMutation(mutId);
       const rid = `mut_card_${i}`;
-      const hovered = this.hoveredId === rid;
-      if (hovered) {
-        activeIdx = i;
-        this.focusedIndex = i;
-      }
       const isFocused = i === activeIdx;
 
       const x = startX + i * (cardW + gap);
-      const y = isFocused ? cardY - 6 : cardY;
+      const y = isFocused ? baseCardY - 6 : baseCardY;
 
-      // Ornate beveled wasteland mutation card with glowing focus aura & corner rivets!
-      if (isFocused) {
-        ctx.fillStyle = 'rgba(82, 232, 100, 0.20)';
-        ctx.fillRect(x - 2, y - 2, cardW + 4, cardH + 4);
-      }
-      drawWastelandPlate(ctx, x, y, cardW, cardH, {
-        fill: isFocused ? 'rgba(26, 46, 32, 0.97)' : 'rgba(18, 20, 28, 0.93)',
-        border: isFocused ? '#52e864' : '#54586c',
-        borderThickness: isFocused ? 2 : 1,
-        topAccent: isFocused ? '#52e864' : undefined,
-        rivetColor: isFocused ? '#b6ffbe' : 'rgba(180, 184, 208, 0.42)',
-      });
+      // Crisp black backing + bright selection rim when lifted
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(x - 1, y - 1, cardW + 2, cardH + 2);
+      ctx.fillStyle = isFocused ? '#1c2c1e' : '#101018';
+      ctx.fillRect(x, y, cardW, cardH);
 
-      // Key badge [1]..[5]
-      this.fonts.draw(ctx, `@y[${i + 1}]`, x + 4, y + 5, 'fntSmall', { outline: true });
-
-      // Crisp INTEGER 1x sprSkillIcon (24x32 — ZERO 1.1875x mixels!)
       const drewIcon = def
         ? this.drawSpriteIntegerCentered(
             ctx,
             def.sprite || 'sprSkillIcon',
             def.iconFrame,
-            x + Math.floor((cardW - 24) / 2),
-            y + 15,
+            x + 2,
+            y + 2,
             24,
             32,
           )
         : false;
       if (!drewIcon) {
-        ctx.fillStyle = '#4de862';
-        ctx.fillRect(x + Math.floor((cardW - 24) / 2), y + 15, 24, 32);
+        ctx.fillStyle = '#48e048';
+        ctx.fillRect(x + 4, y + 4, cardW - 8, cardH - 8);
       }
 
-      const name = def ? def.name : mutId.replace(/_/g, ' ').toUpperCase();
-      this.fonts.draw(ctx, name, x + Math.floor(cardW * 0.5), y + 50, 'fntSmall', {
-        align: 'center',
-        maxWidth: cardW - 4,
-        lineSpacing: 0,
-        color: isFocused ? '#ffffff' : '#b8bec9',
-        outline: true,
-      });
+      if (isFocused) {
+        drawPixelBorder(ctx, x - 1, y - 1, cardW + 2, cardH + 2, '#ffffff', 1);
+        ctx.fillStyle = '#58f048';
+        ctx.fillRect(x, y + cardH, cardW, 2);
+      } else {
+        drawPixelBorder(ctx, x, y, cardW, cardH, '#262430', 1);
+      }
 
       this.regions.push({
         id: rid,
-        x,
-        y: cardY - 6,
-        w: cardW,
-        h: cardH + 6,
+        x: x - 2,
+        y: baseCardY - 8,
+        w: cardW + 4,
+        h: cardH + 10,
         onActivate: () => ({ type: 'pick_mutation', index: i, mutationId: mutId }),
       });
     }
 
-    // Selected mutation detail box with DYNAMIC Y height (tip NEVER collides on multi-line descriptions!)
-    const owned = simState?.player.mutations ?? [];
-    const focusedDef = this.data.getMutation(list[activeIdx]!);
-    const descBoxW = Math.min(304, width - 16);
-    const descX = Math.round((width - descBoxW) * 0.5);
-    const trayReserve = owned.length > 0 ? 22 : 8;
-
-    const fontSmall = this.fonts.getFont('fntSmall');
-    const smallLH = Math.round((fontSmall ? Math.max(1, fontSmall.lineHeight) : 8) * (fontSmall?.scaleY || 1));
-    const descLines = focusedDef
-      ? wrapMarkupText(fontSmall, focusedDef.description, descBoxW - 16, 1)
-      : [];
-    const tipLines = focusedDef
-      ? wrapMarkupText(fontSmall, `"${focusedDef.tip}"`, descBoxW - 16, 1)
-      : [];
-    const descEstH = descLines.length > 0 ? smallLH + (descLines.length - 1) * (smallLH + 1) : smallLH;
-    const tipEstH = tipLines.length > 0 ? smallLH + (tipLines.length - 1) * (smallLH + 1) : smallLH;
-    const descBoxH = Math.max(46, 20 + descEstH + 4 + tipEstH + 6);
-    const descY = Math.min(height - trayReserve - descBoxH, Math.max(cardY + cardH + 6, height - trayReserve - descBoxH));
-
-    drawWastelandPlate(ctx, descX, descY, descBoxW, descBoxH, {
-      fill: 'rgba(12, 14, 20, 0.96)',
-      border: '#52e864',
-      topAccent: 'rgba(82, 232, 100, 0.65)',
-    });
-
-    if (focusedDef) {
-      this.fonts.draw(ctx, `@y${focusedDef.name}`, width * 0.5, descY + 5, 'fntM1', {
-        align: 'center',
+    // Compact bottom-right timer (matching part_2.mp4 00:11!)
+    if (simState) {
+      this.fonts.draw(ctx, formatRunTimer(simState.stats.timeTicks), width - 4, height - 10, 'fntM1', {
+        align: 'right',
+        color: '#ffffff',
         outline: true,
       });
-      const descTextY = descY + 18;
-      const dRes = this.fonts.draw(ctx, focusedDef.description, width * 0.5, descTextY, 'fntSmall', {
-        align: 'center',
-        maxWidth: descBoxW - 16,
-        outline: true,
-      });
-      const tipY = descTextY + dRes.height + 4;
-      this.fonts.draw(ctx, `@d"${focusedDef.tip}"`, width * 0.5, tipY, 'fntSmall', {
-        align: 'center',
-        maxWidth: descBoxW - 16,
-      });
-    }
-
-    // Owned mutations tray cleanly padded inside viewport bottom (never 2px off bottom!)
-    if (owned.length > 0) {
-      const iconSize = 16;
-      const iconStep = 17;
-      const maxFit = Math.max(1, Math.floor((width - 16) / iconStep));
-      const shown = Math.min(owned.length, maxFit);
-      const rowW = shown * iconStep - 1;
-      const oxStart = Math.round((width - rowW) * 0.5);
-      const oy = height - iconSize - 4;
-      for (let i = 0; i < shown; i++) {
-        const oDef = this.data.getMutation(owned[i]!);
-        const ix = oxStart + i * iconStep;
-        const drew = oDef
-          ? this.drawSpriteIntegerCentered(ctx, oDef.hudSprite || 'sprSkillIconHUD', oDef.iconFrame, ix, oy, iconSize, iconSize)
-          : false;
-        if (!drew) {
-          ctx.fillStyle = '#4de862';
-          ctx.fillRect(ix + 2, oy + 2, 12, 12);
-        }
-      }
     }
   }
 
@@ -2728,44 +3491,27 @@ export class MenuSystem {
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, simState, save } = mctx;
+    const { width, height, simState, save, timeSec } = mctx;
+    const cx = Math.round(width * 0.5);
     const list = simState?.pendingUltras ?? [];
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
 
-    // Opaque dark backdrop (alpha >= 0.94) so world/portal text never bleeds through!
+    // First fillRect stays OPAQUE_MENU_BACKDROP (preserves parity test contract!), then swirls purple vortex over it!
     ctx.fillStyle = OPAQUE_MENU_BACKDROP;
     ctx.fillRect(0, 0, width, height);
+    drawPortalVortex(ctx, width, height, timeSec, false);
+    drawEdgeInkSplats(ctx, width, height, 0, 26, 6);
 
-    if (this.isSteamMode && this.sprites.hasSprite('bakMut')) {
-      const bx = Math.round((width - 320) * 0.5);
-      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.18, pixelSnap: true });
-    } else {
-      // Regal golden Ultra stage aura + horizontal scanlines
-      ctx.fillStyle = 'rgba(176, 122, 24, 0.14)';
-      ctx.fillRect(Math.round(width * 0.10), 28, Math.round(width * 0.80), height - 58);
-      ctx.fillStyle = 'rgba(255, 224, 71, 0.08)';
-      ctx.fillRect(Math.round(width * 0.22), 46, Math.round(width * 0.56), height - 92);
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
-      for (let sy = 4; sy < height; sy += 6) {
-        ctx.fillRect(0, sy, width, 1);
-      }
-      ctx.fillStyle = 'rgba(255, 224, 71, 0.42)';
-      ctx.fillRect(10, 4, width - 20, 1);
-      ctx.fillRect(10, height - 5, width - 20, 1);
-    }
-
-    this.fonts.draw(ctx, '@yULTRA MUTATION', width * 0.5, 16, 'fntL', {
-      align: 'center',
-      outline: true,
+    drawChunkyMenuText(ctx, 'ULTRA MUTATION', cx, 16, false, '#ffe047', {
+      timeSec,
     });
-    this.fonts.draw(ctx, '@gLEVEL ULTRA REACHED - CHOOSE YOUR PATH', width * 0.5, 36, 'fntSmall', {
+    this.fonts.draw(ctx, '@gLEVEL ULTRA REACHED - CHOOSE YOUR PATH', cx, 36, 'fntSmall', {
       align: 'center',
       outline: true,
     });
 
     if (list.length === 0) return;
 
-    // Tighter, balanced cards eliminating giant empty dark lower void!
     const cardW = 138;
     const cardH = 114;
     const gap = 16;
@@ -2789,16 +3535,10 @@ export class MenuSystem {
       const x = startX + i * (cardW + gap);
       const y = isFocused ? cardY - 4 : cardY;
 
-      if (isFocused) {
-        ctx.fillStyle = 'rgba(255, 224, 71, 0.20)';
-        ctx.fillRect(x - 2, y - 2, cardW + 4, cardH + 4);
-      }
       drawWastelandPlate(ctx, x, y, cardW, cardH, {
-        fill: isFocused ? 'rgba(50, 38, 22, 0.97)' : 'rgba(20, 17, 28, 0.94)',
-        border: isFocused ? '#ffe047' : '#655b7c',
+        fill: isFocused ? 'rgba(34, 24, 14, 0.95)' : 'rgba(12, 10, 18, 0.92)',
+        border: isFocused ? '#ffe047' : '#464056',
         borderThickness: isFocused ? 2 : 1,
-        topAccent: isFocused ? '#ffe047' : undefined,
-        rivetColor: isFocused ? '#fff5b0' : 'rgba(196, 188, 220, 0.42)',
       });
 
       this.fonts.draw(ctx, `@y[${i + 1}] ULTRA ${i === 0 ? 'A' : 'B'}`, x + cardW * 0.5, y + 7, 'fntSmall', {
@@ -2806,7 +3546,6 @@ export class MenuSystem {
         outline: true,
       });
 
-      // Crisp integer 1x sprEGSkillIcon (24x32 — zero fractional scaling!)
       const iconSprName = def?.sprite || 'sprEGSkillIcon';
       const iconSprDef = this.sprites.getSprite(iconSprName);
       const ultraFrame = def
@@ -2853,14 +3592,14 @@ export class MenuSystem {
         : uInput === 'touch'
           ? '@dTAP AN ULTRA CARD TO EVOLVE'
           : '@dCLICK OR KEYS 1-2 / ENTER TO EVOLVE';
-    this.fonts.draw(ctx, uPrompt, width * 0.5, height - 16, 'fntSmall', {
+    this.fonts.draw(ctx, uPrompt, cx, height - 14, 'fntSmall', {
       align: 'center',
       outline: true,
     });
   }
 
   // --------------------------------------------------------------------------
-  // 4. PAUSE OVERLAY (CLEAN 2-COLUMN NT OVERLAY + KEYBOARD MUTATION INSPECTION)
+  // 4. PAUSED SCREEN (EXACT MATCH TO 21_paused.png & part_4.mp4 00:25..00:42!)
   // --------------------------------------------------------------------------
 
   private renderPauseOverlay(
@@ -2868,416 +3607,404 @@ export class MenuSystem {
     mctx: MenuRenderContext,
   ): void {
     const { width, height, simState, save } = mctx;
+    const isWide = width >= 380;
     const cx = Math.round(width * 0.5);
 
-    // Heavy dark opaque backdrop cleanly masking gameplay HUD behind Pause!
-    ctx.fillStyle = 'rgba(8, 6, 14, 0.92)';
+    // 1. Uniformly dimmed frozen gameplay directly visible underneath (exact match to 21_paused.png!)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
     ctx.fillRect(0, 0, width, height);
 
-    const panelW = Math.min(304, width - 16);
-    const panelH = 196;
-    const px = cx - Math.floor(panelW / 2);
-    const py = Math.round((height - panelH) * 0.5);
+    // 2. Jagged pure-black ink-splat bottom bar with rising corner wings (exact match to 21_paused.png!)
+    drawEdgeInkSplats(ctx, width, height, 0, 38, 24);
 
-    // Riveted beveled gunmetal Pause overlay
-    drawWastelandPlate(ctx, px, py, panelW, panelH, {
-      fill: 'rgba(16, 13, 24, 0.98)',
-      border: '#ffe047',
-      topAccent: '#ffe047',
-      rivetColor: '#fff099',
-    });
+    // 3. HUGE Mutant Portrait rising cleanly on the LEFT side (x = 0..156, y = 38..208)!
+    const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
+    const skin: 'a' | 'b' = simState?.player.skin ?? save.selectedSkins[mutant.id] ?? 'a';
+    const portSpriteName =
+      skin === 'b' && mutant.sprites.bPortrait && this.sprites.hasSprite(mutant.sprites.bPortrait)
+        ? mutant.sprites.bPortrait
+        : mutant.sprites.portrait;
+    const portDef = this.sprites.getSprite(portSpriteName);
+    const portraitFrame = computePortraitFrame(
+      mutant.raceIndex,
+      skin,
+      portDef?.frames.length ?? 24,
+    );
+    const portZoneW = isWide ? 156 : 108;
+    const portTopY = 38;
+    const portBotY = height - 32;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, portTopY, portZoneW, portBotY - portTopY);
+    ctx.clip();
+    let drewBigPort = false;
+    if (portDef && this.sprites.hasSprite(portSpriteName)) {
+      const fRect = portDef.frames[Math.min(portraitFrame, portDef.frames.length - 1)];
+      const srcH = fRect?.targetH ?? portDef.height;
+      const srcW = fRect?.targetW ?? portDef.width;
+      const scale = srcH <= 92 ? (isWide ? 2 : 1) : 1;
+      const drawW = srcW * scale;
+      const drawH = srcH * scale;
+      const left = Math.round(Math.min(0, (portZoneW - drawW) * 0.28));
+      const top = Math.max(portTopY, portBotY - drawH + 10);
+      const drawX = left - ((fRect?.targetX ?? 0) - portDef.originX) * scale;
+      const drawY = top - ((fRect?.targetY ?? 0) - portDef.originY) * scale;
+      drewBigPort = this.sprites.draw(ctx, portSpriteName, drawX, drawY, {
+        frame: portraitFrame,
+        scaleX: scale,
+        scaleY: scale,
+        pixelSnap: true,
+      });
+    }
+    if (!drewBigPort) {
+      this.drawSpriteIntegerCentered(ctx, mutant.sprites.idle, 0, 8, 70, 72, 72, { allow2x: true });
+    }
+    ctx.restore();
 
-    this.fonts.draw(ctx, 'PAUSED', cx, py + 7, 'fntL', {
+    // Sweeping jagged black ink splat rising smoothly OVER the lower base of portrait & right corner!
+    drawInkSplatBanner(ctx, -6, height - 62, isWide ? 164 : 118, 34, 41);
+    drawInkSplatBanner(ctx, width - (isWide ? 128 : 108), height - 64, isWide ? 136 : 116, 38, 73);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, height - 34, width, 34);
+
+    // 4. Crisp top-right interactive mutation + ultra icons (bright on dark top-right ink backing)
+    if (simState) {
+      const ownedTotal = simState.player.mutations.length + (simState.player.ultra ? 1 : 0);
+      if (this.pauseInspectIdx >= ownedTotal) {
+        this.pauseInspectIdx = ownedTotal > 0 ? ownedTotal - 1 : -1;
+      }
+      if (ownedTotal > 0 || simState.crown !== 'none') {
+        const stripW = (ownedTotal + (simState.crown !== 'none' ? 1 : 0)) * 18 + 8;
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(width - stripW, 0, stripW, 24);
+      }
+      this.drawTopRightHudIcons(ctx, simState, width, { interactivePause: true });
+    }
+
+    // 5. Centered bold chunky white-outlined `PAUSED` + Area/Kills ink-splats + Road Map!
+    const centerAnchorX = isWide ? cx + 16 : cx + 22;
+    drawChunkyMenuText(ctx, 'PAUSED', centerAnchorX, 62, false, '#ffffff');
+
+    const areaText = simState
+      ? simState.loop > 0
+        ? `L${simState.loop} ${simState.areaCode}`
+        : simState.areaCode
+      : save.bestArea;
+    const kills = simState?.stats.kills ?? 0;
+
+    const badgeY = 88;
+    const leftSplatX = centerAnchorX - 74;
+    const rightSplatX = centerAnchorX + 12;
+    drawInkSplatBanner(ctx, leftSplatX, badgeY, 50, 12, 17);
+    drawInkSplatBanner(ctx, rightSplatX, badgeY, 58, 12, 53);
+
+    this.fonts.draw(ctx, areaText, leftSplatX + 25, badgeY + 2, 'fntM1', {
       align: 'center',
       color: '#ffffff',
       outline: true,
     });
 
-    if (simState) {
-      const mins = Math.floor((simState.stats.timeTicks / 30) / 60);
-      const secs = Math.floor((simState.stats.timeTicks / 30) % 60);
-      const timeStr = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-      const info = `@y${simState.loop > 0 ? `L${simState.loop} ` : ''}${simState.areaCode}  @wKILLS: ${simState.stats.kills}  @gLV ${simState.player.level}  @d${timeStr}`;
-      this.fonts.draw(ctx, info, cx, py + 26, 'fntSmall', { align: 'center', outline: true });
+    const drewSkull = this.drawSpriteIntegerCentered(ctx, 'sprKillsIcon', 0, rightSplatX + 6, badgeY + 1, 10, 10);
+    if (!drewSkull) {
+      ctx.fillStyle = '#e8e4dc';
+      ctx.fillRect(rightSplatX + 8, badgeY + 3, 6, 6);
+    }
+    this.fonts.draw(ctx, String(kills), rightSplatX + 22, badgeY + 2, 'fntM1', {
+      color: '#ffffff',
+      outline: true,
+    });
+
+    // Horizontal red/white run progression road map directly below!
+    drawRunRoadMap(
+      ctx,
+      this.sprites,
+      this.data,
+      {
+        areaCode: simState?.areaCode ?? save.bestArea,
+        mutant: mutant.id,
+        skin,
+        loop: simState?.loop ?? 0,
+        victory: false,
+      },
+      centerAnchorX,
+      118,
+    );
+
+    // Inspected Mutation / Ultra clean ink-splat tooltip (only when hovered or L/R inspected!)
+    if (simState && this.pauseInspectIdx >= 0) {
+      const muts = simState.player.mutations;
+      let tipTitle = '';
+      let tipDesc = '';
+      if (this.pauseInspectIdx < muts.length) {
+        const def = this.data.getMutation(muts[this.pauseInspectIdx]!);
+        if (def) {
+          tipTitle = `@g${def.name}`;
+          tipDesc = def.description.replace(/#/g, ' ');
+        }
+      } else if (simState.player.ultra) {
+        const uDef = this.data.getUltra(simState.player.ultra);
+        if (uDef) {
+          tipTitle = `@yULTRA: ${uDef.name}`;
+          tipDesc = uDef.description;
+        }
+      }
+      if (tipTitle) {
+        drawInkSplatBanner(ctx, centerAnchorX - 88, 138, 176, 22, 89);
+        this.fonts.draw(ctx, tipTitle, centerAnchorX, 140, 'fntSmall', { align: 'center', outline: true });
+        this.fonts.draw(ctx, tipDesc, centerAnchorX, 149, 'fntSmall', {
+          align: 'center',
+          maxWidth: 168,
+          outline: true,
+        });
+      }
     }
 
-    // Subtle divider below header
-    ctx.fillStyle = 'rgba(130, 120, 158, 0.35)';
-    ctx.fillRect(px + 10, py + 37, panelW - 20, 1);
-
-    // Left Column: Primary Pause Action Buttons
-    const btnW = 110;
-    const btnH = 20;
-    const bx = px + 10;
-
-    this.drawButton(ctx, 'pause_resume', bx, py + 44, btnW, btnH, 'RESUME', () => ({ type: 'resume' }), {
-      accent: '#52e864',
-      focused: this.focusedIndex === 0,
-      font: 'fntSmall',
-    });
-    this.drawButton(
-      ctx,
-      'pause_options',
-      bx,
-      py + 68,
-      btnW,
-      btnH,
-      'OPTIONS',
-      () => ({ type: 'open_screen', screen: 'options' }),
-      { accent: '#ffe047', focused: this.focusedIndex === 1, font: 'fntSmall' },
-    );
-    const pauseMode = mctx.inputMode ?? 'kbm';
-    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
-    const restartLabel =
-      pauseMode === 'gamepad'
-        ? `RESTART [${g.retry}]`
-        : pauseMode === 'touch'
-          ? 'RESTART'
-          : 'RESTART [R]';
-    this.drawButton(ctx, 'pause_restart', bx, py + 92, btnW, btnH, restartLabel, () => ({ type: 'restart' }), {
-      accent: '#ff8a38',
-      focused: this.focusedIndex === 2,
-      font: 'fntSmall',
-    });
-    this.drawButton(
+    // 6. Bottom-left jagged chunky menu items: MENU & RETRY
+    this.drawChunkyButton(
       ctx,
       'pause_campfire',
-      bx,
-      py + 116,
-      btnW,
-      btnH,
-      'CAMPFIRE',
+      10,
+      height - 56,
+      'MENU',
       () => ({ type: 'open_screen', screen: 'campfire' }),
-      { accent: '#ff4242', focused: this.focusedIndex === 3, font: 'fntSmall' },
+      { focused: this.focusedIndex === 3, align: 'left' },
+    );
+    this.drawChunkyButton(
+      ctx,
+      'pause_restart',
+      18,
+      height - 34,
+      'RETRY',
+      () => ({ type: 'restart' }),
+      { focused: this.focusedIndex === 2, align: 'left' },
     );
 
-    // Subtle vertical column rule between actions and loadout
-    const rx = bx + btnW + 12;
-    const rw = px + panelW - rx - 10;
-    ctx.fillStyle = 'rgba(130, 120, 158, 0.28)';
-    ctx.fillRect(rx - 6, py + 44, 1, 96);
+    // 7. Bottom-right jagged chunky menu items: SETTINGS & CONTINUE
+    this.drawChunkyButton(
+      ctx,
+      'pause_options',
+      width - 10,
+      height - 56,
+      'SETTINGS',
+      () => ({ type: 'open_screen', screen: 'options' }),
+      { focused: this.focusedIndex === 1, align: 'right' },
+    );
+    this.drawChunkyButton(
+      ctx,
+      'pause_resume',
+      width - 10,
+      height - 34,
+      'CONTINUE',
+      () => ({ type: 'resume' }),
+      { focused: this.focusedIndex === 0, align: 'right' },
+    );
 
-    let tooltipTitle = '';
-    let tooltipLine1 = '';
-    let tooltipLine2 = '';
-
-    if (simState) {
-      const player = simState.player;
-      const mutant = this.data.getMutant(player.mutant);
-
-      // Weapons section (clean flat layout — no nested box borders!)
-      this.fonts.draw(ctx, '@dWEAPONS', rx, py + 44, 'fntSmall', { shadow: true });
-      for (let s = 0; s < 2; s++) {
-        const slot = player.weapons[s];
-        const wy = py + 54 + s * 13;
-        if (slot) {
-          const wDef = this.data.getWeapon(slot.weaponId);
-          const wSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
-          this.drawSpriteIntegerCentered(ctx, wSpr, 0, rx, wy, 22, 10);
-          const wCol = slot.cursed ? '#d47aff' : wDef?.golden ? '#ffe047' : s === player.activeSlot ? '#ffffff' : '#9ca0ad';
-          const wName = resolveWeaponLabel(slot.weaponId, this.data);
-          const trimmed = wName.length > 17 ? `${wName.slice(0, 16).trimEnd()}.` : wName;
-          this.fonts.draw(ctx, trimmed, rx + 25, wy + 2, 'fntSmall', { color: wCol, shadow: true });
-        } else {
-          this.fonts.draw(ctx, '@d(EMPTY SLOT)', rx + 25, wy + 2, 'fntSmall', { shadow: false });
-        }
-      }
-
-      // Active Crown & Mutant row
-      const crownY = py + 84;
-      ctx.fillStyle = 'rgba(130, 120, 158, 0.22)';
-      ctx.fillRect(rx, crownY - 2, rw, 1);
-      const crownDef = this.data.getCrown(simState.crown);
-      if (crownDef.id !== 'none') {
-        this.drawSpriteIntegerCentered(ctx, crownDef.spriteIdle, 0, rx, crownY + 1, 16, 14);
-        this.fonts.draw(ctx, `@p${crownDef.name}`, rx + 18, crownY + 4, 'fntSmall', {
-          maxWidth: rw - 18,
-          shadow: true,
-        });
-      } else {
-        this.fonts.draw(ctx, `@y${mutant.name}  @dNO CROWN`, rx, crownY + 4, 'fntSmall', {
-          shadow: true,
-        });
-      }
-
-      // Mutations + Ultra interactive tray (supports BOTH hover AND Left/Right keyboard inspection!)
-      const mutY = py + 102;
-      ctx.fillStyle = 'rgba(130, 120, 158, 0.22)';
-      ctx.fillRect(rx, mutY - 2, rw, 1);
-
-      const muts = player.mutations;
-      const totalOwned = muts.length + (player.ultra ? 1 : 0);
-      if (this.pauseInspectIdx >= totalOwned) {
-        this.pauseInspectIdx = totalOwned > 0 ? totalOwned - 1 : -1;
-      }
-
-      this.fonts.draw(
-        ctx,
-        totalOwned > 0 ? `@dMUTATIONS (${totalOwned})  @y< L/R >` : '@dMUTATIONS (0)',
-        rx,
-        mutY + 1,
-        'fntSmall',
-      );
-
-      if (totalOwned === 0) {
-        this.fonts.draw(ctx, '@dNO MUTATIONS YET', rx, mutY + 14, 'fntSmall');
-      } else {
-        const iconStep = 14;
-        const cols = Math.max(1, Math.floor(rw / iconStep));
-        for (let i = 0; i < muts.length; i++) {
-          const def = this.data.getMutation(muts[i]!);
-          const col = i % cols;
-          const row = Math.floor(i / cols);
-          if (row >= 2) break;
-          const mx = rx + col * iconStep;
-          const my = mutY + 11 + row * 13;
-          const rid = `pause_mut_${i}`;
-          const hovered = this.hoveredId === rid;
-          if (hovered) {
-            this.pauseInspectIdx = i;
-          }
-          const inspected = hovered || this.pauseInspectIdx === i;
-          if (inspected && def) {
-            tooltipTitle = `@g${def.name}`;
-            tooltipLine1 = def.description.replace(/#/g, ' ');
-            tooltipLine2 = `@d"${def.tip}"`;
-            drawPixelBorder(ctx, mx - 1, my - 1, 14, 14, '#52e864', 1);
-          }
-          const drew = def
-            ? this.sprites.drawInBox(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 12, 12, { maxScale: 1 })
-            : false;
-          if (!drew) {
-            ctx.fillStyle = '#4de862';
-            ctx.fillRect(mx + 1, my + 1, 10, 10);
-          }
-          this.regions.push({
-            id: rid,
-            x: mx - 1,
-            y: my - 1,
-            w: 14,
-            h: 14,
-            onActivate: () => {
-              this.pauseInspectIdx = i;
-              return { type: 'ui_sfx', sound: 'sndHover' };
-            },
-          });
-        }
-        if (player.ultra) {
-          const uDef = this.data.getUltra(player.ultra);
-          const idx = muts.length;
-          const col = idx % cols;
-          const row = Math.min(1, Math.floor(idx / cols));
-          const ux = rx + col * iconStep;
-          const uy = mutY + 11 + row * 13;
-          const rid = 'pause_ultra';
-          const hovered = this.hoveredId === rid;
-          if (hovered) {
-            this.pauseInspectIdx = idx;
-          }
-          const inspected = hovered || this.pauseInspectIdx === idx;
-          if (inspected && uDef) {
-            tooltipTitle = `@yULTRA: ${uDef.name}`;
-            tooltipLine1 = uDef.description;
-            drawPixelBorder(ctx, ux - 1, uy - 1, 14, 14, '#ffe047', 1);
-          }
-          const egHudDef = this.sprites.getSprite('sprEGIconHUD');
-          const uFrame = uDef
-            ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
-            : 0;
-          const drew = uDef
-            ? this.sprites.drawInBox(ctx, 'sprEGIconHUD', uFrame, ux, uy, 12, 12, { maxScale: 1 })
-            : false;
-          if (!drew) {
-            ctx.fillStyle = '#ffe047';
-            ctx.fillRect(ux + 1, uy + 1, 10, 10);
-          }
-          this.regions.push({
-            id: rid,
-            x: ux - 1,
-            y: uy - 1,
-            w: 14,
-            h: 14,
-            onActivate: () => {
-              this.pauseInspectIdx = idx;
-              return { type: 'ui_sfx', sound: 'sndHover' };
-            },
-          });
-        }
-      }
-
-      // Default mutant tooltip: clean separate lines with ZERO stray trailing "|" pipe!
-      if (!tooltipTitle) {
-        tooltipTitle = `@y${mutant.name}  @d(${mutant.passiveName})`;
-        tooltipLine1 = `@wPASSIVE: @s${mutant.passiveDesc}`;
-        tooltipLine2 = `@gACTIVE: @s${mutant.activeName}`;
-      }
-    } else {
-      const m = this.data.getMutant(save.selectedMutant);
-      tooltipTitle = `@y${m.name}`;
-      tooltipLine1 = m.passiveDesc;
-    }
-
-    // Bottom tooltip strip (clean top divider, dynamic non-colliding lines!)
-    const tipY = py + 144;
-    ctx.fillStyle = 'rgba(130, 120, 158, 0.35)';
-    ctx.fillRect(px + 10, tipY, panelW - 20, 1);
-    ctx.fillStyle = 'rgba(10, 8, 16, 0.60)';
-    ctx.fillRect(px + 10, tipY + 1, panelW - 20, panelH - (tipY - py) - 6);
-
-    const tHead = this.fonts.draw(ctx, tooltipTitle, px + 14, tipY + 5, 'fntSmall', { outline: true });
-    const l1Y = tipY + 5 + tHead.height + 3;
-    const l1Res = this.fonts.draw(ctx, tooltipLine1, px + 14, l1Y, 'fntSmall', {
-      maxWidth: panelW - 28,
-      lineSpacing: 0,
-      shadow: true,
+    // 8. Bottom black bar labels + run timer (matches 21_paused.png!)
+    const pauseMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
+    const leftFooter =
+      pauseMode === 'gamepad'
+        ? `RETRY [${g.retry}]`
+        : 'KRUNKED THRONE';
+    this.fonts.draw(ctx, leftFooter, 8, height - 10, 'fntSmall', {
+      color: '#a8a8b2',
+      shadow: false,
     });
-    if (tooltipLine2) {
-      const l2Y = l1Y + l1Res.height + 2;
-      if (l2Y + 6 <= py + panelH - 3) {
-        this.fonts.draw(ctx, tooltipLine2, px + 14, l2Y, 'fntSmall', {
-          maxWidth: panelW - 28,
-          lineSpacing: 0,
-          shadow: true,
-        });
-      }
+    if (simState) {
+      this.fonts.draw(ctx, formatRunTimer(simState.stats.timeTicks), width - 6, height - 11, 'fntM1', {
+        align: 'right',
+        color: '#ffffff',
+        outline: true,
+      });
     }
   }
 
   // --------------------------------------------------------------------------
-  // 5. OPTIONS MENU (VIDEO/AUDIO, CONTROLS, KEYBINDS)
+  // 5. SETTINGS / OPTIONS (EXACT MATCH TO 22_settings_video.png & part_5.mp4!)
   // --------------------------------------------------------------------------
+
+  private drawOrangeBackArrow(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    x: number,
+    y: number,
+    hovered: boolean,
+  ): void {
+    const col = hovered ? '#ff8844' : '#d84e24';
+    const hi = hovered ? '#ffd488' : '#ff7b40';
+    // Crisp 1x curved Nuclear Throne back-arrow icon (matches top-left of 22_settings_video.png!)
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x, y + 4, 8, 5);
+    ctx.fillRect(x + 2, y + 2, 5, 9);
+    ctx.fillRect(x + 6, y + 4, 8, 9);
+    ctx.fillRect(x + 4, y + 10, 10, 5);
+
+    ctx.fillStyle = col;
+    // Arrowhead pointing left
+    ctx.fillRect(x + 1, y + 6, 6, 2);
+    ctx.fillRect(x + 3, y + 4, 4, 6);
+    ctx.fillRect(x + 5, y + 3, 2, 8);
+    // Curved U-stem looping down and left
+    ctx.fillRect(x + 7, y + 5, 5, 3);
+    ctx.fillRect(x + 10, y + 6, 3, 7);
+    ctx.fillRect(x + 5, y + 11, 7, 3);
+    ctx.fillStyle = hi;
+    ctx.fillRect(x + 3, y + 5, 3, 1);
+    ctx.fillRect(x + 7, y + 5, 4, 1);
+  }
+
+  private drawGamepadABXYBadges(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    x: number,
+    y: number,
+  ): void {
+    const badges: ReadonlyArray<[string, string]> = [
+      ['A', '#44d844'],
+      ['B', '#e83830'],
+      ['X', '#3890f0'],
+      ['Y', '#f0d030'],
+    ];
+    for (let i = 0; i < badges.length; i++) {
+      const [letter, col] = badges[i]!;
+      const bx = x + i * 11;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(bx, y, 9, 9);
+      ctx.fillStyle = col;
+      ctx.fillRect(bx + 1, y + 1, 7, 7);
+      this.fonts.draw(ctx, letter, bx + 5, y + 2, 'fntSmall', {
+        align: 'center',
+        color: '#0c0a10',
+        shadow: false,
+      });
+    }
+  }
 
   private renderOptionsScreen(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, save, returnScreenFromOptions, rebindingField } = mctx;
+    const { width, height, save, returnScreenFromOptions, rebindingField, simState, timeSec } = mctx;
     const inputMode = mctx.inputMode ?? 'kbm';
     const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
     const cx = Math.round(width * 0.5);
 
-    ctx.fillStyle = OPAQUE_MENU_BACKDROP;
-    ctx.fillRect(0, 0, width, height);
+    // 1. Dimmed frozen gameplay (from Pause) OR dimmed purple portal vortex (from Title) — NO modal box!
+    if (returnScreenFromOptions === 'paused' && simState) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+      ctx.fillRect(0, 0, width, height);
+    } else {
+      drawPortalVortex(ctx, width, height, timeSec, false);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
+      ctx.fillRect(0, 0, width, height);
+    }
 
-    const panelW = Math.min(296, width - 16);
-    const panelH = height - 16;
-    const px = Math.round((width - panelW) * 0.5);
-    const modalY = 8;
+    // 2. Jagged pure-black ink-splat top & bottom edge banners (matches 22_settings_video.png!)
+    drawEdgeInkSplats(ctx, width, height, 22, 20, 8);
 
-    drawWastelandPlate(ctx, px, modalY, panelW, panelH, {
-      fill: 'rgba(18, 15, 26, 0.98)',
-      border: '#72668a',
-      topAccent: 'rgba(255, 224, 71, 0.65)',
-    });
-
-    // Top row: BACK button on top-left + OPTIONS header centered cleanly at modalY + 8
-    this.drawButton(
+    // 3. Top-left curved orange BACK arrow + label (preserves opt_back hit region & gamepad BACK [O]!)
+    const backHovered = this.hoveredId === 'opt_back';
+    this.drawOrangeBackArrow(ctx, 6, 4, backHovered);
+    this.fonts.draw(
       ctx,
-      'opt_back',
-      px + 6,
-      modalY + 5,
-      50,
-      15,
       inputMode === 'gamepad' ? `BACK [${g.back}]` : 'BACK',
-      () => ({
-        type: 'open_screen',
-        screen: returnScreenFromOptions,
-      }),
-      { font: 'fntSmall', accent: '#ff8a38' },
+      22,
+      8,
+      'fntSmall',
+      { color: backHovered ? '#ffffff' : '#b8b6c2', outline: true },
     );
-
-    this.fonts.draw(ctx, 'OPTIONS', cx, modalY + 8, 'fntM1', {
-      align: 'center',
-      color: '#ffe047',
-      outline: true,
+    this.regions.push({
+      id: 'opt_back',
+      x: 4,
+      y: 2,
+      w: 58,
+      h: 18,
+      onActivate: () => ({ type: 'open_screen', screen: returnScreenFromOptions }),
     });
+
+    // 4. Bold chunky centered OPTIONS header
+    drawChunkyMenuText(ctx, 'OPTIONS', cx, 6, false, '#ffffff');
 
     if (inputMode === 'gamepad') {
-      this.fonts.draw(ctx, `@d[${g.prevTab}/${g.nextTab}]`, px + panelW - 8, modalY + 9, 'fntSmall', {
+      this.fonts.draw(ctx, `@d[${g.prevTab}/${g.nextTab}]`, width - 8, 8, 'fntSmall', {
         align: 'right',
         outline: true,
       });
     }
 
-    // 3-Tab Row below header (VIDEO/AUDIO | CONTROLS | KEYBINDS)
-    const tabW = 86;
-    const tabH = 14;
-    const tabGap = 6;
+    // 5. Compact borderless category tabs directly underneath (`VIDEO/AUDIO`, `CONTROLS`, `KEYBINDS`)
+    const tabY = 26;
+    const tabs: ReadonlyArray<{ id: string; tab: OptionsTab; label: string }> = [
+      { id: 'opt_tab_general', tab: 'general', label: 'VIDEO/AUDIO' },
+      { id: 'opt_tab_controls', tab: 'controls', label: 'CONTROLS' },
+      { id: 'opt_tab_keybinds', tab: 'keybinds', label: 'KEYBINDS' },
+    ];
+    const tabW = 78;
+    const tabGap = 10;
     const tabStartX = cx - Math.floor((tabW * 3 + tabGap * 2) / 2);
-    const tabY = modalY + 24;
-    this.drawButton(
-      ctx,
-      'opt_tab_general',
-      tabStartX,
-      tabY,
-      tabW,
-      tabH,
-      'VIDEO/AUDIO',
-      () => {
-        this.optionsTab = 'general';
-        this.focusedIndex = 0;
-        return { type: 'ui_sfx', sound: 'sndClick' };
-      },
-      { font: 'fntSmall', focused: this.optionsTab === 'general', accent: '#52e864' },
-    );
-    this.drawButton(
-      ctx,
-      'opt_tab_controls',
-      tabStartX + tabW + tabGap,
-      tabY,
-      tabW,
-      tabH,
-      'CONTROLS',
-      () => {
-        this.optionsTab = 'controls';
-        this.focusedIndex = 0;
-        return { type: 'ui_sfx', sound: 'sndClick' };
-      },
-      { font: 'fntSmall', focused: this.optionsTab === 'controls', accent: '#ffe047' },
-    );
-    this.drawButton(
-      ctx,
-      'opt_tab_keybinds',
-      tabStartX + (tabW + tabGap) * 2,
-      tabY,
-      tabW,
-      tabH,
-      'KEYBINDS',
-      () => {
-        this.optionsTab = 'keybinds';
-        this.focusedIndex = 0;
-        return { type: 'ui_sfx', sound: 'sndClick' };
-      },
-      { font: 'fntSmall', focused: this.optionsTab === 'keybinds', accent: '#52a8ff' },
-    );
 
-    const contentX = px + 10;
-    const contentW = panelW - 20;
-    let y = modalY + 44;
+    for (let i = 0; i < tabs.length; i++) {
+      const t = tabs[i]!;
+      const tx = tabStartX + i * (tabW + tabGap);
+      const active = this.optionsTab === t.tab;
+      const hov = this.hoveredId === t.id;
+      if (active) {
+        drawInkSplatBanner(ctx, tx + 4, tabY, tabW - 8, 10, i * 19);
+        ctx.fillStyle = '#44d844';
+        ctx.fillRect(tx + 12, tabY + 10, tabW - 24, 1);
+      }
+      this.fonts.draw(ctx, t.label, tx + Math.floor(tabW * 0.5), tabY + 2, 'fntSmall', {
+        align: 'center',
+        color: active || hov ? '#ffffff' : '#8a8a96',
+        outline: true,
+      });
+      this.regions.push({
+        id: t.id,
+        x: tx,
+        y: tabY - 1,
+        w: tabW,
+        h: 13,
+        onActivate: () => {
+          this.optionsTab = t.tab;
+          this.focusedIndex = 0;
+          return { type: 'ui_sfx', sound: 'sndClick' };
+        },
+      });
+    }
+
+    // 6. Crisp borderless two-column list matching 22_settings_video.png!
+    const colSpan = Math.min(248, width - 28);
+    const colLeft = cx - Math.floor(colSpan * 0.5);
+    const colVal = colLeft + Math.round(colSpan * 0.54);
+    let y = 44;
 
     if (this.optionsTab === 'general') {
-      // Video / Display toggles (compact 2-column row)
-      const halfW = Math.floor((contentW - 6) / 2);
-      this.drawButton(
+      const rowStep = 17;
+
+      // 0: ASPECT RATIO
+      this.drawSettingsToggleRow(
         ctx,
         'opt_widescreen',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        halfW,
-        16,
-        save.render.widescreen ? 'ASPECT: @g16:9 WIDE' : 'ASPECT: @w4:3 CLASSIC',
+        colSpan,
+        'ASPECT RATIO',
+        save.render.widescreen ? '16:9' : '4:3',
         () => ({ type: 'update_render', partial: { widescreen: !save.render.widescreen } }),
-        { font: 'fntSmall', focused: this.focusedIndex === 0 },
+        { focused: this.focusedIndex === 0 },
       );
+      y += rowStep;
+
+      // 1: FRAMERATE
       const curTargetFps: TargetFps = save.render.targetFps ?? (save.render.classic30Fps ? 30 : 120);
-      this.drawButton(
+      this.drawSettingsToggleRow(
         ctx,
         'opt_fps',
-        contentX + halfW + 6,
+        colLeft,
+        colVal,
         y,
-        halfW,
-        16,
-        formatTargetFpsLabel(curTargetFps),
+        colSpan,
+        'FRAMERATE',
+        `${curTargetFps}`,
         () => {
           const nextFps = cycleTargetFps(curTargetFps);
           return {
@@ -3285,139 +4012,133 @@ export class MenuSystem {
             partial: { targetFps: nextFps, classic30Fps: nextFps === 30 },
           };
         },
-        {
-          font: 'fntSmall',
-          accent: curTargetFps === 120 ? '#52a8ff' : curTargetFps === 60 ? '#52e864' : '#ffe047',
-          focused: this.focusedIndex === 1,
-        },
+        { focused: this.focusedIndex === 1 },
       );
-      y += 20;
+      y += rowStep;
 
-      // Crosshair style (crisp integer 1x 16x16 preview!) + Show FPS + Mute row
-      const thirdW = Math.floor((contentW - 8) / 3);
-      this.drawButton(
+      // 2: CROSSHAIR (3/9 + crisp 1x sprCrosshair right beside it — matches 22_settings_video.png!)
+      this.drawSettingsToggleRow(
         ctx,
         'opt_crosshair',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        thirdW,
-        18,
-        `AIM ${save.render.crosshairStyle + 1}`,
+        colSpan,
+        'CROSSHAIR',
+        `${save.render.crosshairStyle + 1}/9`,
         () => ({
           type: 'update_render',
           partial: { crosshairStyle: (save.render.crosshairStyle + 1) % 9 },
         }),
-        { font: 'fntSmall', labelOffsetX: -11, focused: this.focusedIndex === 2 },
-      );
-      // Crisp 1.0x INTEGER crosshair preview (zero 0.7x mixels!)
-      this.sprites.draw(ctx, 'sprCrosshair', contentX + thirdW - 12, y + 9, {
-        frame: save.render.crosshairStyle,
-        scaleX: 1,
-        scaleY: 1,
-        pixelSnap: true,
-      });
-
-      this.drawButton(
-        ctx,
-        'opt_showfps',
-        contentX + thirdW + 4,
-        y,
-        thirdW,
-        18,
-        save.render.showFps ? 'HUD FPS: @gON' : 'HUD FPS: @dOFF',
-        () => ({ type: 'update_render', partial: { showFps: !save.render.showFps } }),
-        { font: 'fntSmall', focused: this.focusedIndex === 3 },
-      );
-
-      this.drawButton(
-        ctx,
-        'opt_mute',
-        contentX + (thirdW + 4) * 2,
-        y,
-        thirdW,
-        18,
-        save.audio.muted ? '@rMUTED' : '@gAUDIO ON',
-        () => ({ type: 'update_audio', partial: { muted: !save.audio.muted } }),
         {
-          font: 'fntSmall',
-          accent: save.audio.muted ? '#ff4242' : '#52e864',
-          focused: this.focusedIndex === 4,
+          focused: this.focusedIndex === 2,
+          afterDraw: (valRightX, ry) => {
+            this.sprites.draw(ctx, 'sprCrosshair', valRightX + 12, ry + 4, {
+              frame: save.render.crosshairStyle,
+              scaleX: 1,
+              scaleY: 1,
+              pixelSnap: true,
+            });
+          },
         },
       );
-      y += 23;
+      y += rowStep;
 
-      // Sliders with visible pixel thumb knobs: Screen Shake + Master / SFX / Music / Ambience volumes
-      this.drawSliderRow(
+      // 3: HUD FPS
+      this.drawSettingsToggleRow(
+        ctx,
+        'opt_showfps',
+        colLeft,
+        colVal,
+        y,
+        colSpan,
+        'HUD FPS',
+        save.render.showFps ? 'ON' : 'OFF',
+        () => ({ type: 'update_render', partial: { showFps: !save.render.showFps } }),
+        { focused: this.focusedIndex === 3 },
+      );
+      y += rowStep;
+
+      // 4: AUDIO
+      this.drawSettingsToggleRow(
+        ctx,
+        'opt_mute',
+        colLeft,
+        colVal,
+        y,
+        colSpan,
+        'AUDIO',
+        save.audio.muted ? 'MUTED' : 'ON',
+        () => ({ type: 'update_audio', partial: { muted: !save.audio.muted } }),
+        { focused: this.focusedIndex === 4 },
+      );
+      y += rowStep;
+
+      // 5..9: Bright green filled slider bars with white-outlined percentage!
+      this.drawSettingsSliderRow(
         ctx,
         'opt_shake',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
-        'SCREEN SHAKE',
+        colSpan,
+        'SCREENSHAKE',
         save.render.screenShakeScale,
-        (v) => ({
-          type: 'update_render',
-          partial: { screenShakeScale: v },
-        }),
+        (v) => ({ type: 'update_render', partial: { screenShakeScale: v } }),
         { focused: this.focusedIndex === 5 },
       );
-      y += 19;
+      y += rowStep;
 
-      this.drawSliderRow(
+      this.drawSettingsSliderRow(
         ctx,
         'opt_vol_master',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
+        colSpan,
         'MASTER VOL',
         save.audio.masterVolume,
-        (v) => ({
-          type: 'update_audio',
-          partial: { masterVolume: v },
-        }),
+        (v) => ({ type: 'update_audio', partial: { masterVolume: v } }),
         { focused: this.focusedIndex === 6 },
       );
-      y += 19;
+      y += rowStep;
 
-      this.drawSliderRow(
+      this.drawSettingsSliderRow(
         ctx,
         'opt_vol_sfx',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
+        colSpan,
         'SFX VOLUME',
         save.audio.sfxVolume,
-        (v) => ({
-          type: 'update_audio',
-          partial: { sfxVolume: v },
-        }),
+        (v) => ({ type: 'update_audio', partial: { sfxVolume: v } }),
         { focused: this.focusedIndex === 7 },
       );
-      y += 19;
+      y += rowStep;
 
-      this.drawSliderRow(
+      this.drawSettingsSliderRow(
         ctx,
         'opt_vol_music',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
-        'MUSIC VOLUME',
+        colSpan,
+        'MUSIC VOL',
         save.audio.musicVolume,
-        (v) => ({
-          type: 'update_audio',
-          partial: { musicVolume: v },
-        }),
+        (v) => ({ type: 'update_audio', partial: { musicVolume: v } }),
         { focused: this.focusedIndex === 8 },
       );
-      y += 19;
+      y += rowStep;
 
-      this.drawSliderRow(
+      this.drawSettingsSliderRow(
         ctx,
         'opt_vol_amb',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
-        'AMBIENCE VOL',
+        colSpan,
+        'AMBIENCE',
         save.audio.ambienceVolume,
         (v) => ({ type: 'update_audio', partial: { ambienceVolume: v } }),
         { focused: this.focusedIndex === 9 },
@@ -3425,56 +4146,52 @@ export class MenuSystem {
 
       const genFooter =
         inputMode === 'gamepad'
-          ? `@d[UP/DN] SELECT  [L/R] SLIDER  [${g.confirm}] TOGGLE  [${g.back}] BACK`
+          ? `@d[UP/DN] SELECT  [L/R] ADJUST  [${g.confirm}] TOGGLE  [${g.back}] BACK`
           : '@dCLICK, DRAG, OR ARROWS - SETTINGS AUTO-SAVE';
-      this.fonts.draw(ctx, genFooter, cx, modalY + panelH - 12, 'fntSmall', { align: 'center' });
+      this.fonts.draw(ctx, genFooter, cx, height - 11, 'fntSmall', { align: 'center' });
     } else if (this.optionsTab === 'controls') {
-      // Dedicated Controls Tab (PC / Tesla Controller + Touch Controls)
       const ctrl = save.controls;
-      this.drawButton(
+      const rowStep = 19;
+
+      this.drawSettingsToggleRow(
         ctx,
         'opt_ctrl_aim_assist',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
-        18,
-        ctrl.gamepadAimAssist ? 'GAMEPAD AIM ASSIST: @gON' : 'GAMEPAD AIM ASSIST: @dOFF',
+        colSpan,
+        'AIM ASSIST',
+        ctrl.gamepadAimAssist ? 'ON' : 'OFF',
         () => ({ type: 'update_controls', partial: { gamepadAimAssist: !ctrl.gamepadAimAssist } }),
-        {
-          font: 'fntSmall',
-          accent: ctrl.gamepadAimAssist ? '#52e864' : '#ffe047',
-          focused: this.focusedIndex === 0,
-        },
+        { focused: this.focusedIndex === 0 },
       );
-      y += 22;
+      y += rowStep;
 
-      this.drawButton(
+      this.drawSettingsToggleRow(
         ctx,
         'opt_ctrl_rumble',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
-        18,
-        ctrl.gamepadRumble ? 'CONTROLLER RUMBLE: @gON' : 'CONTROLLER RUMBLE: @dOFF',
+        colSpan,
+        'RUMBLE',
+        ctrl.gamepadRumble ? 'ON' : 'OFF',
         () => ({ type: 'update_controls', partial: { gamepadRumble: !ctrl.gamepadRumble } }),
-        {
-          font: 'fntSmall',
-          accent: ctrl.gamepadRumble ? '#52e864' : '#ffe047',
-          focused: this.focusedIndex === 1,
-        },
+        { focused: this.focusedIndex === 1 },
       );
-      y += 23;
+      y += rowStep;
 
       const dzNorm =
         (ctrl.gamepadDeadzone - MIN_GAMEPAD_DEADZONE) /
         (MAX_GAMEPAD_DEADZONE - MIN_GAMEPAD_DEADZONE);
-      this.drawSliderRow(
+      this.drawSettingsSliderRow(
         ctx,
         'opt_ctrl_deadzone',
-        contentX,
+        colLeft,
+        colVal,
         y,
-        contentW,
-        'STICK DEADZONE',
+        colSpan,
+        'DEADZONE',
         dzNorm,
         (norm) => {
           const mapped =
@@ -3489,131 +4206,109 @@ export class MenuSystem {
           valueText: `${Math.round(ctrl.gamepadDeadzone * 100)}%`,
         },
       );
-      y += 20;
+      y += rowStep;
 
-      this.drawButton(
+      // Keep exact text expected by controller-integration tests!
+      const touchHovered = this.hoveredId === 'opt_ctrl_touch' || this.focusedIndex === 3;
+      if (touchHovered) {
+        drawInkSplatBanner(ctx, colLeft - 6, y - 1, colSpan + 12, 12, 91);
+      }
+      this.fonts.draw(
         ctx,
-        'opt_ctrl_touch',
-        contentX,
-        y,
-        contentW,
-        18,
         ctrl.touchMode === 'auto'
           ? 'TOUCH STICKS: @gAUTO (TOUCH ONLY)'
           : 'TOUCH STICKS: @dOFF',
-        () => ({
+        colLeft,
+        y + 1,
+        'fntM1',
+        { color: touchHovered ? '#ffffff' : '#96969e', outline: true },
+      );
+      this.regions.push({
+        id: 'opt_ctrl_touch',
+        x: colLeft - 6,
+        y: y - 2,
+        w: colSpan + 12,
+        h: 14,
+        onActivate: () => ({
           type: 'update_controls',
           partial: { touchMode: ctrl.touchMode === 'auto' ? 'off' : 'auto' },
         }),
-        {
-          font: 'fntSmall',
-          accent: ctrl.touchMode === 'auto' ? '#52a8ff' : '#ff8a38',
-          focused: this.focusedIndex === 3,
-        },
-      );
-      y += 23;
+      });
+      y += rowStep + 2;
 
-      // Live PC / Tesla / Console Controller Status, Mini Stick/Trigger Telemetry & Dynamic Legend Card
-      const boxH = 58;
+      // Color-coded A B X Y Gamepad Style row (matches part_5.mp4 00:05!)
+      this.fonts.draw(ctx, 'GAMEPAD STYLE', colLeft, y + 1, 'fntM1', {
+        color: '#96969e',
+        outline: true,
+      });
+      this.drawGamepadABXYBadges(ctx, colVal, y);
+      this.fonts.draw(ctx, g.familyLabel, colVal + 46, y + 2, 'fntSmall', {
+        color: '#ffffff',
+        outline: true,
+      });
+      y += 18;
+
+      // Clean borderless controller status & live telemetry / rumble test region
       const canTestRumble = Boolean(mctx.gamepadConnected || inputMode === 'touch');
       const cardHovered = canTestRumble && this.hoveredId === 'opt_ctrl_pad_status';
-      ctx.fillStyle = cardHovered ? 'rgba(26, 22, 38, 0.92)' : 'rgba(12, 10, 18, 0.85)';
-      ctx.fillRect(contentX, y, contentW, boxH);
-      drawPixelBorder(
-        ctx,
-        contentX,
-        y,
-        contentW,
-        boxH,
-        cardHovered ? '#ffe047' : mctx.gamepadConnected ? '#52e864' : '#4a4358',
-        1,
-      );
+      drawInkSplatBanner(ctx, colLeft - 2, y, colSpan + 4, 48, 37);
 
       if (canTestRumble) {
         this.regions.push({
           id: 'opt_ctrl_pad_status',
-          x: contentX,
+          x: colLeft,
           y,
-          w: contentW,
-          h: boxH,
+          w: colSpan,
+          h: 48,
           onActivate: () => ({ type: 'test_rumble' }),
         });
       }
 
       const rawName = (mctx.gamepadName ?? '').trim().toUpperCase();
-      const shortName = rawName.length > 20 ? `${rawName.slice(0, 19).trimEnd()}.` : rawName;
-      const profileTag =
-        mctx.gamepadProfile === 'standard'
-          ? 'STD'
-          : mctx.gamepadProfile === 'linux-xpad'
-            ? 'XPAD'
-            : mctx.gamepadProfile === 'xbox-bt-hid'
-              ? 'BT-HID'
-              : mctx.gamepadProfile === 'sony-hid'
-                ? 'SONY'
-                : mctx.gamepadProfile === 'nintendo-hid'
-                  ? 'NSW'
-                  : mctx.gamepadProfile === 'logitech-dinput'
-                    ? 'DINPUT'
-                    : mctx.gamepadProfile
-                      ? 'COMPAT'
-                      : '';
+      const shortName = rawName.length > 18 ? `${rawName.slice(0, 17).trimEnd()}.` : rawName;
       const padLine = mctx.gamepadConnected
-        ? `@g${g.familyLabel}: @w${shortName || 'CONNECTED'}${profileTag ? ` @d(${profileTag})` : ''}`
+        ? `@g${g.familyLabel}: @w${shortName || 'CONNECTED'}`
         : '@dNO CONTROLLER DETECTED - PRESS ANY PAD BUTTON';
-      this.fonts.draw(ctx, padLine, cx, y + 5, 'fntSmall', {
+      this.fonts.draw(ctx, padLine, cx, y + 4, 'fntSmall', {
         align: 'center',
-        maxWidth: contentW - 10,
+        maxWidth: colSpan - 8,
         outline: true,
       });
 
-      // Live crisp mini stick-dot pads (LS / RS) + LT / RT trigger bars inside left/right corners
       const dbg = mctx.gamepadDebug;
       if (mctx.gamepadConnected && dbg) {
-        const padSize = 14;
-        const padY = y + 20;
+        const padSize = 12;
+        const padY = y + 16;
         const clampUnit = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
-
-        // Left Stick micro-pad + LT bar
-        const lsX = contentX + 5;
-        ctx.fillStyle = '#090710';
+        const lsX = colLeft + 4;
+        ctx.fillStyle = '#14121c';
         ctx.fillRect(lsX, padY, padSize, padSize);
         drawPixelBorder(ctx, lsX, padY, padSize, padSize, '#504866', 1);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
-        ctx.fillRect(lsX + 6, padY + 6, 2, 2);
-        const lDotX = Math.round(lsX + 6 + clampUnit(dbg.lx) * 5);
-        const lDotY = Math.round(padY + 6 + clampUnit(dbg.ly) * 5);
         ctx.fillStyle = '#52e864';
-        ctx.fillRect(lDotX, lDotY, 2, 2);
-
-        const ltX = lsX + padSize + 2;
-        ctx.fillStyle = dbg.lt ? '#52a8ff' : '#242032';
-        ctx.fillRect(ltX, padY, 3, padSize);
-        drawPixelBorder(ctx, ltX, padY, 3, padSize, dbg.lt ? '#a6dcff' : '#4a4358', 1);
-
-        // Right Stick micro-pad + RT bar
-        const rsX = contentX + contentW - 5 - padSize;
-        const rtX = rsX - 5;
-        ctx.fillStyle = dbg.rt ? '#ff6a38' : '#242032';
-        ctx.fillRect(rtX, padY, 3, padSize);
-        drawPixelBorder(ctx, rtX, padY, 3, padSize, dbg.rt ? '#ffb48a' : '#4a4358', 1);
-
-        ctx.fillStyle = '#090710';
+        ctx.fillRect(
+          Math.round(lsX + 5 + clampUnit(dbg.lx) * 4),
+          Math.round(padY + 5 + clampUnit(dbg.ly) * 4),
+          2,
+          2,
+        );
+        const rsX = colLeft + colSpan - 4 - padSize;
+        ctx.fillStyle = '#14121c';
         ctx.fillRect(rsX, padY, padSize, padSize);
         drawPixelBorder(ctx, rsX, padY, padSize, padSize, '#504866', 1);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
-        ctx.fillRect(rsX + 6, padY + 6, 2, 2);
-        const rDotX = Math.round(rsX + 6 + clampUnit(dbg.rx) * 5);
-        const rDotY = Math.round(padY + 6 + clampUnit(dbg.ry) * 5);
         ctx.fillStyle = '#ffe047';
-        ctx.fillRect(rDotX, rDotY, 2, 2);
+        ctx.fillRect(
+          Math.round(rsX + 5 + clampUnit(dbg.rx) * 4),
+          Math.round(padY + 5 + clampUnit(dbg.ry) * 4),
+          2,
+          2,
+        );
       }
 
       this.fonts.draw(
         ctx,
         `@yLS@w MOVE @yRS@w AIM @y${g.fire}/${g.nextTab}@w FIRE @y${g.active}/${g.prevTab}@w ACT`,
         cx,
-        y + 19,
+        y + 15,
         'fntSmall',
         { align: 'center', outline: true },
       );
@@ -3621,17 +4316,16 @@ export class MenuSystem {
         ctx,
         `@y${g.swap}@w SWAP @y${g.confirm}/${g.pickup}@w USE @y${g.pause}@w PAUSE @y${g.retry}@w RETRY`,
         cx,
-        y + 31,
+        y + 25,
         'fntSmall',
         { align: 'center', outline: true },
       );
-
       const rumbleLine = mctx.gamepadConnected
-        ? `@b[${g.pickup}] TEST RUMBLE  @d(CLICK CARD)`
+        ? `@b[${g.pickup}] TEST RUMBLE${cardHovered ? ' @y(CLICK)' : ''}`
         : inputMode === 'touch'
-          ? '@bTAP CARD TO TEST HAPTICS'
+          ? '@bTAP TO TEST HAPTICS'
           : '@dXBOX / PLAYSTATION / NINTENDO / TESLA READY';
-      this.fonts.draw(ctx, rumbleLine, cx, y + 45, 'fntSmall', {
+      this.fonts.draw(ctx, rumbleLine, cx, y + 36, 'fntSmall', {
         align: 'center',
         outline: mctx.gamepadConnected,
       });
@@ -3640,82 +4334,85 @@ export class MenuSystem {
         inputMode === 'gamepad'
           ? `@d[${g.prevTab}/${g.nextTab}] TABS  [L/R] ADJUST  [${g.confirm}] TOGGLE  [${g.back}] BACK`
           : '@dPC / TESLA GAMEPAD + TOUCH AUTO-DETECT';
-      this.fonts.draw(ctx, ctrlFooter, cx, modalY + panelH - 12, 'fntSmall', {
-        align: 'center',
-      });
+      this.fonts.draw(ctx, ctrlFooter, cx, height - 11, 'fntSmall', { align: 'center' });
     } else {
-      // Keybind Rebinding Table (balanced vertical spacing + ESC TO CANCEL + conflict auto-swap note)
-      const rowH = 20;
-      const colW = Math.floor((contentW - 8) / 2);
-
+      // Borderless Keybinds list matching part_5.mp4 00:09!
+      const rowStep = 17;
       for (let i = 0; i < KEYBIND_LABELS.length; i++) {
         const entry = KEYBIND_LABELS[i]!;
-        const col = i % 2;
-        const row = Math.floor(i / 2);
-        const rx = contentX + col * (colW + 8);
-        const ry = y + 4 + row * (rowH + 6);
+        const ry = y + i * rowStep;
         const isListening = rebindingField === entry.field;
-        const isRowFocused = this.focusedIndex === i;
-        const keyText = isListening
-          ? '@yPRESS KEY...'
-          : `@w${formatKeyCode(save.keybinds[entry.field])}`;
+        const rid = `opt_kb_${entry.field}`;
+        const hovered = this.hoveredId === rid || this.focusedIndex === i || isListening;
 
-        this.fonts.draw(ctx, entry.label, rx, ry + 5, 'fntSmall', {
-          color: isRowFocused ? '#ffe047' : '#c8c6d4',
+        if (hovered) {
+          drawInkSplatBanner(ctx, colLeft - 6, ry - 1, colSpan + 12, 12, i * 13);
+        }
+
+        this.fonts.draw(ctx, entry.label, colLeft, ry + 1, 'fntM1', {
+          color: hovered ? '#ffffff' : '#96969e',
           outline: true,
         });
 
-        this.drawButton(
-          ctx,
-          `opt_kb_${entry.field}`,
-          rx + colW - 54,
-          ry,
-          54,
-          rowH - 2,
-          keyText,
-          () => ({ type: 'begin_rebind', field: entry.field }),
-          { font: 'fntSmall', focused: isListening || isRowFocused, accent: '#ffe047' },
-        );
+        const keyText = isListening
+          ? 'PRESS KEY...'
+          : formatKeyCode(save.keybinds[entry.field]);
+
+        if (hovered) {
+          ctx.fillStyle = isListening ? '#ffe047' : '#ffffff';
+          ctx.fillRect(colVal - 3, ry - 1, Math.max(24, keyText.length * 6 + 6), 11);
+          this.fonts.draw(ctx, keyText, colVal, ry + 1, 'fntM1', {
+            color: '#0c0a10',
+            shadow: false,
+          });
+        } else {
+          this.fonts.draw(ctx, keyText, colVal, ry + 1, 'fntM1', {
+            color: '#b8b8c2',
+            outline: true,
+          });
+        }
+
+        this.regions.push({
+          id: rid,
+          x: colLeft - 6,
+          y: ry - 2,
+          w: colSpan + 12,
+          h: 14,
+          onActivate: () => ({ type: 'begin_rebind', field: entry.field }),
+        });
       }
 
-      // Informative status banner filling lower region cleanly (with prominent ESC TO CANCEL!)
-      const noteY = y + 4 + 4 * (rowH + 6) + 4;
-      ctx.fillStyle = rebindingField ? 'rgba(64, 48, 18, 0.72)' : 'rgba(12, 10, 18, 0.72)';
-      ctx.fillRect(contentX, noteY, contentW, 20);
-      drawPixelBorder(
-        ctx,
-        contentX,
-        noteY,
-        contentW,
-        20,
-        rebindingField ? '#ffe047' : 'rgba(104, 96, 128, 0.45)',
-        1,
-      );
-      const kbHint = rebindingField
-        ? '@yLISTENING FOR KEY - PRESS ESC TO CANCEL'
-        : '@dCLICK OR ENTER TO REBIND - CONFLICTS AUTO-SWAP - ESC TO CANCEL';
-      this.fonts.draw(ctx, kbHint, cx, noteY + 6, 'fntSmall', {
+      const resetY = y + KEYBIND_LABELS.length * rowStep + 4;
+      const resetHovered = this.hoveredId === 'opt_kb_reset' || this.focusedIndex === 8;
+      if (resetHovered) {
+        drawInkSplatBanner(ctx, cx - 64, resetY - 1, 128, 13, 101);
+      }
+      this.fonts.draw(ctx, 'RESET DEFAULTS', cx, resetY + 1, 'fntM1', {
         align: 'center',
-        maxWidth: contentW - 8,
-        outline: Boolean(rebindingField),
+        color: resetHovered ? '#ff8a38' : '#96969e',
+        outline: true,
+      });
+      this.regions.push({
+        id: 'opt_kb_reset',
+        x: cx - 64,
+        y: resetY - 2,
+        w: 128,
+        h: 15,
+        onActivate: () => ({ type: 'reset_keybinds' }),
       });
 
-      this.drawButton(
-        ctx,
-        'opt_kb_reset',
-        cx - 58,
-        modalY + panelH - 28,
-        116,
-        17,
-        'RESET DEFAULTS',
-        () => ({ type: 'reset_keybinds' }),
-        { font: 'fntSmall', accent: '#ff8a38', focused: this.focusedIndex === 8 },
-      );
+      const kbHint = rebindingField
+        ? '@yLISTENING FOR KEY - PRESS ESC TO CANCEL'
+        : '@dCLICK OR ENTER TO REBIND - CONFLICTS AUTO-SWAP';
+      this.fonts.draw(ctx, kbHint, cx, height - 11, 'fntSmall', {
+        align: 'center',
+        outline: Boolean(rebindingField),
+      });
     }
   }
 
   // --------------------------------------------------------------------------
-  // 6. GAME OVER & VICTORY SUMMARY
+  // 6. GAME OVER (02_gameover.png, 03_portal_gen.png) & VICTORY (23_victory.png)
   // --------------------------------------------------------------------------
 
   private renderEndScreen(
@@ -3726,99 +4423,112 @@ export class MenuSystem {
     const { width, height, simState, save } = mctx;
     const cx = Math.round(width * 0.5);
 
-    // Clean opaque dark backdrop so gameplay arena never bleeds brightly through corners!
-    ctx.fillStyle = victory ? 'rgba(16, 14, 9, 0.96)' : 'rgba(15, 7, 10, 0.96)';
+    // 1. Dimmed frozen gameplay directly visible underneath (ZERO opaque dark modal card!)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
     ctx.fillRect(0, 0, width, height);
 
-    const areaCode = simState?.areaCode ?? save.bestArea;
+    // 2. Iconic 28px pure #000000 top & bottom letterbox bars + corner ink splats
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, width, 28);
+    ctx.fillRect(0, height - 28, width, 28);
+    drawInkSplatBanner(ctx, width - 84, 18, 88, 12, 61);
+    drawInkSplatBanner(ctx, -6, height - 36, 92, 12, 83);
+
+    // 3. Top-right owned mutations + ultra + crown on the top black bar (matches 23_victory.png!)
+    this.drawTopRightHudIcons(ctx, simState, width);
+
+    // 4. Bold centered white-outlined headline (matches 02_gameover.png & 23_victory.png!)
+    const areaCode: AreaCode | string = simState?.areaCode ?? save.bestArea;
     const loopNum = simState?.loop ?? 0;
-    const muts = simState?.player.mutations ?? [];
-    const ultra = simState?.player.ultra ?? null;
-    const hasMutRow = muts.length > 0 || Boolean(ultra);
-
-    // Dynamically size card height so 0-mutation Game Over never leaves a giant empty black void!
-    const cardW = Math.min(292, width - 18);
-    const cardH = hasMutRow ? 148 : 118;
-    const totalBlockH = 38 + cardH + 10 + 22;
-    const topY = Math.max(6, Math.round((height - totalBlockH) * 0.5));
-    const cardX = Math.round((width - cardW) * 0.5);
-    const cardY = topY + 36;
-
-    // Header
-    this.fonts.draw(
-      ctx,
-      victory ? 'VICTORY!' : 'GAME OVER',
-      cx,
-      topY,
-      'fntL',
-      { align: 'center', color: victory ? '#ffe047' : '#ff4242', outline: true },
-    );
-
-    const sub = victory
-      ? '@yYOU REACHED THE KRUNKED THRONE'
+    const headline = victory
+      ? 'YOU REACHED THE KRUNKED THRONE'
       : loopNum > 0
-        ? '@yTHE STRUGGLE CONTINUES'
+        ? 'THE STRUGGLE CONTINUES'
         : areaCode.startsWith('7-')
-          ? '@rYOU ALMOST REACHED THE KRUNKED THRONE'
-          : '@dYOU DID NOT REACH THE KRUNKED THRONE';
-    this.fonts.draw(ctx, sub, cx, topY + 20, 'fntSmall', { align: 'center', outline: true });
-
-    // Summary Card
-    drawWastelandPlate(ctx, cardX, cardY, cardW, cardH, {
-      fill: 'rgba(14, 11, 22, 0.97)',
-      border: victory ? '#ffe047' : '#c92a3c',
-      topAccent: victory ? '#ffe047' : '#c92a3c',
-      rivetColor: victory ? '#fff299' : '#ff7d8a',
+          ? 'YOU ALMOST REACHED THE KRUNKED THRONE'
+          : 'YOU DID NOT REACH THE KRUNKED THRONE';
+    this.fonts.draw(ctx, headline, cx, 54, 'fntM1', {
+      align: 'center',
+      color: '#ffffff',
+      outline: true,
     });
 
+    // 5. Middle jagged pure-black ink-splat badges!
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
-    const areaText = simState
-      ? simState.loop > 0
-        ? `L${simState.loop} ${simState.areaCode}`
-        : simState.areaCode
-      : save.bestArea;
-    const kills = simState?.stats.kills ?? 0;
-    const isNewBest = kills > 0 && kills >= save.bestKills && save.totalRuns > 0;
-    const bosses = simState?.stats.bossesDefeated ?? [];
-    const mins = Math.floor(((simState?.stats.timeTicks ?? 0) / 30) / 60);
-    const secs = Math.floor(((simState?.stats.timeTicks ?? 0) / 30) % 60);
-    const timeStr = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-
-    // Left sprite box: killer sprite on Game Over (skipping blank dissolve / white frame 0!), portrait on Victory
-    const boxX = cardX + 10;
-    const boxY = cardY + 10;
-    const boxSize = 52;
-    ctx.fillStyle = '#0c0912';
-    ctx.fillRect(boxX, boxY, boxSize, boxSize);
-    drawPixelBorder(ctx, boxX, boxY, boxSize, boxSize, '#524863', 1);
-
     const endSkin: 'a' | 'b' = simState?.player.skin ?? save.selectedSkins[mutant.id] ?? 'a';
+    const kills = simState?.stats.kills ?? 0;
+    const timeStr = formatRunTimer(simState?.stats.timeTicks ?? 0);
+
+    const badgeY = 86;
+    const leftBlockCx = cx - 48;
+    const areaBadgeX = leftBlockCx - 66;
+    const killsBadgeX = leftBlockCx + 8;
+    const rightBadgeX = cx + 52;
+
+    // Left ink-splat: Area code (`1-3` / `7-3`) or `END1` on Victory!
+    const areaBadgeText = victory
+      ? `END${loopNum + 1}`
+      : loopNum > 0
+        ? `L${loopNum} ${areaCode}`
+        : areaCode;
+    drawInkSplatBanner(ctx, areaBadgeX, badgeY, 48, 12, 19);
+    this.fonts.draw(ctx, areaBadgeText, areaBadgeX + 24, badgeY + 2, 'fntM1', {
+      align: 'center',
+      color: '#ffffff',
+      outline: true,
+    });
+
+    // Middle ink-splat: `[skull] <kills>`
+    drawInkSplatBanner(ctx, killsBadgeX, badgeY, 52, 12, 43);
+    const drewSkull = this.drawSpriteIntegerCentered(ctx, 'sprKillsIcon', 0, killsBadgeX + 6, badgeY + 1, 10, 10);
+    if (!drewSkull) {
+      ctx.fillStyle = '#e8e4dc';
+      ctx.fillRect(killsBadgeX + 8, badgeY + 3, 6, 6);
+    }
+    this.fonts.draw(ctx, String(kills), killsBadgeX + 22, badgeY + 2, 'fntM1', {
+      color: '#ffffff',
+      outline: true,
+    });
+
+    // Horizontal red/white run progression road map directly under area + kills!
+    drawRunRoadMap(
+      ctx,
+      this.sprites,
+      this.data,
+      {
+        areaCode,
+        mutant: mutant.id,
+        skin: endSkin,
+        loop: loopNum,
+        victory,
+      },
+      leftBlockCx - 4,
+      118,
+    );
+
     if (victory) {
-      const portSprName =
-        endSkin === 'b' && mutant.sprites.bPortrait && this.sprites.hasSprite(mutant.sprites.bPortrait)
-          ? mutant.sprites.bPortrait
-          : mutant.sprites.portrait;
-      const portDef = this.sprites.getSprite(portSprName);
-      const portraitFrame = computePortraitFrame(
-        mutant.raceIndex,
-        endSkin,
-        portDef?.frames.length ?? 24,
-      );
-      const drew = this.sprites.drawInBox(
-        ctx,
-        portSprName,
-        portraitFrame,
-        boxX + 2,
-        boxY + 2,
-        boxSize - 4,
-        boxSize - 4,
-      );
-      if (!drew) {
-        this.drawSpriteIntegerCentered(ctx, mutant.sprites.idle, 0, boxX + 4, boxY + 4, boxSize - 8, boxSize - 8, {
-          allow2x: true,
-        });
-      }
+      // Victory right ink-splat: `COMPLETION TIME` + `02:58.97` (exact match to 23_victory.png!)
+      drawInkSplatBanner(ctx, rightBadgeX, badgeY, 82, 22, 67);
+      this.fonts.draw(ctx, 'COMPLETION TIME', rightBadgeX + 41, badgeY + 2, 'fntSmall', {
+        align: 'center',
+        color: '#b8b8c4',
+        outline: true,
+      });
+      this.fonts.draw(ctx, timeStr, rightBadgeX + 41, badgeY + 11, 'fntM1', {
+        align: 'center',
+        color: '#ffffff',
+        outline: true,
+      });
     } else {
+      // Game Over right ink-splats: `KILLED BY` + killer sprite + `00:13.33` (exact match to 03_portal_gen.png!)
+      drawInkSplatBanner(ctx, rightBadgeX, badgeY, 72, 14, 71);
+      this.fonts.draw(ctx, 'KILLED BY', rightBadgeX + 36, badgeY + 3, 'fntM1', {
+        align: 'center',
+        color: '#ffffff',
+        outline: true,
+      });
+
+      // Killer sprite (or resting mutant corpse fallback) sitting cleanly between KILLED BY and timer!
       const rawCause = (simState?.player.lastDamageCause ?? '').trim().toUpperCase();
       const rawKiller = (simState?.player.lastKillerSprite ?? '').trim();
       const isUnknownCause = !rawCause || rawCause === 'WASTELAND' || rawCause === 'UNKNOWN';
@@ -3832,257 +4542,78 @@ export class MenuSystem {
         rawKiller !== 'sprMutant10Idle' &&
         this.sprites.hasSprite(rawKiller);
 
-      let drew = false;
+      const sprBoxX = rightBadgeX + 18;
+      const sprBoxY = badgeY + 15;
+      let drewKiller = false;
       if (hasValidKiller) {
         const killerDef = this.sprites.getSprite(rawKiller);
         const killerFrame = resolveDisplaySpriteFrame(killerDef, rawKiller);
-        drew = this.drawSpriteIntegerCentered(
-          ctx,
-          rawKiller,
-          killerFrame,
-          boxX + 4,
-          boxY + 4,
-          boxSize - 8,
-          boxSize - 8,
-          { allow2x: true },
-        );
+        drewKiller = this.drawSpriteIntegerCentered(ctx, rawKiller, killerFrame, sprBoxX, sprBoxY, 36, 26);
       }
-      if (!drew) {
+      if (!drewKiller) {
         const deadDef = this.sprites.getSprite(deadSpr);
         const deadFrame = resolveDisplaySpriteFrame(deadDef, deadSpr);
-        drew = this.drawSpriteIntegerCentered(
-          ctx,
-          deadSpr,
-          deadFrame,
-          boxX + 4,
-          boxY + 4,
-          boxSize - 8,
-          boxSize - 8,
-          { allow2x: true },
-        );
+        drewKiller = this.drawSpriteIntegerCentered(ctx, deadSpr, deadFrame, sprBoxX, sprBoxY, 36, 26);
       }
-      if (!drew) {
-        this.drawSpriteIntegerCentered(ctx, 'sprBanditIdle', 0, boxX + 4, boxY + 4, boxSize - 8, boxSize - 8, {
-          allow2x: true,
-        });
+      if (!drewKiller) {
+        this.drawSpriteIntegerCentered(ctx, 'sprBanditIdle', 0, sprBoxX, sprBoxY, 36, 26);
       }
-    }
 
-    // Stats column
-    const sx = boxX + boxSize + 10;
-    const statsW = cardW - boxSize - 26;
-    if (!victory) {
-      const cause = (simState?.player.lastDamageCause || 'WASTELAND').toUpperCase();
-      this.fonts.draw(ctx, `@rKILLED BY: @w${cause}`, sx, cardY + 10, 'fntSmall', {
-        maxWidth: statsW,
-        outline: true,
-      });
-    } else {
-      this.fonts.draw(ctx, `@yMUTANT: @w${mutant.name}`, sx, cardY + 10, 'fntSmall', {
+      // Lower-right ink splat: exact `MM:SS.cc` run timer!
+      const timeBadgeY = badgeY + 42;
+      drawInkSplatBanner(ctx, rightBadgeX, timeBadgeY, 72, 14, 97);
+      this.fonts.draw(ctx, timeStr, rightBadgeX + 36, timeBadgeY + 3, 'fntM1', {
+        align: 'center',
+        color: '#ffffff',
         outline: true,
       });
     }
 
-    this.fonts.draw(
-      ctx,
-      `@dAREA: @w${areaText}   @dTIME: @w${timeStr}${isNewBest ? '  @yNEW BEST!' : ''}`,
-      sx,
-      cardY + 23,
-      'fntSmall',
-      { outline: true },
-    );
-    this.fonts.draw(
-      ctx,
-      `@dKILLS: @y${kills}   @dLV: @g${simState?.player.level ?? 1}   @dBEST: @w${save.bestKills}`,
-      sx,
-      cardY + 35,
-      'fntSmall',
-      { outline: true },
-    );
+    // 6. Centered bottom spiky ink-splatter burst holding chunky `MENU` & `RETRY` (matches 03_portal_gen.png & part_6.mp4 00:20!)
+    ctx.fillStyle = '#000000';
+    drawInkSplatBanner(ctx, cx - 34, height - 46, 68, 22, 109);
+    drawPixelLine(ctx, cx - 18, height - 42, cx - 28, height - 66, 2);
+    drawPixelLine(ctx, cx - 4, height - 44, cx - 8, height - 68, 2);
+    drawPixelLine(ctx, cx + 12, height - 44, cx + 22, height - 64, 2);
+    drawPixelLine(ctx, cx + 26, height - 42, cx + 44, height - 58, 2);
+    drawPixelLine(ctx, cx - 30, height - 38, cx - 48, height - 52, 2);
 
-    // Carried Weapons & Active Crown row
-    const wepRowY = cardY + 48;
-    if (simState) {
-      let wx = sx;
-      for (let s = 0; s < 2; s++) {
-        const slot = simState.player.weapons[s];
-        if (!slot) continue;
-        const wSpr = resolveWeaponSpriteName(slot.weaponId, this.data);
-        ctx.fillStyle = 'rgba(24, 20, 34, 0.85)';
-        ctx.fillRect(wx, wepRowY, 26, 13);
-        drawPixelBorder(ctx, wx, wepRowY, 26, 13, slot.cursed ? '#b94aff' : '#524863', 1);
-        this.drawSpriteIntegerCentered(ctx, wSpr, 0, wx + 2, wepRowY + 1, 22, 11);
-        wx += 30;
-      }
-      if (simState.crown !== 'none') {
-        const cDef = this.data.getCrown(simState.crown);
-        this.drawSpriteIntegerCentered(ctx, cDef.spriteIdle, 0, wx + 1, wepRowY, 16, 14);
-        wx += 18;
-      }
-      if (bosses.length > 0) {
-        const bossLabel = bosses
-          .map((b) => (b === 'nuclear_throne' ? 'THRONE' : b.replace(/_/g, ' ').toUpperCase()))
-          .join(', ');
-        this.fonts.draw(ctx, `@dBOSS: @w${bossLabel}`, wx + 2, wepRowY + 3, 'fntSmall', {
-          maxWidth: cardX + cardW - wx - 8,
-          shadow: true,
-        });
-      }
-    }
-
-    // Iconic NT Horizontal Area Progression Map (with Vault support, clear Loop L1/L2 labels & clean 7-3 spacing!)
-    const mapY = cardY + 75;
-    const mapLeft = cardX + 18;
-    const mapRight = cardX + cardW - 22;
-    const nodeCount = MAIN_PATH_AREAS.length;
-    const progressIdx = victory ? nodeCount - 1 : resolveRunProgressIndex(areaCode);
-
-    ctx.fillStyle = 'rgba(10, 8, 16, 0.84)';
-    ctx.fillRect(cardX + 8, mapY - 8, cardW - 16, 26);
-    drawPixelBorder(ctx, cardX + 8, mapY - 8, cardW - 16, 26, '#3b344a', 1);
-
-    // Base road rail + completed emerald/gold path
-    ctx.fillStyle = '#3e394a';
-    ctx.fillRect(mapLeft, mapY + 1, mapRight - mapLeft, 2);
-    const reachX = Math.round(mapLeft + ((mapRight - mapLeft) * progressIdx) / Math.max(1, nodeCount - 1));
-    ctx.fillStyle = victory ? '#ffe047' : '#52e864';
-    ctx.fillRect(mapLeft, mapY + 1, Math.max(2, reachX - mapLeft), 2);
-
-    for (let n = 0; n < nodeCount; n++) {
-      const nx = Math.round(mapLeft + ((mapRight - mapLeft) * n) / Math.max(1, nodeCount - 1));
-      const reached = n <= progressIdx;
-      const isBossArea = MAIN_PATH_AREAS[n]!.endsWith('-3');
-      if (n === nodeCount - 1) {
-        // Positioned at mapY - 4..mapY + 4 -> crisp 4px vertical gap above "7-3" label at mapY + 8!
-        const drewThrone = this.drawSpriteIntegerCentered(ctx, 'sprGameOverThrone', 0, nx - 4, mapY - 4, 9, 8);
-        if (!drewThrone) {
-          ctx.fillStyle = reached ? '#ffe047' : '#635c75';
-          ctx.fillRect(nx - 3, mapY - 3, 6, 6);
-        }
-      } else {
-        const dotSize = isBossArea ? 4 : 3;
-        ctx.fillStyle = reached ? (isBossArea ? '#ffe047' : '#52e864') : '#524b61';
-        ctx.fillRect(nx - Math.floor(dotSize / 2), mapY + 2 - Math.floor(dotSize / 2), dotSize, dotSize);
-      }
-    }
-
-    // Reached area skull marker (cleanly above road rail)
-    if (!victory) {
-      const drewSkull = this.drawSpriteIntegerCentered(ctx, 'sprGameOverSkull', 0, reachX - 4, mapY - 7, 8, 6);
-      if (!drewSkull) {
-        ctx.fillStyle = '#ff4242';
-        ctx.fillRect(reachX - 2, mapY - 6, 4, 4);
-      }
-    }
-
-    // Clear Loop L1/L2 labels on BOTH ends + Vault/Secret tag when applicable, spaced cleanly below Throne!
-    const leftLabel = loopNum > 0 ? `@yL${loopNum} @d1-1` : '1-1';
-    const rightLabel = loopNum > 0 ? `@yL${loopNum} @d7-3` : '7-3';
-    this.fonts.draw(ctx, leftLabel, mapLeft - 4, mapY + 8, 'fntSmall', { color: '#8f8b9e' });
-    if (areaCode === 'vault') {
-      this.fonts.draw(ctx, '@gVAULT', reachX, mapY + 8, 'fntSmall', { align: 'center' });
-    } else if (loopNum > 0) {
-      this.fonts.draw(ctx, `@yLOOP ${loopNum}`, cx, mapY + 8, 'fntSmall', { align: 'center' });
-    }
-    this.fonts.draw(ctx, rightLabel, mapRight + 6, mapY + 8, 'fntSmall', {
-      align: 'right',
-      color: '#8f8b9e',
-    });
-
-    // Acquired mutations & Ultra strip (only expands card when mutations/ultra exist!)
-    if (hasMutRow) {
-      this.fonts.draw(
-        ctx,
-        `@dMUTATIONS (${muts.length}${ultra ? '+U' : ''}):`,
-        cardX + 10,
-        cardY + 99,
-        'fntSmall',
-        { outline: true },
-      );
-      const maxShownMuts = Math.min(muts.length, 15);
-      for (let i = 0; i < maxShownMuts; i++) {
-        const def = this.data.getMutation(muts[i]!);
-        const mx = cardX + 10 + i * 17;
-        const my = cardY + 110;
-        const drew = def
-          ? this.drawSpriteIntegerCentered(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, mx, my, 16, 16)
-          : false;
-        if (!drew) {
-          ctx.fillStyle = '#4de862';
-          ctx.fillRect(mx + 2, my + 2, 12, 12);
-        }
-      }
-      if (ultra) {
-        const uDef = this.data.getUltra(ultra);
-        const egHudDef = this.sprites.getSprite('sprEGIconHUD');
-        const uFrame = uDef
-          ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
-          : 0;
-        const ux = cardX + 10 + maxShownMuts * 17;
-        const uy = cardY + 109;
-        const drew = uDef
-          ? this.drawSpriteIntegerCentered(ctx, 'sprEGIconHUD', uFrame, ux, uy, 18, 18)
-          : false;
-        if (!drew) {
-          ctx.fillStyle = '#ffe047';
-          ctx.fillRect(ux + 2, uy + 2, 12, 12);
-        }
-      }
-    }
-
-    // Punchy NT-style wasteland tip tucked cleanly along bottom edge of summary card
-    const endTip = selectLoadingTip(
-      simState?.biome ?? 'desert',
-      areaCode,
-      loopNum,
-      (simState?.seed ?? 1) + kills,
-    );
-    this.fonts.draw(ctx, `@d${endTip}`, cx, cardY + cardH - 12, 'fntSmall', {
-      align: 'center',
-      maxWidth: cardW - 16,
-    });
-
-    // Bottom buttons: RETRY & CAMPFIRE
-    const endMode = mctx.inputMode ?? 'kbm';
-    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
-    const retryBtnLabel =
-      endMode === 'gamepad'
-        ? victory
-          ? `NEW RUN [${g.retry}]`
-          : `RETRY [${g.retry}]`
-        : endMode === 'touch'
-          ? victory
-            ? 'NEW RUN'
-            : 'RETRY'
-          : victory
-            ? 'NEW RUN [R]'
-            : 'RETRY [R]';
-    const campBtnLabel = endMode === 'gamepad' ? `CAMPFIRE [${g.back}]` : 'CAMPFIRE';
-
-    const btnY = cardY + cardH + 10;
-    const btnW = 104;
-    const btnH = 22;
-    this.drawButton(
-      ctx,
-      'end_retry',
-      cx - btnW - 8,
-      btnY,
-      btnW,
-      btnH,
-      retryBtnLabel,
-      () => ({ type: 'restart' }),
-      { accent: '#52e864', focused: this.focusedIndex === 0, font: 'fntSmall' },
-    );
-    this.drawButton(
+    this.drawChunkyButton(
       ctx,
       'end_campfire',
-      cx + 8,
-      btnY,
-      btnW,
-      btnH,
-      campBtnLabel,
+      cx,
+      height - 54,
+      'MENU',
       () => ({ type: 'open_screen', screen: 'campfire' }),
-      { accent: '#ffe047', focused: this.focusedIndex === 1, font: 'fntSmall' },
+      { focused: this.focusedIndex === 1 },
     );
+    this.drawChunkyButton(
+      ctx,
+      'end_retry',
+      cx,
+      height - 32,
+      'RETRY',
+      () => ({ type: 'restart' }),
+      { focused: this.focusedIndex === 0 },
+    );
+
+    // 7. Bottom black bar labels (gamepad hints when controller active, subtle build tag in KBM!)
+    const endMode = mctx.inputMode ?? 'kbm';
+    const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
+    if (endMode === 'gamepad') {
+      this.fonts.draw(
+        ctx,
+        `@dCAMPFIRE [${g.back}]   RETRY [${g.retry}]`,
+        8,
+        height - 10,
+        'fntSmall',
+        { shadow: false },
+      );
+    }
+    this.fonts.draw(ctx, 'KRUNKED THRONE', width - 8, height - 10, 'fntSmall', {
+      align: 'right',
+      color: '#6e6e78',
+      shadow: false,
+    });
   }
 }

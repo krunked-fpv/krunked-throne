@@ -8,23 +8,30 @@ import {
   DEFAULT_UI_DATA_PROVIDER,
   resolveWeaponLabel,
   resolveWeaponSpriteName,
+  selectLoadingTip,
   type UiDataProvider,
 } from './data-provider';
+import {
+  drawInkSplatBanner,
+  drawPortalVortex,
+  drawRunRoadMap,
+  formatRunTimer,
+} from './menus';
 
 interface AmmoPoolHudSpec {
   type: AmmoType;
   iconSprites: readonly string[];
   ammoIconsFrame: number;
   color: string;
-  shortLabel: string;
+  lowLabel: string;
 }
 
 const AMMO_POOL_SPECS: readonly AmmoPoolHudSpec[] = [
-  { type: 'bullet', iconSprites: ['sprBulletIcon'], ammoIconsFrame: 0, color: '#f5cc47', shortLabel: 'B' },
-  { type: 'shell', iconSprites: ['sprShotIcon', 'sprShellIcon'], ammoIconsFrame: 1, color: '#e65c38', shortLabel: 'S' },
-  { type: 'bolt', iconSprites: ['sprBoltIcon'], ammoIconsFrame: 2, color: '#59e06e', shortLabel: 'X' },
-  { type: 'explosive', iconSprites: ['sprExploIcon'], ammoIconsFrame: 3, color: '#ff8a2b', shortLabel: 'E' },
-  { type: 'energy', iconSprites: ['sprEnergyIcon'], ammoIconsFrame: 4, color: '#59c7ff', shortLabel: 'N' },
+  { type: 'bullet', iconSprites: ['sprBulletIcon'], ammoIconsFrame: 0, color: '#f5cc47', lowLabel: 'LOW BULLETS' },
+  { type: 'shell', iconSprites: ['sprShotIcon', 'sprShellIcon'], ammoIconsFrame: 1, color: '#e65c38', lowLabel: 'LOW SHELLS' },
+  { type: 'bolt', iconSprites: ['sprBoltIcon'], ammoIconsFrame: 2, color: '#59e06e', lowLabel: 'LOW BOLTS' },
+  { type: 'explosive', iconSprites: ['sprExploIcon'], ammoIconsFrame: 3, color: '#ff8a2b', lowLabel: 'LOW EXPLOSIVES' },
+  { type: 'energy', iconSprites: ['sprEnergyIcon'], ammoIconsFrame: 4, color: '#59c7ff', lowLabel: 'LOW ENERGY' },
 ];
 
 export type HudInputDeviceMode = 'kbm' | 'gamepad' | 'touch';
@@ -39,15 +46,6 @@ export interface HudRenderContext {
   inputMode?: HudInputDeviceMode;
   gamepadFamily?: GamepadFamily;
 }
-
-const AMMO_TYPE_ACCENT: Record<AmmoType, string> = {
-  melee: '#c4d0e0',
-  bullet: '#f5cc47',
-  shell: '#e65c38',
-  bolt: '#59e06e',
-  explosive: '#ff8a2b',
-  energy: '#59c7ff',
-};
 
 /**
  * Pixel-verified sprHealthFill frame polarity:
@@ -118,9 +116,9 @@ export function resolvePortalIndicatorStyle(targetArea: string): {
 }
 
 /**
- * Unifies Boss Intro splash and Boss HP bar naming across Steam Pack & Built-In Art modes:
+ * Unifies Boss Intro splash naming across Steam Pack & Built-In Art modes:
  * Steam `sprBossName` frame 3 reads "THE THRONE", so Steam mode matches it cleanly;
- * Built-In mode consistently uses "THE KRUNKED THRONE" on both splash and boss bar.
+ * Built-In mode consistently uses "THE KRUNKED THRONE".
  */
 export function resolveBossDisplayName(
   bossId: string,
@@ -217,7 +215,6 @@ function drawPixelBorder(
 
 /**
  * Authentic Nuclear Throne jagged black ink brush-splat banner (100% integer fillRect, zero ctx.arc).
- * Sweeping horizontal brushstrokes with ragged tapered tips & splatter flecks.
  */
 function drawInkBrushSplat(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -225,7 +222,7 @@ function drawInkBrushSplat(
   y: number,
   w: number,
   h: number,
-  color = '#07050c',
+  color = '#000000',
   accent?: string,
 ): void {
   const ix = Math.round(x);
@@ -238,11 +235,9 @@ function drawInkBrushSplat(
     ctx.fillRect(ix + 4, iy - 2, iw - 4, ih + 4);
   }
   ctx.fillStyle = color;
-  // Core ragged brushstroke body
   ctx.fillRect(ix, iy, iw, ih);
   ctx.fillRect(ix + 6, iy - 3, Math.max(4, iw - 14), 3);
   ctx.fillRect(ix + 10, iy + ih, Math.max(4, iw - 22), 3);
-  // Sweeping dynamic jagged horizontal ink tails extending left & right!
   const strips: ReadonlyArray<[number, number, number, number]> = [
     [-14, 0.14, 18, 3],
     [-22, 0.34, 26, 4],
@@ -256,7 +251,6 @@ function drawInkBrushSplat(
   for (const [dx, yFrac, sw, sh] of strips) {
     ctx.fillRect(ix + dx, iy + Math.round(ih * yFrac), sw, sh);
   }
-  // Ink splatter flecks
   ctx.fillRect(ix - 26, iy + Math.round(ih * 0.35), 2, 2);
   ctx.fillRect(ix - 17, iy + Math.round(ih * 0.85), 2, 1);
   ctx.fillRect(ix + iw + 29, iy + Math.round(ih * 0.31), 3, 2);
@@ -264,35 +258,14 @@ function drawInkBrushSplat(
 }
 
 /**
- * Minimalist Nuclear Throne translucent shadow backing strip (borderless — ZERO sci-fi boxes or rivets!).
- */
-function drawSoftHudUnderlay(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  alpha = 0.42,
-): void {
-  const ix = Math.round(x);
-  const iy = Math.round(y);
-  const iw = Math.round(w);
-  const ih = Math.round(h);
-  if (iw < 4 || ih < 4) return;
-  ctx.fillStyle = `rgba(9, 6, 14, ${alpha.toFixed(2)})`;
-  ctx.fillRect(ix + 2, iy, iw - 4, ih);
-  ctx.fillRect(ix, iy + 1, iw, ih - 2);
-}
-
-/**
- * Pixel-exact Krunked Throne Canvas HUD renderer:
- * - Slim top bar staying tight to upper edge so bosses/statues stay unobstructed
- * - HP bar (sprHealthBar / sprHealthFill + white damage trail + pixel/Steam Strong Spirit halo)
- * - Rad canister (sprExpBarLevel cleanly BEHIND sprExpBar so white rim never wipes green fill)
- * - Crisp integer-scaled Active & Secondary weapon cards with dual reload bars & clean swap badge
- * - Crisp 1x integer 5-ammo-pool strip with readable dimmed 0-ammo icons
- * - Destination-colored off-screen Portal indicator clamped cleanly below ammo strip (padTop >= 42)
- * - Full-screen opaque NT Boss Intro splash (hiding HUD during introTicks > 0) + beveled Boss HP bar
+ * 1:1 Authentic Nuclear Throne Canvas HUD Renderer (426x240 / 320x240 native 1x grid):
+ * - Top-Left: Vertical rad canister with centered level digit (1..9 / U), crisp red-orange HP bar
+ *   with blinking LOW HP warning, borderless active + secondary weapon silhouettes & ammo counts
+ *   with active reload bar only when reloading, and 5 tiny draining ammo icons + blinking LOW AMMO.
+ * - Top-Right: Mutation icons + Ultra + Crown anchored right-to-left at y=4.
+ * - Bottom-Right: Crisp white-outlined MM:SS.cc run timer.
+ * - Boss Intro Splash (no bottom Boss HP bar during gameplay, matching real Nuclear Throne).
+ * - Full-screen animated Portal Generating transition screen with swirling purple vortex & road map.
  */
 export class HudRenderer {
   private bundle: AssetBundle;
@@ -300,8 +273,6 @@ export class HudRenderer {
   private fonts: BitmapFontRenderer;
   private data: UiDataProvider;
   private displayedHpFrac = 1;
-  private displayedBossHpFrac = 1;
-  private lastBossEntityId = -1;
 
   constructor(bundle: AssetBundle, data: UiDataProvider = DEFAULT_UI_DATA_PROVIDER) {
     this.bundle = bundle;
@@ -372,6 +343,61 @@ export class HudRenderer {
     });
   }
 
+  /**
+   * Draws a compact crisp white-outlined HUD weapon icon (4-way 1px white outline + dark/crisp sprite)
+   * matching Nuclear Throne's ultra-readable floating HUD weapons with zero dark box clutter.
+   */
+  private drawHudWeaponSprite(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    spriteName: string,
+    boxX: number,
+    boxY: number,
+    boxW: number,
+    boxH: number,
+    bright: boolean,
+  ): { drew: boolean; visualW: number } {
+    const spr = this.sprites.getSprite(spriteName);
+    if (!spr || spr.frames.length === 0 || !this.sprites.hasSprite(spriteName)) {
+      return { drew: false, visualW: 12 };
+    }
+    const rect = spr.frames[0];
+    if (!rect || rect.srcW <= 0 || rect.srcH <= 0) {
+      return { drew: false, visualW: 12 };
+    }
+
+    const fitScale = Math.min(1, boxW / Math.max(1, rect.targetW), boxH / Math.max(1, rect.targetH));
+    const visualW = Math.max(10, Math.min(boxW, Math.round(rect.targetW * fitScale)));
+
+    if (bright) {
+      // Crisp 1px white pixel outline around HUD weapon silhouette (pops on both snow and black caves!)
+      const outlineAlpha = 0.96;
+      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX + ox, boxY + oy, visualW, boxH, {
+          alpha: outlineAlpha,
+          tintColor: '#ffffff',
+        });
+      }
+      this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX, boxY, visualW, boxH, {
+        alpha: 1,
+        tintColor: '#0e0a12',
+      });
+    } else {
+      // Secondary weapon: slightly muted dark silhouette with subtle gray-white rim
+      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX + ox, boxY + oy, visualW, boxH, {
+          alpha: 0.65,
+          tintColor: '#b8b8c4',
+        });
+      }
+      this.drawSpriteIntegerOrFit(ctx, spriteName, 0, boxX, boxY, visualW, boxH, {
+        alpha: 0.9,
+        tintColor: '#14101a',
+      });
+    }
+
+    return { drew: true, visualW };
+  }
+
   render(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     hud: HudRenderContext,
@@ -381,36 +407,145 @@ export class HudRenderer {
     const gamepadFamily: GamepadFamily = hud.gamepadFamily ?? 'generic';
     ctx.imageSmoothingEnabled = false;
 
-    // Hide normal HUD cleanly during active portal warp loading card
+    // Portal Transition / Generating Screen (matches video 00:04, 00:17, 00:33)
     if (state.portal.active && state.portal.entered) {
-      return;
+      const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
+      if (ticksIn >= 7) {
+        this.renderPortalTransition(ctx, state, width, height, inputMode, gamepadFamily);
+        return;
+      }
     }
 
     // Match authentic Nuclear Throne: hide normal HUD during active Boss Intro splash
     if (this.isBossIntroActive(state)) {
-      this.renderBossHud(ctx, state, width, height);
+      this.renderBossIntroSplash(ctx, state, width, height);
       return;
     }
 
-    this.renderTopLeftVitals(ctx, state);
-    this.renderWeaponsAndAmmo(ctx, state, width, inputMode, gamepadFamily);
-    this.renderTopRightStats(ctx, state, renderSettings, fps, width);
-    this.renderMutationIcons(ctx, state);
+    this.renderTopLeftHud(ctx, state, inputMode, gamepadFamily);
+    this.renderTopRightMutations(ctx, state, renderSettings, fps, width);
+    this.renderBottomRightTimer(ctx, state, width, height);
     this.renderOffscreenChestIndicators(ctx, state, camera, width, height);
     this.renderOffscreenPortalIndicator(ctx, state, camera, width, height);
-    this.renderBossHud(ctx, state, width, height);
   }
 
-  private renderTopLeftVitals(
+  /**
+   * Authentic Nuclear Throne Portal Generating transition screen:
+   * - Full-screen animated swirling purple vortex + white pixel lightning + 28px black letterbox bars
+   * - Top-left vitals/weapons/ammo + Top-right mutations cleanly visible on top black bar
+   * - Centered `GENERATING... 064%`
+   * - Two jagged black ink-splat strokes: destination area code (left) + `[skull] kills` (right)
+   * - Horizontal red/white run progression road map with mutant head icon & tiny Throne icon
+   * - Bold white wasteland tip text underneath
+   */
+  renderPortalTransition(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     state: SimState,
+    width: number,
+    height: number,
+    inputMode: HudInputDeviceMode = 'kbm',
+    gamepadFamily: GamepadFamily = 'generic',
+  ): void {
+    const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
+    const pct = Math.max(0, Math.min(100, Math.floor(((ticksIn - 6) / 18) * 100)));
+    const pctStr = String(pct).padStart(3, '0');
+    const timeSec = (state.tick + ticksIn) / 30;
+    const cx = Math.round(width * 0.5);
+
+    // 1. Swirling purple portal vortex + white pixel lightning + 28px pure black letterbox bars
+    drawPortalVortex(ctx, width, height, timeSec, true);
+
+    // 2. Keep HUD visible cleanly in top-left & top-right (just like the video!)
+    this.renderTopLeftHud(ctx, state, inputMode, gamepadFamily);
+    this.renderTopRightMutations(ctx, state, {
+      widescreen: width >= 380,
+      targetFps: 60,
+      classic30Fps: false,
+      screenShakeScale: 1,
+      crosshairStyle: 0,
+      showFps: false,
+      pixelSnap: true,
+    }, 60, width);
+
+    // 3. Centered `GENERATING... 064%`
+    this.fonts.draw(ctx, `GENERATING... ${pctStr}%`, cx, 78, 'fntM1', {
+      align: 'center',
+      color: '#ffffff',
+      outline: true,
+    });
+
+    // 4. Two jagged black ink-splat strokes holding area code (left) & [skull] kills (right)
+    const targetCode =
+      state.portal.nextLoop > 0
+        ? `L${state.portal.nextLoop} ${state.portal.targetArea}`
+        : state.portal.targetArea;
+    const badgeY = 95;
+    const leftSplatX = cx - 76;
+    const rightSplatX = cx + 14;
+    drawInkSplatBanner(ctx, leftSplatX, badgeY, 54, 12, 11);
+    drawInkSplatBanner(ctx, rightSplatX, badgeY, 60, 12, 29);
+
+    this.fonts.draw(ctx, targetCode, leftSplatX + 27, badgeY + 2, 'fntM1', {
+      align: 'center',
+      color: '#ffffff',
+      outline: true,
+    });
+
+    const killsStr = String(state.stats.kills);
+    const drewSkull = this.drawSpriteIntegerOrFit(ctx, 'sprKillsIcon', 0, rightSplatX + 8, badgeY + 1, 10, 10);
+    if (!drewSkull) {
+      ctx.fillStyle = '#e8e4dc';
+      ctx.fillRect(rightSplatX + 10, badgeY + 3, 6, 6);
+    }
+    this.fonts.draw(ctx, killsStr, rightSplatX + 24, badgeY + 2, 'fntM1', {
+      color: '#ffffff',
+      outline: true,
+    });
+
+    // 5. Horizontal red/white run progression road map with mutant head & tiny Throne icon
+    drawRunRoadMap(ctx, this.sprites, this.data, {
+      areaCode: state.portal.targetArea,
+      mutant: state.player.mutant,
+      skin: state.player.skin,
+      loop: state.portal.nextLoop,
+      victory: false,
+    }, cx, 123);
+
+    // 6. Bold white wasteland tip text underneath
+    const targetArea = this.data.getArea(state.portal.targetArea);
+    const targetBiome = targetArea?.biome ?? state.biome;
+    const tip = selectLoadingTip(targetBiome, state.portal.targetArea, state.portal.nextLoop, state.seed);
+    this.fonts.draw(ctx, tip, cx, 142, 'fntM1', {
+      align: 'center',
+      color: '#ffffff',
+      maxWidth: width - 36,
+      outline: true,
+    });
+
+    // 7. Bottom black bar brand & run timer
+    this.fonts.draw(ctx, 'KRUNKED THRONE', 6, height - 10, 'fntSmall', {
+      color: '#9a9aa4',
+      shadow: false,
+    });
+    this.fonts.draw(ctx, formatRunTimer(state.stats.timeTicks), width - 4, height - 11, 'fntM1', {
+      align: 'right',
+      color: '#ffffff',
+      outline: true,
+    });
+  }
+
+  private renderTopLeftHud(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    inputMode: HudInputDeviceMode,
+    gamepadFamily: GamepadFamily,
   ): void {
     const player = state.player;
     const hp = Math.max(0, player.hp);
     const maxHp = Math.max(1, player.maxHp);
     const hpFrac = Math.min(1, hp / maxHp);
 
-    // Smoothly decay white damage trail behind current HP
+    // Smoothly decay damage trail behind current HP
     if (hpFrac > this.displayedHpFrac) {
       this.displayedHpFrac = hpFrac;
     } else {
@@ -420,129 +555,162 @@ export class HudRenderer {
       }
     }
 
-    // 1. Rad Canister (far top-left; stays full at Level 10 Ultra with clean rad count)
+    // ------------------------------------------------------------------------
+    // 1. RAD CANISTER (x=4, y=4, ~14x24px) with Level digit centered ON tube!
+    // ------------------------------------------------------------------------
     const radX = 4;
-    const radY = 3;
+    const radY = 4;
     const isUltraLevel = player.level >= 10 || player.radsToNextLevel >= 9999;
     const radFrac = isUltraLevel
       ? 1
       : player.radsToNextLevel > 0
         ? Math.max(0, Math.min(1, player.rads / player.radsToNextLevel))
         : 1;
+
     const expBarSpr = this.sprites.getSprite('sprExpBar');
+    let canisterW = 14;
+    let canisterH = 22;
     if (expBarSpr && expBarSpr.frames.length > 0 && this.sprites.hasSprite('sprExpBar')) {
+      canisterW = expBarSpr.width;
+      canisterH = expBarSpr.height;
       const fillFrame = Math.min(
         expBarSpr.frames.length - 1,
         Math.round(radFrac * (expBarSpr.frames.length - 1)),
       );
       const levelGlowOn = state.pendingLevelUps > 0 && Math.floor(state.tick / 6) % 2 === 0;
       if (levelGlowOn) {
-        // CRITICAL: Draw sprExpBarLevel BEFORE sprExpBar (behind it!) so Steam's 16x26
-        // black-interior glow sprite frames the green canister with its 1px white rim
-        // instead of wiping the canister fill to solid black.
+        // CRITICAL: Draw sprExpBarLevel BEFORE sprExpBar so Steam's 16x26 glow frames the green canister
         const lvlSpr = this.sprites.getSprite('sprExpBarLevel');
         if (lvlSpr && lvlSpr.width <= expBarSpr.width) {
-          // Built-In fallback sprExpBarLevel is 14x24 (no 1px outer lip): add crisp 1px outer rim behind
           drawPixelBorder(ctx, radX - 1, radY - 1, expBarSpr.width + 2, expBarSpr.height + 2, '#ffe047', 1);
         }
         this.sprites.draw(ctx, 'sprExpBarLevel', radX, radY, { frame: 0, pixelSnap: true });
       }
       this.sprites.draw(ctx, 'sprExpBar', radX, radY, { frame: fillFrame, pixelSnap: true });
     } else {
-      ctx.fillStyle = '#0e0c14';
-      ctx.fillRect(radX, radY, 14, 24);
-      ctx.fillStyle = '#1f2b22';
-      ctx.fillRect(radX + 2, radY + 2, 10, 20);
-      const fillH = Math.round(20 * radFrac);
-      ctx.fillStyle = state.pendingLevelUps > 0 ? '#a8ff6e' : '#4de862';
-      ctx.fillRect(radX + 2, radY + 22 - fillH, 10, fillH);
-      drawPixelBorder(ctx, radX, radY, 14, 24, state.pendingLevelUps > 0 ? '#ffe047' : '#738578', 1);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(radX, radY, 15, 22);
+      ctx.fillStyle = '#686b70';
+      ctx.fillRect(radX + 1, radY + 1, 13, 3);
+      ctx.fillRect(radX + 1, radY + 18, 13, 3);
+      ctx.fillStyle = '#141816';
+      ctx.fillRect(radX + 2, radY + 4, 11, 14);
+      const fillH = Math.round(14 * radFrac);
+      if (fillH > 0) {
+        ctx.fillStyle = state.pendingLevelUps > 0 ? '#a8ff6e' : '#48e048';
+        ctx.fillRect(radX + 2, radY + 18 - fillH, 11, fillH);
+      }
+      canisterW = 15;
+      canisterH = 22;
     }
 
-    // Borderless Nuclear Throne LV readout right beneath rad canister (bold dark pixel outline!)
-    const lvLabel = player.level >= 10 ? '@gULT' : `@wLV${player.level}`;
-    this.fonts.draw(ctx, lvLabel, radX + 7, radY + 26, 'fntSmall', {
-      align: 'center',
-      outline: true,
-    });
+    // Bold white-outlined Level number (1..9 or U) centered RIGHT ON THE CANISTER!
+    const levelDigit = player.level >= 10 ? 'U' : String(Math.max(1, player.level));
+    this.fonts.draw(
+      ctx,
+      levelDigit,
+      radX + Math.floor(canisterW * 0.5),
+      radY + Math.floor(canisterH * 0.5) - 4,
+      'fntM1',
+      {
+        align: 'center',
+        color: player.level >= 10 ? '#8cff66' : '#ffffff',
+        outline: true,
+      },
+    );
 
-    // 2. HP Bar (beside rad canister)
-    const barX = 20;
-    const barY = 3;
-    const barW = 88;
-    const barH = 14;
-    const innerX = barX + 3;
-    const innerY = barY + 3;
-    const innerW = 82;
-    const innerH = 8;
+    // ------------------------------------------------------------------------
+    // 2. HP BAR (x=22, y=5, w=84, h=11) + LOW HP blinking red warning
+    // ------------------------------------------------------------------------
+    const barX = 22;
+    const barY = 5;
+    const barW = 84;
+    const barH = 11;
+    const innerX = barX + 2;
+    const innerY = barY + 2;
+    const innerW = barW - 4;
+    const innerH = barH - 4;
 
-    const hasHealthBar = this.sprites.hasSprite('sprHealthBar');
-    if (hasHealthBar) {
-      this.sprites.draw(ctx, 'sprHealthBar', barX, barY, { frame: 0, pixelSnap: true });
+    if (this.isSteamMode && this.sprites.hasSprite('sprHealthBar')) {
+      this.sprites.draw(ctx, 'sprHealthBar', barX - 2, barY - 1, { frame: 0, pixelSnap: true });
+      const sInnerX = barX + 1;
+      const sInnerY = barY + 2;
+      const sInnerW = 82;
+      const sInnerH = 8;
+      const fillW = Math.round(sInnerW * hpFrac);
+      const trailW = Math.round(sInnerW * this.displayedHpFrac);
+      if (trailW > fillW) {
+        ctx.fillStyle = '#8e1b18';
+        ctx.fillRect(sInnerX + fillW, sInnerY, trailW - fillW, sInnerH);
+      }
+      if (fillW > 0) {
+        const frame = resolveHealthFillFrame(player.hurtFlashTicks);
+        const drewFill = this.sprites.draw(ctx, 'sprHealthFill', sInnerX, sInnerY, {
+          frame,
+          scaleX: fillW,
+          scaleY: 1,
+          pixelSnap: true,
+        });
+        if (!drewFill) {
+          ctx.fillStyle = player.hurtFlashTicks > 0 ? '#ffffff' : '#fc3800';
+          ctx.fillRect(sInnerX, sInnerY, fillW, sInnerH);
+          if (player.hurtFlashTicks <= 0) {
+            ctx.fillStyle = '#ff7c40';
+            ctx.fillRect(sInnerX, sInnerY, fillW, 1);
+          }
+        }
+      }
     } else {
-      ctx.fillStyle = '#0c0910';
-      ctx.fillRect(barX, barY, barW, barH);
-      ctx.fillStyle = '#2e161d';
-      ctx.fillRect(innerX, innerY, innerW, innerH);
-      drawPixelBorder(ctx, barX, barY, barW, barH, '#5c4b52', 1);
-    }
-
-    const fillW = Math.round(innerW * hpFrac);
-    const trailW = Math.round(innerW * this.displayedHpFrac);
-
-    // White damage trail (drawn strictly in the lost-HP delta when trailW > fillW)
-    if (trailW > fillW) {
+      // Exact crisp 1x Nuclear Throne black + white bordered HP bar (matches 04_desert_1_1.png!)
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(innerX + fillW, innerY, trailW - fillW, innerH);
-    }
+      ctx.fillRect(barX, barY, barW, barH);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(barX + 1, barY + 1, barW - 2, barH - 2);
+      ctx.fillStyle = '#1d171c';
+      ctx.fillRect(innerX, innerY, innerW, innerH);
 
-    // Actual red HP fill (frame 0 = WHITE hurt flash, frame 1 = CRIMSON RED normal fill)
-    if (fillW > 0) {
-      const frame = resolveHealthFillFrame(player.hurtFlashTicks);
-      const drewFill = this.sprites.draw(ctx, 'sprHealthFill', innerX, innerY, {
-        frame,
-        scaleX: fillW,
-        scaleY: 1,
-        pixelSnap: true,
-      });
-      if (!drewFill) {
-        ctx.fillStyle = player.hurtFlashTicks > 0 ? '#ffffff' : '#fc3800';
-        ctx.fillRect(innerX, innerY, fillW, innerH);
-        if (player.hurtFlashTicks <= 0) {
-          ctx.fillStyle = '#ff6a3d';
-          ctx.fillRect(innerX, innerY, fillW, 2);
-          ctx.fillStyle = '#a81c00';
-          ctx.fillRect(innerX, innerY + innerH - 2, fillW, 2);
+      const fillW = Math.round(innerW * hpFrac);
+      const trailW = Math.round(innerW * this.displayedHpFrac);
+      if (trailW > fillW) {
+        ctx.fillStyle = '#8e1b18';
+        ctx.fillRect(innerX + fillW, innerY, trailW - fillW, innerH);
+      }
+      if (fillW > 0) {
+        if (player.hurtFlashTicks > 0) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(innerX, innerY, fillW, innerH);
+        } else {
+          ctx.fillStyle = '#fc3800';
+          ctx.fillRect(innerX, innerY, fillW, innerH);
+          ctx.fillStyle = '#ff7c40';
+          ctx.fillRect(innerX, innerY, fillW, 1);
         }
       }
     }
 
-    // Boiling Veins active protection glow on HP bar when <= 4 HP (fire & explosion immunity active!)
-    const boilingActive =
-      player.alive && hp <= 4 && player.mutations.includes('boiling_veins');
-    if (boilingActive) {
-      const bvPulse = 0.55 + 0.45 * Math.sin(state.tick * 0.4);
-      drawPixelBorder(ctx, barX - 1, barY - 1, barW + 2, barH + 2, bvPulse > 0.78 ? '#ffe047' : '#ff7b24', 1);
-      ctx.fillStyle = `rgba(255, 130, 35, ${(0.20 * bvPulse).toFixed(3)})`;
-      ctx.fillRect(innerX, innerY, innerW, innerH);
+    // Boiling Veins subtle warm border pulse when <= 4 HP
+    if (player.alive && hp <= 4 && player.mutations.includes('boiling_veins')) {
+      const bvPulse = Math.floor(state.tick / 6) % 2 === 0;
+      drawPixelBorder(ctx, barX - 1, barY - 1, barW + 2, barH + 2, bvPulse ? '#ffe047' : '#ff7b24', 1);
     }
 
-    // HP numeric text centered in bar — never blink for full 2/2 HP Melting!
-    const lowHpBlink = hp < maxHp && hp <= 2 && Math.floor(state.tick / 5) % 2 === 0;
-    const hpColor = lowHpBlink ? '@y' : '@w';
+    // Bold white-outlined HP numbers centered inside bar (8/8)
     this.fonts.draw(
       ctx,
-      `${hpColor}${Math.ceil(hp)}/${maxHp}`,
-      barX + Math.floor(barW / 2),
-      barY + 3,
+      `${Math.ceil(hp)}/${maxHp}`,
+      barX + Math.floor(barW * 0.5),
+      barY + 2,
       'fntM1',
-      { align: 'center', outline: true },
+      { align: 'center', color: '#ffffff', outline: true },
     );
 
-    // Strong Spirit crisp pixel/Steam halo tucked right of HP bar (zero smooth anti-aliased ctx.arc!)
+    // Strong Spirit pixel-crisp halo right of HP bar (zero ctx.arc!)
+    let rightOfHpX = barX + barW + 4;
     if (player.mutations.includes('strong_spirit')) {
       const ssBoxX = barX + barW + 2;
-      const ssBoxY = barY + 2;
+      const ssBoxY = barY + 1;
       const ready = player.strongSpiritReady;
       const drewSteamHalo =
         this.isSteamMode &&
@@ -553,26 +721,14 @@ export class HudRenderer {
         });
 
       if (!drewSteamHalo) {
-        // Crisp 10x7 pixel-art halo ring (100% integer fillRect pixels, zero ctx.arc)
         const hx = ssBoxX + 1;
-        const hy = barY + 4;
-        const outlineCol = '#0c0914';
-        const ringCol = ready ? '#78ebff' : '#4f5b6e';
-        const hiCol = ready ? '#e4fcff' : '#738299';
-        const pulseLit = ready && Math.floor(state.tick / 8) % 2 === 0;
-
-        // 1px dark outer backing
-        ctx.fillStyle = outlineCol;
+        const hy = barY + 2;
+        const ringCol = ready ? '#e6fcff' : '#4f5b6e';
+        ctx.fillStyle = '#000000';
         ctx.fillRect(hx + 1, hy - 1, 8, 1);
         ctx.fillRect(hx + 1, hy + 6, 8, 1);
         ctx.fillRect(hx - 1, hy + 1, 1, 4);
         ctx.fillRect(hx + 10, hy + 1, 1, 4);
-        ctx.fillRect(hx, hy, 1, 1);
-        ctx.fillRect(hx + 9, hy, 1, 1);
-        ctx.fillRect(hx, hy + 5, 1, 1);
-        ctx.fillRect(hx + 9, hy + 5, 1, 1);
-
-        // Crisp 10x6 stepped pixel halo ellipse
         ctx.fillStyle = ringCol;
         ctx.fillRect(hx + 2, hy, 6, 1);
         ctx.fillRect(hx + 2, hy + 5, 6, 1);
@@ -582,298 +738,181 @@ export class HudRenderer {
         ctx.fillRect(hx + 8, hy + 2, 2, 2);
         ctx.fillRect(hx + 1, hy + 4, 2, 1);
         ctx.fillRect(hx + 7, hy + 4, 2, 1);
-
-        // Bright top specular rim
-        ctx.fillStyle = pulseLit ? '#ffffff' : hiCol;
-        ctx.fillRect(hx + 3, hy, 4, 1);
-        ctx.fillRect(hx + 1, hy + 1, 1, 1);
-        if (ready) {
-          ctx.fillStyle = 'rgba(120, 235, 255, 0.28)';
-          ctx.fillRect(hx + 2, hy + 2, 6, 2);
-        }
       }
+      rightOfHpX = ssBoxX + 15;
     }
 
-    // High-contrast compact dark pill behind Rad numeric readout
-    // At Level 10 Ultra, NT displays only the raw rad count (never "X/9999").
-    const radLabel = isUltraLevel
-      ? `@g${player.rads}`
-      : `@g${player.rads}@w/${player.radsToNextLevel}`;
-    const radM = this.fonts.measure(radLabel, 'fntSmall');
-    const radPillW = radM.width + 6;
-    const radPillY = barY + barH + 1;
-    // Borderless outlined rad readout directly under HP bar (classic Nuclear Throne look!)
-    this.fonts.draw(ctx, radLabel, barX + 1, radPillY + 2, 'fntSmall', {
-      outline: true,
-    });
-
-    // Timed status chip beside rad readout (Chicken Headless / Fish Gun Warrant)
-    if (player.headlessTicks > 0 && player.alive) {
-      const secs = (player.headlessTicks / 30).toFixed(1);
-      const tx = barX + radPillW + 3;
-      const lbl = `@rHEAD ${secs}S`;
-      const lm = this.fonts.measure(lbl, 'fntSmall');
-      ctx.fillStyle = 'rgba(32, 8, 12, 0.85)';
-      ctx.fillRect(tx, radPillY, lm.width + 4, 9);
-      this.fonts.draw(ctx, lbl, tx + 2, radPillY + 2, 'fntSmall', { shadow: true });
-    } else if (player.gunWarrantTicks > 0) {
-      const secs = (player.gunWarrantTicks / 30).toFixed(1);
-      const tx = barX + radPillW + 3;
-      const lbl = `@yINF ${secs}S`;
-      const lm = this.fonts.measure(lbl, 'fntSmall');
-      ctx.fillStyle = 'rgba(26, 20, 8, 0.85)';
-      ctx.fillRect(tx, radPillY, lm.width + 4, 9);
-      this.fonts.draw(ctx, lbl, tx + 2, radPillY + 2, 'fntSmall', { shadow: true });
+    // Blinking bright red black-outlined `LOW HP` warning directly right of HP bar!
+    const isLowHp =
+      player.alive &&
+      ((maxHp > 4 && hp <= 4) || (maxHp <= 4 && hp < maxHp && hp <= 1));
+    if (isLowHp && Math.floor(state.tick / 10) % 2 === 0) {
+      this.fonts.draw(ctx, 'LOW HP', Math.max(110, rightOfHpX), barY + 2, 'fntM1', {
+        color: '#ff3020',
+        outline: true,
+      });
     }
-  }
 
-  private renderWeaponsAndAmmo(
-    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-    state: SimState,
-    width: number,
-    inputMode: HudInputDeviceMode,
-    gamepadFamily: GamepadFamily = 'generic',
-  ): void {
-    const player = state.player;
+    // ------------------------------------------------------------------------
+    // 3. WEAPONS ROW (x=22, y=18) — ZERO DARK BOXES, ZERO WEAPON NAMES!
+    // ------------------------------------------------------------------------
     const activeSlot = player.weapons[player.activeSlot];
     const secondarySlot = player.weapons[player.activeSlot === 0 ? 1 : 0];
     const activeDef = activeSlot ? this.data.getWeapon(activeSlot.weaponId) : undefined;
+    const secDef = secondarySlot ? this.data.getWeapon(secondarySlot.weaponId) : undefined;
+    const isSteroids = player.mutant === 'steroids';
 
-    const isWide = width >= 380;
-    const activeCardW = isWide ? 82 : 68;
-    const secCardW = isWide ? 48 : 42;
-    const cardH = 18;
-    const cardGap = 2;
-    const totalCardsW = activeCardW + (secondarySlot ? secCardW + cardGap : 0);
+    let cursorX = 22;
+    const wepRowY = 18;
 
-    // Anchor cluster consistently between top-left vitals and top-right stats
-    const clusterCenterX = isWide ? Math.round(width * 0.5) : 186;
-    const startX = Math.max(114, Math.min(width - totalCardsW - 44, Math.round(clusterCenterX - totalCardsW * 0.5)));
-    const cardY = 2;
-
-    // 1. Active Weapon Card (slim translucent NT backdrop + left ammo stripe + crisp 1x sprite + reload bar)
+    // Active Weapon silhouette + ammo count + reload bar (only while reloading)
     if (activeSlot) {
-      const boxX = startX;
-      const boxY = cardY;
-      const boxW = activeCardW;
-      const boxH = cardH;
-      const ammoType = activeDef?.ammoType ?? 'melee';
-      const accentCol = AMMO_TYPE_ACCENT[ammoType] ?? '#c4d0e0';
-      const isEmpty =
-        ammoType !== 'melee' &&
-        player.gunWarrantTicks <= 0 &&
-        (player.ammo[ammoType] ?? 0) < (activeDef?.ammoCost ?? 1);
-      const emptyPulse = isEmpty && Math.floor(state.tick / 6) % 2 === 0;
-
-      // Borderless minimalist Nuclear Throne active weapon slot: soft ink underlay + crisp ammo-color underline!
-      drawSoftHudUnderlay(ctx, boxX, boxY, boxW, boxH, 0.46);
-      ctx.fillStyle = emptyPulse
-        ? '#ff3b47'
-        : activeSlot.cursed
-          ? '#c852ff'
-          : activeDef?.golden
-            ? '#ffd84d'
-            : accentCol;
-      ctx.fillRect(boxX + 3, boxY + boxH - 1, boxW - 6, 1);
-      ctx.fillRect(boxX + 1, boxY + 2, 2, boxH - 4);
-
-      // Safe interior content region strictly right of the 2px left accent bar!
-      const innerLeft = boxX + 5;
-      const innerW = boxW - 7;
-      const textCenterX = innerLeft + Math.floor(innerW * 0.5);
-
       const wepSpr = resolveWeaponSpriteName(activeSlot.weaponId, this.data);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(innerLeft - 1, boxY + 1, innerW + 1, 10);
-      ctx.clip();
-      const drew = this.drawSpriteIntegerOrFit(ctx, wepSpr, 0, innerLeft, boxY + 1, innerW - 1, 10);
-      if (!drew) {
-        this.fonts.draw(
-          ctx,
-          resolveWeaponLabel(activeSlot.weaponId, this.data).slice(0, 12),
-          textCenterX,
-          boxY + 2,
-          'fntSmall',
-          { align: 'center', color: '#ffffff', outline: true },
-        );
-      }
-      ctx.restore();
+      const { visualW } = this.drawHudWeaponSprite(ctx, wepSpr, cursorX, wepRowY, 22, 10, true);
 
-      // Compact weapon label dynamically measured to NEVER collide with left accent bar or right edge!
-      const rawName = resolveWeaponLabel(activeSlot.weaponId, this.data);
-      let clipped = rawName;
-      if (this.fonts.measure(clipped, 'fntSmall').width > innerW) {
-        while (clipped.length > 4 && this.fonts.measure(`${clipped}.`, 'fntSmall').width > innerW) {
-          clipped = clipped.slice(0, -1).trimEnd();
-        }
-        clipped = `${clipped}.`;
-      }
-      this.fonts.draw(ctx, clipped, textCenterX, boxY + 11, 'fntSmall', {
-        align: 'center',
-        color: isEmpty ? '#ff7078' : activeDef?.golden ? '#ffe047' : activeSlot.cursed ? '#d47aff' : '#ffffff',
-        outline: true,
-      });
-
-      // Integrated reload progress bar along the bottom 1px inside the card
+      // Thin crisp reload progress bar directly underneath reloading weapon ONLY while reloadTicks > 0
       if (activeSlot.reloadTicks > 0 && activeSlot.maxReloadTicks > 0) {
         const frac = 1 - Math.max(0, Math.min(1, activeSlot.reloadTicks / activeSlot.maxReloadTicks));
-        ctx.fillStyle = 'rgba(255, 224, 71, 0.25)';
-        ctx.fillRect(boxX + 3, boxY + boxH - 2, boxW - 4, 1);
-        ctx.fillStyle = '#ffe047';
-        ctx.fillRect(boxX + 3, boxY + boxH - 2, Math.max(1, Math.round((boxW - 4) * frac)), 1);
+        const rBarW = Math.max(14, visualW);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(cursorX - 1, wepRowY + 10, rBarW + 2, 3);
+        ctx.fillStyle = '#36323e';
+        ctx.fillRect(cursorX, wepRowY + 11, rBarW, 1);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(cursorX, wepRowY + 11, Math.max(1, Math.round(rBarW * frac)), 1);
+      }
+
+      cursorX += visualW + 3;
+
+      const ammoType = activeDef?.ammoType ?? 'melee';
+      if (ammoType !== 'melee') {
+        const count = player.ammo[ammoType] ?? 0;
+        const max = Math.max(1, player.ammoMax[ammoType] ?? 1);
+        const low = player.gunWarrantTicks <= 0 && (count === 0 || count / max <= 0.2);
+        const countStr = player.gunWarrantTicks > 0 ? 'INF' : String(count);
+        const drawn = this.fonts.draw(ctx, countStr, cursorX, wepRowY + 1, 'fntM1', {
+          color: player.gunWarrantTicks > 0 ? '#ffe047' : low ? '#ff3828' : '#ffffff',
+          outline: true,
+        });
+        cursorX += Math.max(14, drawn.width) + 6;
+      } else {
+        cursorX += 5;
       }
     }
 
-    // 2. Secondary Weapon Card (dimmed sleek card + dedicated corner swap badge outside barrel + reload bar!)
+    // Secondary Weapon silhouette + ammo count directly to the right
     if (secondarySlot) {
-      const boxX = startX + activeCardW + cardGap;
-      const boxY = cardY + 1;
-      const boxW = secCardW;
-      const boxH = cardH - 2;
-      const secDef = this.data.getWeapon(secondarySlot.weaponId);
-      const secAccent = AMMO_TYPE_ACCENT[secDef?.ammoType ?? 'melee'] ?? '#8a8e9e';
-      const showSwapBadge = inputMode !== 'touch';
-      const swapKey =
-        inputMode === 'gamepad' ? getGamepadGlyphs(gamepadFamily).swap : 'Q';
-      const measuredSwap = showSwapBadge
-        ? this.fonts.measure(swapKey, 'fntSmall')
-        : { width: 0, height: 0 };
-      const swapTagW = showSwapBadge ? Math.max(9, measuredSwap.width + 4) : 0;
-      const badgeReserveW = showSwapBadge ? swapTagW + 1 : 0;
-
-      drawSoftHudUnderlay(ctx, boxX, boxY, boxW, boxH, 0.34);
-      ctx.fillStyle = secondarySlot.cursed ? '#b94aff' : secAccent;
-      ctx.fillRect(boxX + 1, boxY + 2, 1, boxH - 4);
-
-      // Weapon sprite sits strictly inside the left region so barrel NEVER overlaps Q/Y badge!
-      const spriteRegionW = boxW - 4 - badgeReserveW;
       const secSpr = resolveWeaponSpriteName(secondarySlot.weaponId, this.data);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(boxX + 2, boxY + 1, spriteRegionW, boxH - 3);
-      ctx.clip();
-      const drew = this.drawSpriteIntegerOrFit(
+      const { visualW } = this.drawHudWeaponSprite(
         ctx,
         secSpr,
-        0,
-        boxX + 3,
-        boxY + 1,
-        Math.max(8, spriteRegionW - 2),
-        boxH - 3,
-        { alpha: 0.80 },
+        cursorX,
+        wepRowY,
+        20,
+        10,
+        isSteroids,
       );
-      if (!drew) {
-        this.fonts.draw(
-          ctx,
-          resolveWeaponLabel(secondarySlot.weaponId, this.data).slice(0, 6),
-          boxX + 2 + Math.floor(spriteRegionW / 2),
-          boxY + 5,
-          'fntSmall',
-          { align: 'center', color: '#9ca0ad' },
-        );
-      }
-      ctx.restore();
 
-      // Secondary weapon reload bar (critical for Steroids dual-wielding!)
       if (secondarySlot.reloadTicks > 0 && secondarySlot.maxReloadTicks > 0) {
         const sFrac =
           1 - Math.max(0, Math.min(1, secondarySlot.reloadTicks / secondarySlot.maxReloadTicks));
-        ctx.fillStyle = 'rgba(255, 224, 71, 0.25)';
-        ctx.fillRect(boxX + 2, boxY + boxH - 2, boxW - 4, 1);
-        ctx.fillStyle = '#ffe047';
-        ctx.fillRect(boxX + 2, boxY + boxH - 2, Math.max(1, Math.round((boxW - 4) * sFrac)), 1);
+        const rBarW = Math.max(14, visualW);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(cursorX - 1, wepRowY + 10, rBarW + 2, 3);
+        ctx.fillStyle = '#36323e';
+        ctx.fillRect(cursorX, wepRowY + 11, rBarW, 1);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(cursorX, wepRowY + 11, Math.max(1, Math.round(rBarW * sFrac)), 1);
       }
 
-      // Dedicated swap key badge tucked cleanly in top-right corner outside barrel clip region
-      if (showSwapBadge) {
-        const tagW = swapTagW;
-        const tagH = 8;
-        const tagX = boxX + boxW - tagW - 1;
-        const tagY = boxY + 1;
-        ctx.fillStyle = 'rgba(20, 16, 30, 0.90)';
-        ctx.fillRect(tagX, tagY, tagW, tagH);
-        ctx.fillStyle = 'rgba(130, 126, 152, 0.45)';
-        ctx.fillRect(tagX, tagY, 1, tagH);
-        ctx.fillRect(tagX, tagY + tagH - 1, tagW, 1);
-        this.fonts.draw(ctx, swapKey, tagX + Math.ceil(tagW / 2), tagY + 1, 'fntSmall', {
-          align: 'center',
-          color: inputMode === 'gamepad' ? '#ffe047' : '#c8cde0',
-          shadow: true,
+      cursorX += visualW + 3;
+
+      const secAmmoType = secDef?.ammoType ?? 'melee';
+      if (secAmmoType !== 'melee') {
+        const secCount = player.ammo[secAmmoType] ?? 0;
+        const secMax = Math.max(1, player.ammoMax[secAmmoType] ?? 1);
+        const secLow = player.gunWarrantTicks <= 0 && (secCount === 0 || secCount / secMax <= 0.2);
+        const secStr = player.gunWarrantTicks > 0 ? 'INF' : String(secCount);
+        const drawn = this.fonts.draw(ctx, secStr, cursorX, wepRowY + 1, 'fntM1', {
+          color: player.gunWarrantTicks > 0 ? '#ffe047' : secLow ? '#ff3828' : isSteroids ? '#ffffff' : '#c8c8d2',
+          outline: true,
+        });
+        cursorX += drawn.width + 4;
+      }
+
+      // Gamepad-only compact swap glyph (invisible in KBM/Touch for 100% pure video HUD!)
+      if (inputMode === 'gamepad') {
+        const swapKey = getGamepadGlyphs(gamepadFamily).swap;
+        this.fonts.draw(ctx, swapKey, cursorX, wepRowY + 2, 'fntSmall', {
+          color: '#ffe047',
+          outline: true,
         });
       }
     }
 
-    // 3. Slim 5-Ammo-Pool Strip tucked tightly under weapon cards (y = 21..33) with crisp 1x integer icons
-    const poolStep = isWide ? 29 : 27;
-    const stripW = AMMO_POOL_SPECS.length * poolStep;
-    const rogueExtraW = player.mutant === 'rogue' ? 21 : 0;
-    const pillW = stripW + rogueExtraW + 6;
-    const pillH = 12;
-    const pillY = cardY + cardH + 1;
-    const rightLimit = width - (isWide ? 56 : 48);
-    const pillX = Math.max(98, Math.min(rightLimit - pillW, Math.round(clusterCenterX - pillW * 0.5)));
-    const stripX = pillX + 3;
+    // ------------------------------------------------------------------------
+    // 4. 5 TINY AMMO POOL ICONS (x=4, y=30, 9px stride) — ZERO NUMBERS!
+    // ------------------------------------------------------------------------
+    const ammoStartX = 4;
+    const ammoY = 30;
+    const ammoStride = 9;
+    const equippedTypes = new Set<AmmoType>();
+    if (activeDef?.ammoType && activeDef.ammoType !== 'melee') equippedTypes.add(activeDef.ammoType);
+    if (secDef?.ammoType && secDef.ammoType !== 'melee') equippedTypes.add(secDef.ammoType);
 
-    // Borderless Nuclear Throne floating ammo row with ultra-light shadow strip (zero heavy box!)
-    drawSoftHudUnderlay(ctx, pillX, pillY, pillW, pillH, 0.34);
+    let lowAmmoWarningText = '';
 
     for (let i = 0; i < AMMO_POOL_SPECS.length; i++) {
       const spec = AMMO_POOL_SPECS[i]!;
-      const ax = stripX + i * poolStep;
+      const ax = ammoStartX + i * ammoStride;
       const count = player.ammo[spec.type] ?? 0;
       const max = Math.max(1, player.ammoMax[spec.type] ?? 1);
       const frac = Math.max(0, Math.min(1, count / max));
-      const isCurrent = activeDef?.ammoType === spec.type;
-      const low = count === 0 || frac <= 0.15;
+      const isEquipped = equippedTypes.has(spec.type);
+      const isLow = player.gunWarrantTicks <= 0 && (count === 0 || frac <= 0.2);
 
-      // Active pool subtle highlight
-      if (isCurrent) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.11)';
-        ctx.fillRect(ax - 1, pillY + 1, poolStep - 1, pillH - 2);
+      if (isEquipped && isLow && !lowAmmoWarningText) {
+        lowAmmoWarningText = spec.lowLabel;
       }
 
-      // Micro reserve fill bar along bottom pixel of each pool slot
-      const meterW = poolStep - 3;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
-      ctx.fillRect(ax, pillY + pillH - 2, meterW, 1);
-      ctx.fillStyle = low ? '#ff424c' : spec.color;
-      ctx.fillRect(ax, pillY + pillH - 2, Math.round(meterW * frac), 1);
-
-      // Draw ammo icon sprite at CRISP INTEGER 1x scale (zero 0.7x mixels!)
-      // In Built-In mode, frame 7 has an 82% opaque black smudge baked in — render crisp frame 0
-      // with readable dimmed alpha + clipped fill level so 0-ammo icons stay clearly recognizable!
       let drewIcon = false;
-      const iconBoxW = 10;
-      const iconBoxH = 10;
-      const iconY = pillY + 1;
+      const iconBoxW = 8;
+      const iconBoxH = 9;
 
       for (const candidate of spec.iconSprites) {
         const iconDef = this.sprites.getSprite(candidate);
         if (iconDef && this.sprites.hasSprite(candidate)) {
+          const iconFrame = computeAmmoIconFrame(
+            count,
+            max,
+            iconDef.frames.length,
+            player.gunWarrantTicks,
+          );
+          if (isEquipped) {
+            // Crisp white highlight outline on the equipped weapon's ammo pool icon (matches video!)
+            for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+              this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax + ox, ammoY + oy, iconBoxW, iconBoxH, {
+                alpha: 0.9,
+                tintColor: '#ffffff',
+              });
+            }
+          }
           if (this.isSteamMode) {
-            const iconFrame = computeAmmoIconFrame(
-              count,
-              max,
-              iconDef.frames.length,
-              player.gunWarrantTicks,
-            );
-            drewIcon = this.drawSpriteIntegerOrFit(ctx, candidate, iconFrame, ax, iconY, iconBoxW, iconBoxH, {
-              alpha: count === 0 && player.gunWarrantTicks <= 0 ? 0.78 : 1,
+            drewIcon = this.drawSpriteIntegerOrFit(ctx, candidate, iconFrame, ax, ammoY, iconBoxW, iconBoxH, {
+              alpha: count === 0 && player.gunWarrantTicks <= 0 ? 0.72 : 1,
             });
           } else {
-            // Built-In art: crisp 1x dimmed silhouette + bottom-up lit reserve fill (zero black-smudge frame 7!)
             const effFrac = player.gunWarrantTicks > 0 ? 1 : frac;
-            drewIcon = this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax, iconY, iconBoxW, iconBoxH, {
-              alpha: effFrac <= 0 ? 0.42 : 0.32,
+            drewIcon = this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
+              alpha: effFrac <= 0 ? 0.36 : 0.30,
             });
             if (drewIcon && effFrac > 0) {
               const fillH = Math.max(1, Math.round(iconBoxH * effFrac));
               ctx.save();
               ctx.beginPath();
-              ctx.rect(ax, iconY + iconBoxH - fillH, iconBoxW, fillH);
+              ctx.rect(ax, ammoY + iconBoxH - fillH, iconBoxW, fillH);
               ctx.clip();
-              this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax, iconY, iconBoxW, iconBoxH, {
+              this.drawSpriteIntegerOrFit(ctx, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
                 alpha: 1,
               });
               ctx.restore();
@@ -882,171 +921,147 @@ export class HudRenderer {
           if (drewIcon) break;
         }
       }
-      if (!drewIcon && this.sprites.hasSprite('sprAmmoIcons')) {
-        drewIcon = this.drawSpriteIntegerOrFit(
-          ctx,
-          'sprAmmoIcons',
-          spec.ammoIconsFrame,
-          ax,
-          iconY,
-          iconBoxW,
-          iconBoxH,
-          { alpha: count === 0 && player.gunWarrantTicks <= 0 ? 0.42 : 1 },
-        );
-      }
-      if (!drewIcon) {
-        ctx.fillStyle = '#0c0910';
-        ctx.fillRect(ax + 1, iconY + 2, 6, 6);
-        ctx.fillStyle = count === 0 ? '#5e6270' : spec.color;
-        ctx.fillRect(ax + 2, iconY + 3, 4, 4);
-      }
 
-      const countColor =
-        player.gunWarrantTicks > 0
-          ? '#ffe047'
-          : low
-            ? '#ff525c'
-            : isCurrent
-              ? '#ffffff'
-              : '#b4b9c9';
-      const label = player.gunWarrantTicks > 0 ? 'INF' : String(count);
-      this.fonts.draw(ctx, label, ax + 10, pillY + 3, 'fntSmall', {
-        color: countColor,
-        outline: true,
-      });
+      if (!drewIcon) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(ax, ammoY + 1, 6, 7);
+        ctx.fillStyle = count === 0 ? '#4e525c' : spec.color;
+        ctx.fillRect(ax + 1, ammoY + 2, 4, 5);
+      }
     }
 
-    // Rogue Portal Strike canisters at crisp 1x integer scale
+    let warnX = ammoStartX + AMMO_POOL_SPECS.length * ammoStride + 4;
+
+    // Rogue Portal Strike compact canister icon right beside the 5 ammo icons
     if (player.mutant === 'rogue') {
-      const rx = stripX + stripW + 2;
+      const rx = ammoStartX + AMMO_POOL_SPECS.length * ammoStride + 2;
       const rogueDef = this.sprites.getSprite('sprRogueAmmoHUD');
       let drewRogue = false;
       if (rogueDef && this.sprites.hasSprite('sprRogueAmmoHUD')) {
         const rf = Math.max(0, Math.min(rogueDef.frames.length - 1, player.portalStrikes));
-        drewRogue = this.drawSpriteIntegerOrFit(ctx, 'sprRogueAmmoHUD', rf, rx, pillY - 1, 11, 14);
+        drewRogue = this.drawSpriteIntegerOrFit(ctx, 'sprRogueAmmoHUD', rf, rx, ammoY - 2, 10, 13);
       }
       if (!drewRogue) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(rx, ammoY, 6, 8);
         ctx.fillStyle = player.portalStrikes > 0 ? '#52a8ff' : '#3a4659';
-        ctx.fillRect(rx + 2, pillY + 3, 5, 6);
+        ctx.fillRect(rx + 1, ammoY + 1, 4, 6);
       }
-      this.fonts.draw(ctx, String(player.portalStrikes), rx + 11, pillY + 3, 'fntSmall', {
-        color: player.portalStrikes > 0 ? '#8ce6ff' : '#6f7e94',
-        shadow: true,
+      warnX = rx + 12;
+    }
+
+    // Blinking bright red `LOW ENERGY` / `LOW BULLETS` / `LOW SHELLS` right beside ammo icons!
+    if (lowAmmoWarningText && Math.floor(state.tick / 10) % 2 === 0) {
+      this.fonts.draw(ctx, lowAmmoWarningText, warnX, ammoY + 1, 'fntM1', {
+        color: '#ff3020',
+        outline: true,
+      });
+    }
+
+    // Timed status indicator (Chicken Headless / Fish Gun Warrant) tucked cleanly below ammo row
+    if (player.headlessTicks > 0 && player.alive) {
+      const secs = (player.headlessTicks / 30).toFixed(1);
+      this.fonts.draw(ctx, `@rHEAD ${secs}S`, ammoStartX, ammoY + 12, 'fntSmall', {
+        outline: true,
+      });
+    } else if (player.gunWarrantTicks > 0) {
+      const secs = (player.gunWarrantTicks / 30).toFixed(1);
+      this.fonts.draw(ctx, `@yINF AMMO ${secs}S`, ammoStartX, ammoY + 12, 'fntSmall', {
+        outline: true,
       });
     }
   }
 
-  private renderTopRightStats(
+  /**
+   * Top-Right Mutation Icons + Ultra + Crown Icon anchored from (width - 4) leftward at y = 4
+   * (16x16 icons with 2px spacing — exact match to 08_caves_4_1.png, 13_frozen_5_3.png, 15_palace_7_1.png!).
+   */
+  private renderTopRightMutations(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     state: SimState,
     renderSettings: RenderSettings,
     fps: number,
     width: number,
   ): void {
-    const rightX = width - 4;
+    const iconSize = 16;
+    const stride = 18; // 16px icon + 2px spacing
+    let cursorRight = width - 4;
+    const topY = 4;
 
-    // Area + Loop badge & Kills inside a crisp compact corner pill
-    const areaText = state.loop > 0 ? `@yL${state.loop} @w${state.areaCode}` : `@w${state.areaCode}`;
-    const killsText = String(state.stats.kills);
-    const areaM = this.fonts.measure(areaText, 'fntM1');
-    const killsM = this.fonts.measure(killsText, 'fntSmall');
-    const skullSpr = this.sprites.getSprite('sprKillsIcon');
-    const skullW = skullSpr ? Math.min(13, skullSpr.width) : 10;
-    const boxW = Math.max(38, Math.max(areaM.width, killsM.width + skullW + 4) + 8);
-    const boxX = rightX - boxW;
-    const boxY = 2;
-    const boxH = 24;
-
-    // Borderless Nuclear Throne top-right Area & Kills readout (bold outlined text floating directly!)
-    this.fonts.draw(ctx, areaText, rightX - 2, boxY + 2, 'fntM1', {
-      align: 'right',
-      outline: true,
-    });
-
-    this.fonts.draw(ctx, killsText, rightX - 2, boxY + 14, 'fntSmall', {
-      align: 'right',
-      color: '#ffffff',
-      outline: true,
-    });
-    const iconX = rightX - 3 - killsM.width - skullW - 2;
-    const drewSkull = this.drawSpriteIntegerOrFit(ctx, 'sprKillsIcon', 0, iconX, boxY + 11, skullW, 13);
-    if (!drewSkull) {
-      ctx.fillStyle = '#e03646';
-      ctx.fillRect(iconX + 2, boxY + 14, 5, 5);
-    }
-
-    // Active Crown icon tucked neatly beneath stats pill at crisp 1x integer scale
-    let nextRightY = boxY + boxH + 2;
+    // Active Crown icon at rightmost slot if equipped
     if (state.crown !== 'none') {
       const crownDef = this.data.getCrown(state.crown);
-      this.drawSpriteIntegerOrFit(ctx, crownDef.spriteIdle, 0, rightX - 16, nextRightY, 16, 14);
-      nextRightY += 15;
+      const x = cursorRight - iconSize;
+      this.drawSpriteIntegerOrFit(ctx, crownDef.spriteIdle, 0, x, topY, iconSize, iconSize);
+      cursorRight -= stride;
     }
 
-    // Optional FPS counter cleanly below Crown
+    // Ultra Mutation icon if unlocked
+    if (state.player.ultra) {
+      const uDef = this.data.getUltra(state.player.ultra);
+      const mutantDef = this.data.getMutant(state.player.mutant);
+      const egHudSpr = this.sprites.getSprite('sprEGIconHUD');
+      const ultraFrame = uDef
+        ? computeUltraIconFrame(mutantDef.raceIndex, uDef.slot, egHudSpr?.frames.length ?? 24)
+        : 0;
+      const x = cursorRight - iconSize;
+      const drew = uDef
+        ? this.drawSpriteIntegerOrFit(ctx, 'sprEGIconHUD', ultraFrame, x, topY, iconSize, iconSize)
+        : false;
+      if (!drew) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x, topY, iconSize, iconSize);
+        ctx.fillStyle = '#ffe047';
+        ctx.fillRect(x + 2, topY + 2, iconSize - 4, iconSize - 4);
+      }
+      cursorRight -= stride;
+    }
+
+    // Owned Mutations anchored right-to-left (most recent on left, matching video!)
+    const mutations = state.player.mutations;
+    for (let i = 0; i < mutations.length; i++) {
+      const mutId = mutations[i]!;
+      const def = this.data.getMutation(mutId);
+      const x = cursorRight - iconSize;
+      if (x < 120) break; // Never collide with top-left HP bar
+      const drew = def
+        ? this.drawSpriteIntegerOrFit(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, x, topY, iconSize, iconSize)
+        : false;
+      if (!drew) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x, topY, iconSize, iconSize);
+        ctx.fillStyle = '#48e048';
+        ctx.fillRect(x + 2, topY + 2, iconSize - 4, iconSize - 4);
+      }
+      cursorRight -= stride;
+    }
+
+    // Optional FPS counter ONLY when explicitly enabled in Options
     if (renderSettings.showFps) {
       const targetFps = renderSettings.targetFps ?? (renderSettings.classic30Fps ? 30 : 120);
       const fpsColor = fps >= Math.min(55, targetFps * 0.85) ? '@g' : fps >= 28 ? '@y' : '@r';
-      this.fonts.draw(ctx, `${fpsColor}${Math.round(fps)}/${targetFps}`, rightX - 1, nextRightY + 1, 'fntSmall', {
+      this.fonts.draw(ctx, `${fpsColor}${Math.round(fps)}/${targetFps}`, width - 4, topY + 19, 'fntSmall', {
         align: 'right',
         outline: true,
       });
     }
   }
 
-  private renderMutationIcons(
+  /**
+   * Bottom-Right crisp white-outlined MM:SS.cc run timer (00:26.35), matching the reference video!
+   */
+  private renderBottomRightTimer(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     state: SimState,
+    width: number,
+    height: number,
   ): void {
-    const mutations = state.player.mutations;
-    const ultra = state.player.ultra;
-    if (mutations.length === 0 && !ultra) return;
-
-    // Crisp 1x integer 16x16 HUD mutation icons strictly clear of ammo strip (y >= 36) and touch corners
-    const startX = 4;
-    const startY = 36;
-    const step = 17;
-    const perRow = 5;
-
-    for (let i = 0; i < mutations.length; i++) {
-      const mutId = mutations[i]!;
-      const def = this.data.getMutation(mutId);
-      const col = i % perRow;
-      const row = Math.floor(i / perRow);
-      const x = startX + col * step;
-      const y = startY + row * step;
-
-      const drew = def
-        ? this.drawSpriteIntegerOrFit(ctx, def.hudSprite || 'sprSkillIconHUD', def.iconFrame, x, y, 16, 16)
-        : false;
-      if (!drew) {
-        ctx.fillStyle = '#181322';
-        ctx.fillRect(x, y, 14, 14);
-        ctx.fillStyle = '#4de862';
-        ctx.fillRect(x + 2, y + 2, 10, 10);
-      }
-    }
-
-    if (ultra) {
-      const uDef = this.data.getUltra(ultra);
-      const mutantDef = this.data.getMutant(state.player.mutant);
-      const egHudSpr = this.sprites.getSprite('sprEGIconHUD');
-      const idx = mutations.length;
-      const x = startX + (idx % perRow) * step;
-      const y = startY + Math.floor(idx / perRow) * step;
-      const ultraFrame = uDef
-        ? computeUltraIconFrame(mutantDef.raceIndex, uDef.slot, egHudSpr?.frames.length ?? 24)
-        : 0;
-      const drew = uDef
-        ? this.drawSpriteIntegerOrFit(ctx, 'sprEGIconHUD', ultraFrame, x - 1, y - 1, 18, 18)
-        : false;
-      if (!drew) {
-        ctx.fillStyle = '#181322';
-        ctx.fillRect(x, y, 14, 14);
-        ctx.fillStyle = '#ffe047';
-        ctx.fillRect(x + 2, y + 2, 10, 10);
-      }
-    }
+    const timeStr = formatRunTimer(state.stats.timeTicks);
+    this.fonts.draw(ctx, timeStr, width - 4, height - 10, 'fntM1', {
+      align: 'right',
+      color: '#ffffff',
+      outline: true,
+    });
   }
 
   /**
@@ -1077,7 +1092,7 @@ export class HudRenderer {
     const cy = height * 0.5;
     const padX = 14;
     const padTop = PORTAL_INDICATOR_PAD_TOP;
-    const padBot = 14;
+    const padBot = 16;
     const halfW = cx - padX;
     const halfH = cy - Math.max(padTop, padBot);
 
@@ -1148,7 +1163,7 @@ export class HudRenderer {
       scr.y >= margin &&
       scr.y <= height - margin
     ) {
-      return; // Portal is already visible on screen
+      return;
     }
 
     const cx = width * 0.5;
@@ -1158,7 +1173,7 @@ export class HudRenderer {
     const angle = Math.atan2(dy, dx);
 
     const padX = 16;
-    const padTop = PORTAL_INDICATOR_PAD_TOP; // >= 42px so it NEVER overlaps top ammo strip (y=21..33)
+    const padTop = PORTAL_INDICATOR_PAD_TOP;
     const padBot = 16;
     const halfW = cx - padX;
     const halfH = cy - Math.max(padTop, padBot);
@@ -1205,7 +1220,6 @@ export class HudRenderer {
     ctx.fill();
     ctx.restore();
 
-    // Crisp integer 1x sprPortalIndicator behind the chevron tip
     if (this.sprites.hasSprite('sprPortalIndicator')) {
       this.sprites.draw(ctx, 'sprPortalIndicator', Math.round(ix - Math.cos(angle) * 10), Math.round(iy - Math.sin(angle) * 10), {
         frame: 0,
@@ -1217,16 +1231,18 @@ export class HudRenderer {
     }
   }
 
-  private renderBossHud(
+  /**
+   * Full-screen Dramatic Boss Intro Splash ONLY (real Nuclear Throne never draws a bottom Boss HP bar).
+   */
+  private renderBossIntroSplash(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     state: SimState,
     width: number,
     height: number,
   ): void {
     const boss = state.boss;
-    if (!boss || boss.defeated) return;
+    if (!boss || boss.defeated || boss.introTicks <= 0) return;
 
-    // Hide Boss HP bar & intro banner while boss entity is still asleep (e.g. 3-3 Big Dog / 7-3 Throne)
     const bossEntity = state.enemies.find((e) => e.id === boss.entityId);
     if (bossEntity && bossEntity.aiState === 'sleep') return;
 
@@ -1237,279 +1253,182 @@ export class HudRenderer {
         ? (boss.subtitle || 'THE END OF THE ROAD')
         : boss.subtitle;
 
-    // 1. Full-screen Dramatic Boss Intro Splash (opaque cinematic letterbox; hides HUD & Boss HP bar!)
-    if (boss.introTicks > 0) {
-      const fadeOut = boss.introTicks > 12 ? 1 : Math.min(1, boss.introTicks / 12);
-      const slideIn = boss.introTicks > 50 ? Math.max(0, (boss.introTicks - 50) / 10) : 0;
-      const slideOffsetX = Math.round(slideIn * 68);
-      const flash = boss.introTicks >= 56 ? 0.38 : 0;
+    const fadeOut = boss.introTicks > 12 ? 1 : Math.min(1, boss.introTicks / 12);
+    const slideIn = boss.introTicks > 50 ? Math.max(0, (boss.introTicks - 50) / 10) : 0;
+    const slideOffsetX = Math.round(slideIn * 68);
+    const flash = boss.introTicks >= 56 ? 0.38 : 0;
 
-      ctx.save();
-      ctx.globalAlpha = fadeOut;
+    ctx.save();
+    ctx.globalAlpha = fadeOut;
 
-      const steamBossFrame = BOSS_INTRO_FRAME_MAP[boss.bossId];
-      const hasSteamBossSplash =
-        steamBossFrame !== undefined &&
-        this.sprites.hasSprite('sprBossIntro') &&
-        this.sprites.hasSprite('sprBossName');
+    const steamBossFrame = BOSS_INTRO_FRAME_MAP[boss.bossId];
+    const hasSteamBossSplash =
+      steamBossFrame !== undefined &&
+      this.sprites.hasSprite('sprBossIntro') &&
+      this.sprites.hasSprite('sprBossName');
 
-      if (hasSteamBossSplash) {
-        const cx = Math.round(width * 0.5);
+    if (hasSteamBossSplash) {
+      const cx = Math.round(width * 0.5);
 
-        // Clean opaque dark cinematic backdrop so ZERO ghosted HUD/world bleeds through!
-        ctx.fillStyle = '#09060d';
-        ctx.fillRect(0, 0, width, height);
-
-        // Opaque Steam back layer & foreground boss illustration (alpha = 1 during hold!)
-        if (this.sprites.hasSprite('sprBossIntroBackLayer')) {
-          this.sprites.draw(ctx, 'sprBossIntroBackLayer', cx + Math.round(slideOffsetX * 0.4), 0, {
-            frame: steamBossFrame,
-            alpha: 1,
-            pixelSnap: true,
-          });
-        }
-        this.sprites.draw(ctx, 'sprBossIntro', cx - slideOffsetX, 0, {
-          frame: steamBossFrame,
-          alpha: 1,
-          pixelSnap: true,
-        });
-
-        // Cinematic dark letterbox bars top & bottom
-        ctx.fillStyle = '#050308';
-        ctx.fillRect(0, 0, width, 14);
-        ctx.fillRect(0, height - 14, width, 14);
-
-        // Exact origin-aligned sprBossNameSplat directly behind sprBossName:
-        // sprBossName visual center sits at (+50, +2) from origin=(40,37)
-        // sprBossNameSplat frame 3 visual center sits at (+66, -13) from origin=(30,60)
-        const nameCenterX = cx - slideOffsetX;
-        const nameCenterY = Math.round(height * 0.44);
-        if (this.sprites.hasSprite('sprBossNameSplat')) {
-          const splatFrame = Math.min(3, 1 + Math.floor((60 - Math.min(60, boss.introTicks)) * 0.25));
-          this.sprites.draw(ctx, 'sprBossNameSplat', nameCenterX - 66, nameCenterY + 13, {
-            frame: splatFrame,
-            alpha: 1,
-            pixelSnap: true,
-          });
-        }
-        this.sprites.draw(ctx, 'sprBossName', nameCenterX - 50, nameCenterY - 2, {
-          frame: steamBossFrame,
-          alpha: 1,
-          pixelSnap: true,
-        });
-
-        if (flash > 0) {
-          ctx.fillStyle = `rgba(255, 240, 210, ${flash})`;
-          ctx.fillRect(0, 0, width, height);
-        }
-        ctx.restore();
-        return;
-      }
-
-      // Built-In Mode: Punchy Vlambeer-style cinematic poster splash + boss emblem silhouette!
-      const theme = BUILTIN_BOSS_THEMES[boss.bossId] ?? {
-        sprite: 'sprBanditBossIdle',
-        scale: 2,
-        bandA: '#3d1520',
-        bandB: '#6e2234',
-        accent: '#ffe047',
-        silhouette: '#1a0810',
-      };
-
-      // Opaque dark cinematic stage
-      ctx.fillStyle = '#09060e';
+      ctx.fillStyle = '#09060d';
       ctx.fillRect(0, 0, width, height);
 
-      // Dramatic stepped wasteland poster ribbons + radiant spotlight behind boss stage
-      const midY = Math.round(height * 0.5);
-      ctx.fillStyle = theme.bandA;
-      ctx.fillRect(0, midY - 64, width, 128);
-      ctx.fillStyle = theme.bandB;
-      ctx.fillRect(0, midY - 46, width, 92);
-
-      // Stepped pixel diagonal halftone/speed lines across the poster field
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
-      for (let sy = midY - 62; sy < midY + 62; sy += 6) {
-        ctx.fillRect(0, sy, width, 2);
-      }
-      ctx.fillStyle = theme.accent;
-      for (let l = 0; l < 12; l++) {
-        const ly = midY - 52 + l * 9;
-        const lw = 30 + ((l * 29) % 68);
-        const lx = ((l * 83 + Math.round(state.tick * 9)) % (width + lw)) - lw;
-        ctx.fillRect(lx, ly, lw, 2);
-      }
-
-      // Dedicated RIGHT-STAGE custom close-up Hi-Bit Boss Portrait (160x140 Hi-Bit drawn at 2x = massive NT hype!)
-      const bossSprX = Math.round(width * 0.76) - Math.round(slideOffsetX * 0.35);
-      const bossSprY = midY + 2;
-      const dRad = 52;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
-      for (let dy = -dRad; dy <= dRad; dy += 2) {
-        const span = Math.max(0, dRad - Math.abs(dy));
-        ctx.fillRect(bossSprX - span, midY + dy, span * 2, 2);
-      }
-      ctx.fillStyle = theme.accent;
-      for (let dy = -dRad - 3; dy <= dRad + 3; dy += 2) {
-        const outer = Math.max(0, dRad + 3 - Math.abs(dy));
-        const inner = Math.max(0, dRad - 1 - Math.abs(dy));
-        if (outer > inner) {
-          ctx.fillRect(bossSprX - outer, midY + dy, outer - inner, 2);
-          ctx.fillRect(bossSprX + inner, midY + dy, outer - inner, 2);
-        }
-      }
-
-      const portraitFrame = BOSS_INTRO_FRAME_MAP[boss.bossId] ?? 0;
-      if (this.sprites.hasSprite('sprBuiltinBossPortrait')) {
-        this.sprites.draw(ctx, 'sprBuiltinBossPortrait', bossSprX + 6, bossSprY + 4, {
-          frame: portraitFrame,
-          scaleX: 2,
-          scaleY: 2,
-          tintColor: theme.silhouette,
-          pixelSnap: true,
-        });
-        this.sprites.draw(ctx, 'sprBuiltinBossPortrait', bossSprX, bossSprY, {
-          frame: portraitFrame,
-          scaleX: 2,
-          scaleY: 2,
-          pixelSnap: true,
-        });
-      } else if (this.sprites.hasSprite(theme.sprite)) {
-        this.sprites.draw(ctx, theme.sprite, bossSprX + 5, bossSprY + 4, {
-          frame: 0,
-          scaleX: theme.scale,
-          scaleY: theme.scale,
-          tintColor: theme.silhouette,
-          pixelSnap: true,
-        });
-        this.sprites.draw(ctx, theme.sprite, bossSprX, bossSprY, {
-          frame: 0,
-          scaleX: theme.scale,
-          scaleY: theme.scale,
+      if (this.sprites.hasSprite('sprBossIntroBackLayer')) {
+        this.sprites.draw(ctx, 'sprBossIntroBackLayer', cx + Math.round(slideOffsetX * 0.4), 0, {
+          frame: steamBossFrame,
+          alpha: 1,
           pixelSnap: true,
         });
       }
-
-      // Dedicated LEFT-STAGE authentic Vlambeer jagged black ink brush-splat nameplate!
-      const bandW = Math.min(Math.round(width * 0.48), 192);
-      const bandH = bossSubtitle ? 48 : 32;
-      const bandX = Math.round(width * 0.06) - slideOffsetX;
-      const bandY = midY - Math.floor(bandH * 0.5);
-
-      drawInkBrushSplat(ctx, bandX, bandY, bandW, bandH, '#07050c', theme.accent);
-
-      const textCenterX = bandX + Math.floor(bandW * 0.5);
-      const nameFitsLarge = this.fonts.measure(bossDisplayName, 'fntL').width <= bandW - 14;
-      this.fonts.draw(ctx, bossDisplayName, textCenterX, nameFitsLarge ? bandY + 6 : bandY + 10, nameFitsLarge ? 'fntL' : 'fntM1', {
-        align: 'center',
-        maxWidth: bandW - 12,
-        color: '#ffffff',
-        outline: true,
+      this.sprites.draw(ctx, 'sprBossIntro', cx - slideOffsetX, 0, {
+        frame: steamBossFrame,
+        alpha: 1,
+        pixelSnap: true,
       });
-      if (bossSubtitle) {
-        this.fonts.draw(ctx, bossSubtitle.toUpperCase(), textCenterX, bandY + 29, 'fntSmall', {
-          align: 'center',
-          maxWidth: bandW - 14,
-          color: theme.accent,
-          outline: true,
+
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, width, 16);
+      ctx.fillRect(0, height - 16, width, 16);
+
+      const nameCenterX = cx - slideOffsetX;
+      const nameCenterY = Math.round(height * 0.44);
+      if (this.sprites.hasSprite('sprBossNameSplat')) {
+        const splatFrame = Math.min(3, 1 + Math.floor((60 - Math.min(60, boss.introTicks)) * 0.25));
+        this.sprites.draw(ctx, 'sprBossNameSplat', nameCenterX - 66, nameCenterY + 13, {
+          frame: splatFrame,
+          alpha: 1,
+          pixelSnap: true,
         });
       }
-
-      // Heavy cinematic top & bottom letterbox bars with crisp accent edge trim
-      ctx.fillStyle = '#050308';
-      ctx.fillRect(0, 0, width, 20);
-      ctx.fillRect(0, height - 20, width, 20);
-      ctx.fillStyle = theme.accent;
-      ctx.fillRect(0, 20, width, 2);
-      ctx.fillRect(0, height - 22, width, 2);
-      ctx.fillStyle = '#0c0814';
-      ctx.fillRect(0, 22, width, 1);
-      ctx.fillRect(0, height - 23, width, 1);
+      this.sprites.draw(ctx, 'sprBossName', nameCenterX - 50, nameCenterY - 2, {
+        frame: steamBossFrame,
+        alpha: 1,
+        pixelSnap: true,
+      });
 
       if (flash > 0) {
-        ctx.fillStyle = `rgba(255, 240, 205, ${flash})`;
+        ctx.fillStyle = `rgba(255, 240, 210, ${flash})`;
         ctx.fillRect(0, 0, width, height);
       }
       ctx.restore();
       return;
     }
 
-    // 2. Boss HP Bar across bottom-center with crisp pixel bevel housing & riveted end-caps
-    if (boss.hp > 0 && boss.maxHp > 0) {
-      const frac = Math.max(0, Math.min(1, boss.hp / boss.maxHp));
-      if (this.lastBossEntityId !== boss.entityId || frac > this.displayedBossHpFrac) {
-        this.lastBossEntityId = boss.entityId;
-        this.displayedBossHpFrac = frac;
-      } else {
-        this.displayedBossHpFrac += (frac - this.displayedBossHpFrac) * 0.12;
-        if (Math.abs(this.displayedBossHpFrac - frac) < 0.004) {
-          this.displayedBossHpFrac = frac;
-        }
+    // Built-In Mode: Punchy Vlambeer-style cinematic poster splash
+    const theme = BUILTIN_BOSS_THEMES[boss.bossId] ?? {
+      sprite: 'sprBanditBossIdle',
+      scale: 2,
+      bandA: '#3d1520',
+      bandB: '#6e2234',
+      accent: '#ffe047',
+      silhouette: '#1a0810',
+    };
+
+    ctx.fillStyle = '#09060e';
+    ctx.fillRect(0, 0, width, height);
+
+    const midY = Math.round(height * 0.5);
+    ctx.fillStyle = theme.bandA;
+    ctx.fillRect(0, midY - 64, width, 128);
+    ctx.fillStyle = theme.bandB;
+    ctx.fillRect(0, midY - 46, width, 92);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+    for (let sy = midY - 62; sy < midY + 62; sy += 6) {
+      ctx.fillRect(0, sy, width, 2);
+    }
+    ctx.fillStyle = theme.accent;
+    for (let l = 0; l < 12; l++) {
+      const ly = midY - 52 + l * 9;
+      const lw = 30 + ((l * 29) % 68);
+      const lx = ((l * 83 + Math.round(state.tick * 9)) % (width + lw)) - lw;
+      ctx.fillRect(lx, ly, lw, 2);
+    }
+
+    const bossSprX = Math.round(width * 0.76) - Math.round(slideOffsetX * 0.35);
+    const bossSprY = midY + 2;
+    const dRad = 52;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
+    for (let dy = -dRad; dy <= dRad; dy += 2) {
+      const span = Math.max(0, dRad - Math.abs(dy));
+      ctx.fillRect(bossSprX - span, midY + dy, span * 2, 2);
+    }
+    ctx.fillStyle = theme.accent;
+    for (let dy = -dRad - 3; dy <= dRad + 3; dy += 2) {
+      const outer = Math.max(0, dRad + 3 - Math.abs(dy));
+      const inner = Math.max(0, dRad - 1 - Math.abs(dy));
+      if (outer > inner) {
+        ctx.fillRect(bossSprX - outer, midY + dy, outer - inner, 2);
+        ctx.fillRect(bossSprX + inner, midY + dy, outer - inner, 2);
       }
+    }
 
-      const barW = Math.min(200, width - 84);
-      const barH = 9;
-      const bx = Math.round((width - barW) / 2);
-      const by = height - 16;
+    const portraitFrame = BOSS_INTRO_FRAME_MAP[boss.bossId] ?? 0;
+    if (this.sprites.hasSprite('sprBuiltinBossPortrait')) {
+      this.sprites.draw(ctx, 'sprBuiltinBossPortrait', bossSprX + 6, bossSprY + 4, {
+        frame: portraitFrame,
+        scaleX: 2,
+        scaleY: 2,
+        tintColor: theme.silhouette,
+        pixelSnap: true,
+      });
+      this.sprites.draw(ctx, 'sprBuiltinBossPortrait', bossSprX, bossSprY, {
+        frame: portraitFrame,
+        scaleX: 2,
+        scaleY: 2,
+        pixelSnap: true,
+      });
+    } else if (this.sprites.hasSprite(theme.sprite)) {
+      this.sprites.draw(ctx, theme.sprite, bossSprX + 5, bossSprY + 4, {
+        frame: 0,
+        scaleX: theme.scale,
+        scaleY: theme.scale,
+        tintColor: theme.silhouette,
+        pixelSnap: true,
+      });
+      this.sprites.draw(ctx, theme.sprite, bossSprX, bossSprY, {
+        frame: 0,
+        scaleX: theme.scale,
+        scaleY: theme.scale,
+        pixelSnap: true,
+      });
+    }
 
-      // Outer dark ink housing + beveled steel frame
-      ctx.fillStyle = '#08050d';
-      ctx.fillRect(bx - 5, by - 3, barW + 10, barH + 6);
-      ctx.fillStyle = '#383044';
-      ctx.fillRect(bx - 3, by - 2, barW + 6, barH + 4);
-      // Top steel highlight & bottom shadow bevel
-      ctx.fillStyle = '#7c728c';
-      ctx.fillRect(bx - 3, by - 2, barW + 6, 1);
-      ctx.fillStyle = '#1b1524';
-      ctx.fillRect(bx - 3, by + barH + 1, barW + 6, 1);
+    const bandW = Math.min(Math.round(width * 0.48), 192);
+    const bandH = bossSubtitle ? 48 : 32;
+    const bandX = Math.round(width * 0.06) - slideOffsetX;
+    const bandY = midY - Math.floor(bandH * 0.5);
 
-      // Ornamental pixel end-caps with gold corner rivets
-      ctx.fillStyle = '#5e536e';
-      ctx.fillRect(bx - 4, by - 2, 3, barH + 4);
-      ctx.fillRect(bx + barW + 1, by - 2, 3, barH + 4);
-      ctx.fillStyle = '#ffe047';
-      ctx.fillRect(bx - 3, by, 1, 2);
-      ctx.fillRect(bx - 3, by + barH - 2, 1, 2);
-      ctx.fillRect(bx + barW + 2, by, 1, 2);
-      ctx.fillRect(bx + barW + 2, by + barH - 2, 1, 2);
+    drawInkBrushSplat(ctx, bandX, bandY, bandW, bandH, '#000000', theme.accent);
 
-      // Recessed crimson track
-      ctx.fillStyle = '#120810';
-      ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
-      ctx.fillStyle = '#2e1019';
-      ctx.fillRect(bx, by, barW, barH);
-
-      // White damage trail
-      const trailW = Math.round(barW * this.displayedBossHpFrac);
-      const fillW = Math.round(barW * frac);
-      if (trailW > fillW) {
-        ctx.fillStyle = '#fff2d6';
-        ctx.fillRect(bx + fillW, by, trailW - fillW, barH);
-      }
-
-      // 3-tone crimson boss health fill
-      if (fillW > 0) {
-        ctx.fillStyle = '#e02438';
-        ctx.fillRect(bx, by, fillW, barH);
-        ctx.fillStyle = '#ff7282';
-        ctx.fillRect(bx, by, fillW, 2);
-        ctx.fillStyle = '#991224';
-        ctx.fillRect(bx, by + barH - 2, fillW, 2);
-      }
-
-      // Subtle quarter-HP notch ticks along the upper frame bevel
-      ctx.fillStyle = '#08050d';
-      for (const q of [0.25, 0.5, 0.75]) {
-        const tx = bx + Math.round(barW * q);
-        ctx.fillRect(tx, by - 2, 1, 2);
-        ctx.fillRect(tx, by + barH, 1, 2);
-      }
-
-      this.fonts.draw(ctx, bossDisplayName, Math.round(width * 0.5), by - 10, 'fntSmall', {
+    const textCenterX = bandX + Math.floor(bandW * 0.5);
+    const nameFitsLarge = this.fonts.measure(bossDisplayName, 'fntL').width <= bandW - 14;
+    this.fonts.draw(ctx, bossDisplayName, textCenterX, nameFitsLarge ? bandY + 6 : bandY + 10, nameFitsLarge ? 'fntL' : 'fntM1', {
+      align: 'center',
+      maxWidth: bandW - 12,
+      color: '#ffffff',
+      outline: true,
+    });
+    if (bossSubtitle) {
+      this.fonts.draw(ctx, bossSubtitle.toUpperCase(), textCenterX, bandY + 29, 'fntSmall', {
         align: 'center',
-        color: '#ffe047',
+        maxWidth: bandW - 14,
+        color: theme.accent,
         outline: true,
       });
     }
+
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, width, 20);
+    ctx.fillRect(0, height - 20, width, 20);
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(0, 20, width, 2);
+    ctx.fillRect(0, height - 22, width, 2);
+
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255, 240, 205, ${flash})`;
+      ctx.fillRect(0, 0, width, height);
+    }
+    ctx.restore();
   }
 }

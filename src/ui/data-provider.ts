@@ -821,21 +821,21 @@ export interface BiomeFallbackPalette {
 }
 
 export const BIOME_FALLBACK_PALETTES: Record<BiomeId, BiomeFallbackPalette> = {
-  campfire: { voidBg: '#161113', floor: '#5c4b3c', floorAlt: '#4e3f32', floorCracked: '#3b2f24', wallTop: '#3e3028', wallBot: '#291f1a', wallEdge: '#7a624f', darkTint: '14, 10, 12' },
-  desert: { voidBg: '#241712', floor: '#c9975b', floorAlt: '#bc8a4f', floorCracked: '#8f6336', wallTop: '#9c5a3c', wallBot: '#6b3926', wallEdge: '#d9ab73', darkTint: '16, 12, 10' },
-  sewers: { voidBg: '#0b140d', floor: '#4f6b4b', floorAlt: '#435e40', floorCracked: '#2d402b', wallTop: '#334d39', wallBot: '#1f3024', wallEdge: '#6b8f64', darkTint: '6, 14, 8' },
-  scrapyard: { voidBg: '#1c1512', floor: '#695c54', floorAlt: '#5d514a', floorCracked: '#423833', wallTop: '#7d4d38', wallBot: '#4d2d20', wallEdge: '#9e6f56', darkTint: '14, 12, 12' },
-  caves: { voidBg: '#12091c', floor: '#4a3261', floorAlt: '#3f2954', floorCracked: '#2c1b3d', wallTop: '#7c42a8', wallBot: '#4a216b', wallEdge: '#b874eb', darkTint: '12, 6, 22' },
-  frozen_city: { voidBg: '#121b26', floor: '#9dbbd4', floorAlt: '#8cadc7', floorCracked: '#6283a1', wallTop: '#4c6580', wallBot: '#2f4157', wallEdge: '#cfe6f7', darkTint: '10, 16, 26' },
-  labs: { voidBg: '#091416', floor: '#496e6c', floorAlt: '#3f615f', floorCracked: '#2a4241', wallTop: '#2f494d', wallBot: '#1c2d30', wallEdge: '#73a6a3', darkTint: '4, 14, 16' },
-  palace: { voidBg: '#0e1121', floor: '#455078', floorAlt: '#3b4569', floorCracked: '#28304d', wallTop: '#2c3557', wallBot: '#1b2138', wallEdge: '#c9a64d', darkTint: '8, 10, 24' },
-  vault: { voidBg: '#11141c', floor: '#606875', floorAlt: '#535b69', floorCracked: '#3a404c', wallTop: '#465266', wallBot: '#2b3342', wallEdge: '#8a99b5', darkTint: '10, 14, 20' },
-  oasis: { voidBg: '#0c2124', floor: '#3e8077', floorAlt: '#357068', floorCracked: '#23524c', wallTop: '#2a5966', wallBot: '#193942', wallEdge: '#66baa8', darkTint: '6, 18, 22' },
-  pizza_sewers: { voidBg: '#1a120e', floor: '#615442', floorAlt: '#544838', floorCracked: '#3d3327', wallTop: '#733e32', wallBot: '#4a251d', wallEdge: '#a66d4f', darkTint: '16, 10, 8' },
-  mansion: { voidBg: '#211015', floor: '#7a4552', floorAlt: '#6b3b47', floorCracked: '#4d2731', wallTop: '#b5923e', wallBot: '#785e22', wallEdge: '#f0ce73', darkTint: '18, 10, 14' },
-  cursed_caves: { voidBg: '#17071e', floor: '#3d214a', floorAlt: '#321a3d', floorCracked: '#22102b', wallTop: '#9c2d73', wallBot: '#5c1743', wallEdge: '#e063b2', darkTint: '16, 4, 22' },
-  jungle: { voidBg: '#0b170a', floor: '#395e36', floorAlt: '#30522e', floorCracked: '#20381e', wallTop: '#2b4a26', wallBot: '#192e16', wallEdge: '#649c56', darkTint: '6, 16, 6' },
-  hq: { voidBg: '#0b1224', floor: '#384b6e', floorAlt: '#304161', floorCracked: '#202c45', wallTop: '#243554', wallBot: '#141f33', wallEdge: '#6ca0e6', darkTint: '6, 12, 26' },
+  campfire: { voidBg: '#8c7a5c', floor: '#b59a58', floorAlt: '#ab9050', floorCracked: '#7a6438', wallTop: '#8c7a5c', wallBot: '#685842', wallEdge: '#a89474', darkTint: '14, 10, 12' },
+  desert: { voidBg: '#9b8568', floor: '#c0a453', floorAlt: '#b89c4d', floorCracked: '#84703b', wallTop: '#9b8568', wallBot: '#7d6c66', wallEdge: '#b59f80', darkTint: '16, 12, 10' },
+  sewers: { voidBg: '#344030', floor: '#424d3b', floorAlt: '#3b4635', floorCracked: '#283024', wallTop: '#344030', wallBot: '#263022', wallEdge: '#4a5944', darkTint: '6, 14, 8' },
+  scrapyard: { voidBg: '#828890', floor: '#776b64', floorAlt: '#70645d', floorCracked: '#544a44', wallTop: '#828890', wallBot: '#5c6168', wallEdge: '#a0a6ae', darkTint: '14, 12, 12' },
+  caves: { voidBg: '#44315e', floor: '#382c48', floorAlt: '#342842', floorCracked: '#261d33', wallTop: '#44315e', wallBot: '#312247', wallEdge: '#5d457d', darkTint: '12, 6, 22' },
+  frozen_city: { voidBg: '#9da4a6', floor: '#b9b9b9', floorAlt: '#b2b5b8', floorCracked: '#789eb7', wallTop: '#9da4a6', wallBot: '#727c84', wallEdge: '#bcc2c4', darkTint: '10, 16, 26' },
+  labs: { voidBg: '#0d1919', floor: '#171c21', floorAlt: '#1b2228', floorCracked: '#101418', wallTop: '#0d1919', wallBot: '#15282c', wallEdge: '#1f3a40', darkTint: '4, 14, 16' },
+  palace: { voidBg: '#64282c', floor: '#26262c', floorAlt: '#1a1c22', floorCracked: '#14141a', wallTop: '#64282c', wallBot: '#4e1d21', wallEdge: '#7e3b3f', darkTint: '8, 10, 24' },
+  vault: { voidBg: '#3d4d58', floor: '#5a6470', floorAlt: '#525b66', floorCracked: '#3a424c', wallTop: '#3d4d58', wallBot: '#2b3842', wallEdge: '#5c7080', darkTint: '10, 14, 20' },
+  oasis: { voidBg: '#58afa9', floor: '#9dc1b9', floorAlt: '#92b8b0', floorCracked: '#668f86', wallTop: '#58afa9', wallBot: '#246b5c', wallEdge: '#76cac3', darkTint: '6, 18, 22' },
+  pizza_sewers: { voidBg: '#384434', floor: '#4c5442', floorAlt: '#444c3b', floorCracked: '#30362a', wallTop: '#384434', wallBot: '#293326', wallEdge: '#50604a', darkTint: '16, 10, 8' },
+  mansion: { voidBg: '#8a7e6e', floor: '#6e424c', floorAlt: '#643a44', floorCracked: '#482830', wallTop: '#8a7e6e', wallBot: '#665b4c', wallEdge: '#b8a88a', darkTint: '18, 10, 14' },
+  cursed_caves: { voidBg: '#3c265a', floor: '#322248', floorAlt: '#2c1d40', floorCracked: '#1e132e', wallTop: '#3c265a', wallBot: '#2a1842', wallEdge: '#663d94', darkTint: '16, 4, 22' },
+  jungle: { voidBg: '#438428', floor: '#5e542a', floorAlt: '#564d26', floorCracked: '#423a1c', wallTop: '#438428', wallBot: '#2b5c18', wallEdge: '#5aa63a', darkTint: '6, 16, 6' },
+  hq: { voidBg: '#b8c2cc', floor: '#c4cdd6', floorAlt: '#b8c2cc', floorCracked: '#8c98a6', wallTop: '#b8c2cc', wallBot: '#7c8896', wallEdge: '#d4dce6', darkTint: '6, 12, 26' },
 };
 
 const MUTANT_BY_ID = new Map<MutantId, MutantDef>(DEFAULT_MUTANTS.map((m) => [m.id, m]));
