@@ -1240,47 +1240,111 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
     ctx.fillRect(cx - 1, cy - 1, 3, 3);
   });
 
-  // 3. CRISP 1x ANIMATED CAMPFIRE & CAMPFIRE OFF (24x24)
-  b.addSprite('sprCampfire', 24, 24, 12, 14, 4, (ctx, x, y, w, h, f) => {
+  // 3. HEROIC 1x ANIMATED CAMPFIRE & CAMPFIRE OFF (44x44, orig 22,28 — warm stone ring & crackling flames!)
+  b.addSprite('sprCampfire', 44, 44, 22, 28, 6, (ctx, x, y, w, h, f) => {
     const buf = new PxCanvas(w, h);
-    // Ash bed & stone ring
-    buf.ellipse(12, 17, 8, 4, '#2a2220');
-    buf.rect(6, 15, 12, 3, '#6e4226');
-    buf.rect(7, 16, 10, 2, '#4a2b18');
-    // Ring stones around base
-    const stones: Array<[number, number]> = [[4, 16], [8, 19], [13, 19], [17, 17], [19, 15]];
-    for (const [sx, sy] of stones) {
-      buf.rect(sx!, sy!, 3, 2, '#7c747e');
-      buf.set(sx!, sy!, '#a8a0aa');
+    const cx = 22;
+    const cy = 31;
+    // Deep ash pit & warm ember ground halo
+    buf.ellipse(cx, cy + 1, 15, 7, '#221a1c');
+    buf.ellipse(cx, cy, 12, 5, '#342624');
+    // Rugged warm stone ring (back stones behind logs)
+    const backStones: Array<[number, number, number, number]> = [
+      [8, 25, 6, 4], [14, 23, 6, 4], [24, 23, 6, 4], [30, 25, 6, 4],
+    ];
+    for (const [sx, sy, sw, sh] of backStones) {
+      buf.rect(sx, sy, sw, sh, '#6a626c');
+      buf.rect(sx + 1, sy, sw - 2, 1, '#9c929c');
+      buf.rect(sx, sy + sh - 1, sw, 1, '#443e48');
     }
-    // Glowing coal bed
-    buf.rect(9, 16, 6, 2, '#ff6a1c');
-    buf.rect(10, 16, 4, 1, '#ffd440');
-    // Crisp 1x dancing pixel flames
-    const sway = f === 1 ? -1 : f === 3 ? 1 : 0;
-    const tall = (f & 1) === 0 ? 1 : 0;
-    buf.poly([[7, 16], [6, 11], [11 + sway, 3 - tall], [16, 9], [17, 16]], '#d42c1a');
-    buf.poly([[8, 16], [8 + sway, 10], [12 + sway, 5 - tall], [15, 11], [15, 16]], '#ff7420');
-    buf.poly([[10, 16], [10, 11], [12 + sway, 8], [14, 12], [14, 16]], '#ffda42');
-    buf.rect(11, 13, 2, 3, '#fff9d0');
+    // Crossed charred firewood logs radiating inside the ring
+    buf.line(11, 33, 33, 27, '#58321c', 3);
+    buf.line(12, 32, 32, 27, '#824c28', 1);
+    buf.line(12, 27, 32, 33, '#5c341e', 3);
+    buf.line(13, 27, 31, 32, '#8c542e', 1);
+    buf.line(14, 30, 30, 30, '#462616', 2);
+    // Glowing hot coal bed in center
+    const coalPulse = (f & 1) === 0;
+    buf.ellipse(cx, cy - 1, 8, 3, '#b82814');
+    buf.ellipse(cx, cy - 1, 6, 2, coalPulse ? '#ff641c' : '#e85018');
+    buf.rect(cx - 4, cy - 2, 8, 2, coalPulse ? '#ffd844' : '#ffba32');
+    // Front stone ring stones overlapping ash bed
+    const frontStones: Array<[number, number, number, number]> = [
+      [6, 29, 6, 4], [10, 33, 6, 4], [17, 35, 7, 4], [25, 34, 6, 4], [31, 31, 6, 4], [33, 27, 5, 4],
+    ];
+    for (const [sx, sy, sw, sh] of frontStones) {
+      buf.rect(sx, sy, sw, sh, '#746c76');
+      buf.rect(sx + 1, sy, sw - 2, 1, '#afa6ae');
+      buf.rect(sx, sy + sh - 1, sw, 1, '#48404a');
+      buf.set(sx + 1, sy + 1, '#c8bebc');
+    }
+    // Multi-layered crackling 6-frame flames (3 dancing tongues!)
+    const swayA = [0, -2, -1, 1, 2, 1][f % 6]!;
+    const swayB = [1, 2, 0, -2, -1, 0][f % 6]!;
+    const tall = [0, 2, 1, 3, 1, 2][f % 6]!;
+    // Outer deep crimson/red flame envelope
+    buf.poly([
+      [13, 29], [11, 22], [14 + swayB, 14], [17 + swayA, 18],
+      [22 + swayA, 6 - tall], [27 + swayB, 16], [31 + swayA, 13], [33, 22], [31, 29],
+    ], '#c82418');
+    // Mid bright roaring orange flame
+    buf.poly([
+      [15, 29], [14, 22], [16 + swayB, 16], [19, 20],
+      [22 + swayA, 9 - tall], [26 + swayB, 19], [29 + swayA, 16], [30, 23], [29, 29],
+    ], '#ff721e');
+    // Inner golden yellow flame heart
+    buf.poly([
+      [17, 29], [16, 23], [19 + swayA, 18],
+      [22 + swayA, 13 - Math.floor(tall / 2)], [26 + swayB, 20], [27, 29],
+    ], '#ffda3c');
+    // Incandescent white-cream core
+    buf.poly([
+      [19, 29], [19, 24], [22 + Math.round(swayA * 0.5), 18], [25, 24], [25, 29],
+    ], '#fff9d0');
+    buf.rect(21, 24, 2, 4, '#ffffff');
     buf.outline(INK);
-    // Rising spark pixel
-    buf.set(9 + ((f * 3) % 7), 2 + (f & 1), '#ffe866');
+    // Dancing hot embers & rising sparks above flames
+    const sparkPositions: Array<[number, number, string]> = [
+      [15 + ((f * 3) % 13), 4 + (f % 3), '#ffe868'],
+      [27 - ((f * 2) % 11), 2 + ((f + 1) % 4), '#ff8828'],
+      [19 + ((f * 5) % 8), 8 - (f % 3), '#fff8c8'],
+    ];
+    for (const [ex, ey, col] of sparkPositions) {
+      buf.set(ex, ey, col);
+    }
     buf.flush(ctx, x, y);
   });
 
-  b.addSprite('sprCampfireOff', 24, 24, 12, 14, 1, (ctx, x, y, w, h) => {
+  b.addSprite('sprCampfireOff', 44, 44, 22, 28, 1, (ctx, x, y, w, h) => {
     const buf = new PxCanvas(w, h);
-    buf.ellipse(12, 17, 8, 4, '#241e20');
-    buf.rect(6, 15, 12, 3, '#3c302c');
-    const stones: Array<[number, number]> = [[4, 16], [8, 19], [13, 19], [17, 17], [19, 15]];
-    for (const [sx, sy] of stones) {
-      buf.rect(sx!, sy!, 3, 2, '#625c68');
-      buf.set(sx!, sy!, '#847e8c');
+    const cx = 22;
+    const cy = 31;
+    buf.ellipse(cx, cy + 1, 15, 7, '#1d181c');
+    buf.ellipse(cx, cy, 12, 5, '#342e32');
+    buf.ellipse(cx, cy, 8, 3, '#4c464c');
+    const stones: Array<[number, number, number, number]> = [
+      [8, 25, 6, 4], [14, 23, 6, 4], [24, 23, 6, 4], [30, 25, 6, 4],
+      [6, 29, 6, 4], [10, 33, 6, 4], [17, 35, 7, 4], [25, 34, 6, 4], [31, 31, 6, 4], [33, 27, 5, 4],
+    ];
+    for (const [sx, sy, sw, sh] of stones) {
+      buf.rect(sx, sy, sw, sh, '#5a5460');
+      buf.rect(sx + 1, sy, sw - 2, 1, '#847e8c');
+      buf.rect(sx, sy + sh - 1, sw, 1, '#3a3440');
     }
-    buf.set(11, 16, '#cc3c1c');
-    buf.set(12, 16, '#ff7830');
+    // Charred burnt logs
+    buf.line(12, 32, 32, 27, '#342826', 3);
+    buf.line(13, 27, 31, 32, '#2a2020', 3);
+    buf.line(15, 30, 29, 30, '#443836', 1);
+    // Faint dying embers
+    buf.rect(20, 29, 2, 1, '#cc3418');
+    buf.set(21, 29, '#ff7828');
+    buf.set(24, 31, '#a82814');
     buf.outline(INK);
+    // Delicate curling cold smoke wisp
+    buf.set(21, 23, '#6e6876');
+    buf.set(22, 21, '#827c8c');
+    buf.set(21, 19, '#6e6876');
+    buf.set(23, 17, '#585260');
     buf.flush(ctx, x, y);
   });
 
@@ -1329,7 +1393,47 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   b.addSprite('sprPortal', 32, 32, 16, 16, 6, (ctx, x, y, w, h, f) =>
     drawSwirlPortal1x(ctx, x, y, w, h, f, '#1e0834', '#56158c', '#9838e6', '#d87cff', '#fce2ff', '#e8a8ff'),
   );
-  b.addAlias('sprPortalClear', 'sprPortal');
+  // Portal wall-clearing shockwave FX (64x64, orig 32,32, 6f)
+  b.addSprite('sprPortalClear', 64, 64, 32, 32, 6, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    const cx = 32;
+    const cy = 32;
+    const outerR = Math.min(30, 12 + f * 3.6);
+    const midR = Math.max(4, outerR - 4);
+    const innerR = Math.max(0, f >= 2 ? (f - 1) * 5.2 : 0);
+
+    // Expanding cosmic blast ring
+    for (let py = 1; py < h - 1; py++) {
+      for (let px = 1; px < w - 1; px++) {
+        const dx = px - cx;
+        const dy = py - cy;
+        const dist = Math.hypot(dx, dy);
+        const ang = Math.atan2(dy, dx);
+        const wobble = Math.sin(ang * 6 + f * 1.1) * 1.6 + Math.cos(ang * 10 - f * 0.7) * 0.8;
+        const r = dist + wobble;
+        if (r > outerR || r < innerR) continue;
+        if (f === 5 && hash2d(px, py, 913) > 165) continue;
+        if (r > outerR - 2.2) buf.set(px, py, '#2b094a');
+        else if (r > midR) buf.set(px, py, '#7620cc');
+        else if (r > innerR + 3.5) buf.set(px, py, '#d468ff');
+        else buf.set(px, py, f <= 2 ? '#ffffff' : '#f8d0ff');
+      }
+    }
+    // 6 swirling energy tendrils & radiant debris sparks
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + f * 0.45;
+      const sx = Math.round(cx + Math.cos(a) * Math.max(4, outerR - 5));
+      const sy = Math.round(cy + Math.sin(a) * Math.max(4, outerR - 5));
+      const ex = Math.round(cx + Math.cos(a + 0.35) * Math.min(30, outerR + 1));
+      const ey = Math.round(cy + Math.sin(a + 0.35) * Math.min(30, outerR + 1));
+      buf.line(sx, sy, ex, ey, f < 4 ? '#f4ccff' : '#c050ff');
+      buf.set(ex, ey, '#ffffff');
+    }
+    if (f <= 2) {
+      buf.ellipse(cx, cy, Math.max(2, 7 - f * 2), Math.max(2, 7 - f * 2), '#ffffff');
+    }
+    buf.flush(ctx, x, y);
+  });
   b.addSprite('sprProtoPortal', 32, 32, 16, 16, 6, (ctx, x, y, w, h, f) =>
     drawSwirlPortal1x(ctx, x, y, w, h, f, '#082618', '#146e40', '#28c46c', '#76ffa8', '#e2ffed', '#a8ffc8'),
   );
@@ -1979,7 +2083,7 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   b.addSprite('sprPalacePillar', 18, 28, 9, 18, 1, (ctx, x, y, w, h) => drawPillar1x(ctx, x, y, w, h, true));
   b.addAlias('sprNuclearPillar', 'sprPalacePillar');
 
-  // CRISP 1x PROTO STATUE (24x32)
+  // HEROIC 1x PROTO STATUE (40x48, orig 20,32 — imposing emerald-runed Vault monolith!)
   const drawProtoStatue1x = (
     ctx: DrawCtx,
     x: number,
@@ -1991,34 +2095,79 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   ): void => {
     const buf = new PxCanvas(w, h);
     if (state === 'hurt') {
-      buf.poly([[4, 28], [7, 6], [12, 2], [17, 6], [20, 28]], '#ffffff');
+      const flashCol = f === 0 ? '#ffffff' : f === 1 ? '#dcfff0' : '#f4fff8';
+      buf.rect(4, 36, 32, 9, flashCol);
+      buf.rect(7, 30, 26, 7, flashCol);
+      buf.poly([[8, 32], [11, 10], [20, 3], [29, 10], [32, 32]], flashCol);
+      if (f === 2) {
+        buf.rect(18, 12, 4, 20, '#30885a');
+      }
       buf.outline(INK);
       buf.flush(ctx, x, y);
       return;
     }
     const pulse = (f & 1) === 0;
-    const rune = state === 'charge' ? (pulse ? '#88ffaa' : '#44f074') : (pulse ? '#3ca670' : '#2d7c54');
-    // Stepped dais + tapered monolith
-    buf.rect(3, 24, 18, 5, '#566278');
-    buf.rect(4, 24, 16, 1, '#7c8ca8');
-    buf.poly([[6, 24], [8, 6], [12, 2], [16, 6], [18, 24]], '#64728a');
-    buf.poly([[7, 24], [9, 6], [12, 3], [12, 24]], '#7c8ca8');
-    // Glowing emerald rune channel
-    buf.rect(10, 8, 4, 4, '#182030');
-    buf.rect(11, 9, 2, 2, rune);
-    buf.rect(11, 13, 2, 10, rune);
+    const runeDark = state === 'charge' ? '#1c8848' : '#184e34';
+    const runeMid = state === 'charge' ? (pulse ? '#58ff92' : '#38e074') : (pulse ? '#38b472' : '#288656');
+    const runeHi = state === 'charge' ? '#ffffff' : (pulse ? '#a4ffd0' : '#58d492');
+
+    // Wide stepped octagonal stone plinth & ground pedestal
+    buf.rect(4, 39, 32, 6, '#384454');
+    buf.rect(5, 39, 30, 2, '#5c6c82');
+    buf.rect(7, 33, 26, 7, '#4c5c70');
+    buf.rect(8, 33, 24, 2, '#788ca4');
+    buf.rect(7, 44, 26, 1, '#26303c');
+    // Flanking carved stone wing buttresses
+    buf.poly([[7, 34], [9, 19], [13, 17], [13, 34]], '#465468');
+    buf.poly([[8, 33], [10, 20], [12, 19], [12, 33]], '#6a7e96');
+    buf.poly([[33, 34], [31, 19], [27, 17], [27, 34]], '#364252');
+    buf.poly([[31, 33], [29, 20], [28, 19], [28, 33]], '#4d5d72');
+    // Towering tapered main monolith body
+    buf.poly([[10, 34], [12, 10], [20, 3], [28, 10], [30, 34]], '#586880');
+    // Left sunlit chiseled bevel face
+    buf.poly([[11, 33], [13, 10], [20, 4], [20, 33]], '#768aa4');
+    buf.line(13, 10, 20, 4, '#a2b6d0');
+    // Right shadowed chisel face
+    buf.poly([[23, 33], [23, 8], [28, 10], [29, 33]], '#3f4e62');
+    // Carved geometric collar & forehead arch bands
+    buf.rect(12, 22, 16, 2, '#323e4e');
+    buf.rect(12, 21, 16, 1, '#94a8c0');
+    buf.rect(11, 30, 18, 2, '#323e4e');
+    // Central recessed ancient proto-eye vault
+    buf.rect(15, 10, 10, 8, '#161e2c');
+    buf.poly([[20, 11], [23, 14], [20, 17], [17, 14]], runeDark);
+    buf.rect(19, 12, 2, 4, runeMid);
+    buf.rect(18, 13, 4, 2, runeMid);
+    buf.set(19, 13, runeHi);
+    // Vertical emerald rune power conduit & twin branch glyphs
+    buf.rect(18, 19, 4, 15, '#182230');
+    buf.rect(19, 19, 2, 15, runeMid);
+    buf.rect(19, 20 + (f % 3) * 4, 2, 2, runeHi);
+    buf.rect(14, 25, 3, 2, runeMid);
+    buf.rect(23, 25, 3, 2, runeMid);
+    buf.rect(13, 36, 14, 2, runeDark);
+    buf.rect(15, 36, 10, 1, runeMid);
+
     if (state === 'charge') {
-      buf.set(11, 9, '#ffffff');
-      buf.set(6 + (f & 1), 6, '#9cffbc');
-      buf.set(17 - (f & 1), 9, '#ffffff');
+      // Crackling emerald energy veins & orbiting charge sparks
+      buf.line(13, 14, 16, 14, runeHi);
+      buf.line(24, 14, 27, 14, runeHi);
+      buf.rect(19, 6, 2, 4, runeHi);
+      buf.set(20, 5, '#ffffff');
     }
     buf.outline(INK);
+    if (state === 'charge') {
+      const ang = f * (Math.PI * 0.5);
+      buf.set(Math.round(20 + Math.cos(ang) * 15), Math.round(16 + Math.sin(ang) * 8), '#9cffbc');
+      buf.set(Math.round(20 - Math.cos(ang) * 14), Math.round(24 - Math.sin(ang) * 7), '#ffffff');
+      buf.set(11 + (f * 5) % 18, 2 + (f & 1), '#58ff92');
+    }
     buf.flush(ctx, x, y);
   };
-  b.addSprite('sprProtoStatueIdle', 24, 32, 12, 20, 4, (ctx, x, y, w, h, f) => drawProtoStatue1x(ctx, x, y, w, h, f, 'idle'));
+  b.addSprite('sprProtoStatueIdle', 40, 48, 20, 32, 4, (ctx, x, y, w, h, f) => drawProtoStatue1x(ctx, x, y, w, h, f, 'idle'));
   b.addAlias('sprProtoStatue', 'sprProtoStatueIdle');
-  b.addSprite('sprProtoStatueCharge', 24, 32, 12, 20, 4, (ctx, x, y, w, h, f) => drawProtoStatue1x(ctx, x, y, w, h, f, 'charge'));
-  b.addSprite('sprProtoStatueHurt', 24, 32, 12, 20, 1, (ctx, x, y, w, h) => drawProtoStatue1x(ctx, x, y, w, h, 0, 'hurt'));
+  b.addSprite('sprProtoStatueCharge', 40, 48, 20, 32, 4, (ctx, x, y, w, h, f) => drawProtoStatue1x(ctx, x, y, w, h, f, 'charge'));
+  b.addSprite('sprProtoStatueHurt', 40, 48, 20, 32, 3, (ctx, x, y, w, h, f) => drawProtoStatue1x(ctx, x, y, w, h, f, 'hurt'));
 
   // CRISP 1x BIOME & SECRET PROPS
   b.addSprite('sprPizzaEntrance', 24, 24, 12, 12, 2, (ctx, x, y, w, h, f) => {
@@ -2058,22 +2207,73 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   });
   b.addAlias('sprIceFlower', 'sprIceFlowerIdle');
 
-  b.addSprite('sprCrownPedIdle', 22, 26, 11, 16, 4, (ctx, x, y, w, h, f) => {
+  // HEROIC 1x VAULT CROWN PEDESTAL (48x48, orig 24,30 — grand Vault centerpiece altar!)
+  b.addSprite('sprCrownPedIdle', 48, 48, 24, 30, 4, (ctx, x, y, w, h, f) => {
     const buf = new PxCanvas(w, h);
-    buf.rect(4, 18, 14, 5, '#586478');
-    buf.rect(6, 11, 10, 8, '#6c7890');
-    buf.rect(8, 13, 6, 3, '#1c2230');
-    buf.rect(9, 14, 4, 1, f % 2 === 0 ? '#5ef598' : '#c8ffe0');
-    buf.rect(5, 8, 12, 3, '#9e2234');
-    buf.rect(6, 9, 10, 1, '#e8bc40');
-    const bob = (f & 1) === 0 ? 0 : -1;
-    buf.grid(7, 2 + bob, [
-      'g..g..g',
-      'gg.g.gg',
-      'ggggggg',
-      'yyyyyyy',
-    ], { g: '#f5c63d', y: '#fff08c' });
+    const pulse = (f & 1) === 0;
+    const rune = pulse ? '#58f898' : '#30c46c';
+    const runeHi = pulse ? '#d8ffe8' : '#8cffb8';
+
+    // Grand stepped octagonal stone dais
+    buf.poly([[6, 44], [3, 39], [6, 34], [42, 34], [45, 39], [42, 44]], '#364454');
+    buf.poly([[8, 42], [6, 38], [8, 34], [40, 34], [42, 38], [40, 42]], '#526478');
+    buf.rect(9, 34, 30, 2, '#7c90a8');
+    // Glowing emerald floor rune strip across dais
+    buf.rect(12, 39, 24, 2, '#1a2432');
+    buf.rect(14, 39, 20, 1, rune);
+    buf.set(23, 39, runeHi);
+    buf.set(24, 39, runeHi);
+
+    // Sculpted central Vault pedestal column with gold corner pilasters
+    buf.rect(11, 21, 26, 14, '#5a6a80');
+    buf.rect(12, 21, 10, 14, '#70849c');
+    buf.rect(28, 21, 8, 14, '#425064');
+    // Gold vertical corner inlays
+    buf.rect(12, 22, 2, 12, '#c89220');
+    buf.rect(12, 22, 1, 12, '#f5cc48');
+    buf.rect(34, 22, 2, 12, '#b07c18');
+    buf.rect(34, 22, 1, 12, '#e8bc3c');
+    // Central glowing emerald vault emblem
+    buf.rect(18, 24, 12, 8, '#16202e');
+    buf.poly([[24, 25], [28, 28], [24, 31], [20, 28]], rune);
+    buf.rect(23, 27, 2, 2, runeHi);
+
+    // Wide ornate altar slab & royal crimson velvet cushion draped with gold tassels
+    buf.rect(8, 16, 32, 6, '#6e8098');
+    buf.rect(9, 16, 30, 2, '#9cb0c8');
+    buf.rect(11, 14, 26, 6, '#961c2e');
+    buf.rect(12, 14, 24, 2, '#c83044');
+    buf.rect(11, 19, 26, 2, '#6c1220');
+    buf.rect(11, 18, 26, 1, '#f0c440'); // gold velvet piping
+    // Gold dangling altar corner tassels
+    buf.rect(12, 20, 2, 3, '#e8b834');
+    buf.rect(34, 20, 2, 3, '#e8b834');
+
+    // Hovering regal golden Crown bobbing above velvet cushion
+    const bob = f === 1 || f === 2 ? -1 : 0;
+    buf.grid(16, 3 + bob, [
+      'g......gg......g',
+      'gG....gGGg....Gg',
+      'gGG..gGGGGg..GGg',
+      'gGGGgGGGGGGgGGGg',
+      'gGGRGGGGGGGGGGgG',
+      'gGGGGGGEEGGGGGGg',
+      'dGGGGGGGGGGGGGGd',
+      '.ddddyyyyyydddd.',
+    ], {
+      g: '#c88c14',
+      G: '#f5c838',
+      y: '#fff49c',
+      d: '#8a5a0c',
+      R: '#e82838',
+      E: '#48f080',
+    });
     buf.outline(INK);
+    // Floating magic sparkles around the Crown
+    const sx = f === 0 ? 11 : f === 1 ? 35 : f === 2 ? 13 : 33;
+    const sy = f === 0 ? 5 : f === 1 ? 6 : f === 2 ? 11 : 10;
+    buf.rect(sx - 1, sy, 3, 1, '#fff6b0');
+    buf.rect(sx, sy - 1, 1, 3, '#ffffff');
     buf.flush(ctx, x, y);
   });
   b.addAlias('sprCrownPed', 'sprCrownPedIdle');
@@ -2231,58 +2431,100 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
     buf.flush(ctx, x, y);
   });
 
-  // Oasis Vibrant Pink/Red/Cyan Coral Cluster & Dark Iron Anchor (matching board_1 Oasis!)
-  b.addSprite('sprCoral', 18, 18, 9, 12, 1, (ctx, x, y, w, h) => {
+  // HEROIC 1x OASIS REEF CORAL (32x28, orig 16,20) & SUNKEN IRON ANCHOR (36x38, orig 18,26)
+  b.addSprite('sprCoral', 32, 28, 16, 20, 1, (ctx, x, y, w, h) => {
     const buf = new PxCanvas(w, h);
-    buf.grid(2, 2, [
-      '......RR......',
-      '..PP..rR..CC..',
-      '.pPP..rR..cCC.',
-      '.pPPr.rR..cC..',
-      '..pPrrRRrcCC..',
-      '..prRRRRRRcc..',
-      '.pPrRRrRRrcPp.',
-      '.pPprrRRrPPpp.',
-      '..rrrRRRRrrr..',
-      '...rrRRRRrr...',
-      '....ddRRdd....',
-      '.....dddd.....',
-    ], {
-      r: '#e62e4c',
-      R: '#ff5e78',
-      p: '#f04498',
-      P: '#ff96cc',
-      c: '#20b8ca',
-      C: '#6cf6ff',
-      d: '#861830',
-    });
+    // Mossy turquoise reef rock base
+    buf.ellipse(16, 23, 10, 3, '#1c4c3c');
+    buf.ellipse(15, 22, 8, 2, '#2d7258');
+    // Left magenta fan coral cluster
+    buf.line(11, 21, 5, 11, '#c82874', 3);
+    buf.line(9, 17, 4, 15, '#ef4498', 2);
+    buf.line(10, 15, 8, 8, '#ef4498', 2);
+    buf.ellipse(5, 10, 2, 2, '#ff8ac8');
+    buf.ellipse(8, 8, 2, 2, '#ffa4d8');
+    buf.ellipse(4, 15, 2, 1, '#ff8ac8');
+    // Right turquoise-cyan tube coral branches
+    buf.line(21, 21, 27, 11, '#18889c', 3);
+    buf.line(23, 18, 28, 16, '#2ec4d8', 2);
+    buf.line(22, 16, 24, 9, '#2ec4d8', 2);
+    buf.ellipse(27, 10, 2, 2, '#84f6ff');
+    buf.ellipse(24, 8, 2, 2, '#aefaff');
+    buf.set(27, 10, '#ffe860');
+    buf.set(24, 8, '#ffe860');
+    // Tall central crimson-coral staghorn antlers
+    buf.line(16, 22, 16, 5, '#b81c36', 4);
+    buf.line(15, 21, 15, 5, '#e83250', 2);
+    buf.line(16, 15, 11, 8, '#e83250', 3);
+    buf.line(16, 13, 21, 6, '#e83250', 3);
+    buf.line(12, 11, 13, 5, '#ff647e', 2);
+    buf.line(20, 10, 19, 4, '#ff647e', 2);
+    // Sunlit coral tips & warm anemone accents
+    buf.ellipse(16, 4, 2, 2, '#ff7890');
+    buf.set(15, 3, '#ffc8d2');
+    buf.ellipse(11, 7, 2, 2, '#ff7890');
+    buf.set(11, 6, '#ffc8d2');
+    buf.ellipse(21, 6, 2, 2, '#ff7890');
+    buf.set(21, 5, '#ffc8d2');
+    buf.ellipse(16, 19, 4, 2, '#e83250');
+    buf.set(14, 19, '#ffe058');
+    buf.set(18, 20, '#ffe058');
     buf.outline(INK);
     buf.flush(ctx, x, y);
   });
 
-  b.addSprite('sprAnchor', 20, 22, 10, 14, 1, (ctx, x, y, w, h) => {
+  b.addSprite('sprAnchor', 36, 38, 18, 26, 1, (ctx, x, y, w, h) => {
     const buf = new PxCanvas(w, h);
-    buf.grid(3, 2, [
-      '.....iiii.....',
-      '....iI..Ii....',
-      '.....iiii.....',
-      '..iiiiiIiiii..',
-      '..ddddiiiddd..',
-      '......iIi.....',
-      '......iIi.....',
-      '......iIi.....',
-      '.i....iIi....i',
-      'iIi...iIi...iIi',
-      '.ii...iIi...ii',
-      '..ii..iIi..ii.',
-      '...iiiIIIiii..',
-      '....iiiiiii...',
-      '......ddd.....',
-    ], {
-      i: '#46545e',
-      I: '#728492',
-      d: '#28323a',
-    });
+    // Dangling broken iron chain links off top mooring ring
+    buf.ellipse(24, 6, 3, 2, '#3a4854');
+    buf.ellipse(24, 6, 1, 1, '#0e0a12');
+    buf.ellipse(28, 9, 2, 3, '#4c5c6a');
+    buf.set(28, 8, '#7c8e9c');
+    buf.ellipse(30, 14, 2, 2, '#3a4854');
+    // Top forged iron mooring ring
+    buf.ellipse(18, 6, 4, 4, '#445462');
+    buf.ellipse(17, 5, 3, 3, '#728696');
+    buf.ellipse(18, 6, 2, 2, '#0e0a12');
+    buf.erase(18, 6);
+    buf.erase(17, 6);
+    buf.erase(18, 5);
+    // Heavy weathered wooden & iron-banded crossbar stock
+    buf.rect(7, 10, 22, 4, '#6c4c34');
+    buf.rect(8, 10, 20, 1, '#926a48');
+    buf.rect(7, 13, 22, 1, '#463020');
+    buf.rect(10, 10, 2, 4, '#465664');
+    buf.rect(24, 10, 2, 4, '#465664');
+    buf.rect(15, 9, 6, 6, '#506270');
+    buf.rect(16, 9, 3, 5, '#7c90a0');
+    // Massive central forged iron shank
+    buf.rect(16, 14, 4, 18, '#425260');
+    buf.rect(16, 14, 2, 17, '#6e8292');
+    buf.rect(16, 15, 1, 14, '#9ab0be');
+    buf.rect(19, 14, 1, 17, '#263038');
+    // Sweeping thick curved iron lower arms & crown
+    buf.bezier(6, 23, 10, 36, 18, 34, '#384652', 4);
+    buf.bezier(30, 23, 26, 36, 18, 34, '#384652', 4);
+    buf.bezier(7, 23, 11, 34, 18, 32, '#627686', 2);
+    buf.bezier(29, 23, 25, 34, 18, 32, '#526474', 2);
+    // Heavy bottom anchor crown knob
+    buf.ellipse(18, 34, 4, 2, '#34404c');
+    buf.rect(16, 32, 4, 2, '#6c8090');
+    // Twin sharp triangular barbed flukes on left & right tips
+    buf.poly([[3, 24], [7, 18], [10, 24], [6, 25]], '#4a5a68');
+    buf.poly([[5, 23], [7, 19], [8, 23]], '#889eae');
+    buf.poly([[33, 24], [29, 18], [26, 24], [30, 25]], '#3c4c58');
+    buf.poly([[30, 23], [29, 19], [28, 23]], '#6e8292');
+    // Oxidized rust weathering patches
+    buf.rect(17, 22, 2, 3, '#984a2a');
+    buf.set(17, 22, '#c0663a');
+    buf.rect(11, 30, 3, 2, '#8c4224');
+    buf.rect(23, 29, 2, 2, '#8c4224');
+    // Clinging Oasis emerald seaweed frond & pink barnacles
+    buf.line(18, 17, 13, 22, '#2a8c44', 2);
+    buf.line(13, 22, 14, 27, '#46be62', 1);
+    buf.set(22, 32, '#f06480');
+    buf.set(23, 32, '#ffa4b8');
+    buf.set(9, 26, '#f06480');
     buf.outline(INK);
     buf.flush(ctx, x, y);
   });
@@ -2560,8 +2802,2246 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
     buf.flush(ctx, x, y);
   });
 
+  // 13. Y.V.'S CRIB ($$$) SETPIECE SPRITES
+  registerYvCribSetpieces(b);
+
+  // 14. IDPD HQ-3 CAPTAIN'S OFFICE & HQ-1/2 PROPS
+  registerIdpdHqProps(b);
+
+  // 15. MISSING BIOME HAZARDS, CHESTS, STATUES, PICKUPS & ROOF DECALS
+  registerBiomeHazardsAndProps(b);
+  registerRoofTopDecals(b);
+
   // Reference clean imports for strict lint/noUnusedLocals
   void hashF;
   void makeRamp;
   void (null as unknown as ColorRamp);
+}
+
+// ============================================================================
+// SECTION 1: Y.V.'S CRIB ($$$) SETPIECE SPRITES
+// ============================================================================
+
+function registerYvCribSetpieces(b: FallbackAtlasBuilder): void {
+  // 1. Colossal Wall-Mounted Flatscreen TV (`sprVenuzTV` / `Hurt` / `Dead`, 240x96, orig 129,96, 1/3/7f)
+  const drawVenuzTV = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    f: number,
+    mode: 'idle' | 'hurt' | 'dead',
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(10, 6, 220, 78, '#ffffff');
+      buf.rect(62, 84, 116, 10, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+
+    // Heavy luxury brushed-gold console stand & soundbar base
+    buf.rect(58, 82, 124, 12, '#3a243c');
+    buf.rect(60, 84, 120, 8, '#1e1626');
+    buf.rect(58, 82, 124, 2, '#e8b628');
+    buf.rect(58, 92, 124, 2, '#a67414');
+    // Soundbar gold speaker vents
+    for (let sx = 68; sx <= 166; sx += 4) {
+      buf.rect(sx, 86, 2, 4, '#564462');
+    }
+    buf.rect(116, 86, 8, 4, mode === 'dead' ? '#362834' : '#f5c838');
+
+    // Massive obsidian flatscreen bezel with ornate gold corner brackets
+    const bezelBody = mode === 'hurt' && f === 1 ? '#584c68' : '#241c2c';
+    const bezelHi = mode === 'hurt' && f === 1 ? '#a89cb8' : '#3e324a';
+    buf.rect(10, 6, 220, 78, bezelBody);
+    buf.rect(12, 6, 216, 2, bezelHi);
+    buf.rect(12, 82, 216, 2, '#140e1a');
+    // Ornate solid-gold luxury corner brackets & side speaker trims
+    const goldA = '#f5c838';
+    const goldHi = '#fff498';
+    const goldDark = '#a87414';
+    // Top-left, top-right, bottom-left, bottom-right L-brackets
+    buf.rect(10, 6, 16, 4, goldA);
+    buf.rect(10, 6, 4, 16, goldA);
+    buf.rect(11, 7, 12, 1, goldHi);
+    buf.rect(214, 6, 16, 4, goldA);
+    buf.rect(226, 6, 4, 16, goldA);
+    buf.rect(216, 7, 12, 1, goldHi);
+    buf.rect(10, 80, 16, 4, goldDark);
+    buf.rect(10, 68, 4, 16, goldA);
+    buf.rect(214, 80, 16, 4, goldDark);
+    buf.rect(226, 68, 4, 16, goldA);
+    // Flanking side vertical gold speaker strips
+    for (let sy = 26; sy <= 62; sy += 4) {
+      buf.rect(13, sy, 4, 2, '#624c28');
+      buf.rect(223, sy, 4, 2, '#624c28');
+    }
+
+    // Widescreen display cavity (x=21..219, y=13..77)
+    if (mode === 'dead') {
+      buf.rect(21, 13, 198, 64, '#100c14');
+      buf.rect(24, 16, 192, 58, '#1a1522');
+      // Jagged shattered glass spiderweb cracks
+      const cx1 = 104;
+      const cy1 = 44;
+      buf.ellipse(cx1, cy1, 14, 10, '#09070c');
+      const cracks: Array<[number, number, number, number]> = [
+        [cx1, cy1, 36, 18], [cx1, cy1, 28, 56], [cx1, cy1, 76, 72],
+        [cx1, cy1, 152, 16], [cx1, cy1, 198, 34], [cx1, cy1, 184, 70],
+        [cx1, cy1, 122, 15], [cx1, cy1, 134, 74],
+      ];
+      for (const [x0, y0, x1, y1] of cracks) {
+        buf.line(x0, y0, x1, y1, '#586274');
+        buf.line(x0 + 1, y0, x1 + 1, y1, '#0c0a10');
+      }
+      // Dangling broken copper/red wires
+      buf.bezier(94, 48, 90, 62, 98, 76, '#d83838', 1);
+      buf.bezier(112, 46, 118, 60, 108, 78, '#48b8f0', 1);
+      // Animated rising grey smoke puffs & crackling blue/gold sparks across 7 frames
+      const smokeY1 = 42 - ((f * 5) % 28);
+      const smokeY2 = 52 - (((f + 3) * 5) % 30);
+      buf.ellipse(98 + (f & 1) * 2, smokeY1, 7, 5, '#4c4656');
+      buf.ellipse(97 + (f & 1) * 2, smokeY1 - 1, 4, 3, '#6e687a');
+      buf.ellipse(118 - (f % 3), smokeY2, 6, 4, '#3c3644');
+      if (f % 2 === 0) {
+        const spx = 96 + (f * 9) % 28;
+        const spy = 40 + (f * 7) % 18;
+        buf.line(spx - 4, spy, spx + 4, spy, '#ffe868');
+        buf.line(spx, spy - 4, spx, spy + 4, '#68f4ff');
+        buf.rect(spx - 1, spy - 1, 2, 2, '#ffffff');
+      }
+      buf.set(212, 80, '#441818'); // dead power LED
+    } else {
+      // Active video-game scene on the giant TV screen
+      buf.rect(21, 13, 198, 64, '#1b1430');
+      buf.rect(21, 13, 198, 22, '#2d1c4c');
+      buf.rect(21, 53, 198, 24, '#244830');
+      buf.rect(21, 53, 198, 3, '#449848');
+      // Pixel night stars & retro green hills
+      for (let i = 0; i < 16; i++) {
+        const sx = 26 + ((i * 29) % 186);
+        const sy = 16 + ((i * 11) % 24);
+        buf.set(sx, sy, i % 3 === 0 ? '#ffe878' : '#b898e8');
+      }
+      buf.poly([[24, 53], [52, 34], [84, 53]], '#2e6838');
+      buf.poly([[140, 53], [176, 30], [214, 53]], '#2e6838');
+      // Tiny pixel Y.V. hero blasting golden lasers on the TV screen!
+      buf.poly([[64, 58], [72, 42], [80, 58]], '#f4f2f8');
+      buf.rect(70, 49, 4, 3, '#140c18');
+      buf.set(71, 50, '#ffffff');
+      buf.rect(82, 49, 28, 2, '#ffe848');
+      buf.rect(84, 50, 22, 1, '#ffffff');
+      // Tiny pixel purple boss/enemy exploding on right side of TV!
+      buf.ellipse(158, 49, 10, 9, '#9a34c8');
+      buf.ellipse(156, 47, 6, 5, '#d468ff');
+      buf.rect(152, 46, 3, 3, '#ffe848');
+      buf.rect(159, 46, 3, 3, '#ffe848');
+      // Pixel burst & "$$$" retro HUD score at top of screen
+      buf.ellipse(122, 49, 6, 5, '#ff7820');
+      buf.ellipse(122, 49, 3, 2, '#fff498');
+      buf.rect(28, 17, 16, 4, '#58f048');
+      buf.rect(192, 17, 18, 4, '#f5c838');
+      // Subtle diagonal glass screen reflection glint
+      for (let d = 0; d < 28; d++) {
+        buf.set(34 + d, 16 + Math.floor(d * 0.6), '#6a5898');
+        buf.set(38 + d, 16 + Math.floor(d * 0.6), '#8c7ab8');
+      }
+      buf.rect(210, 79, 4, 2, '#58ff68'); // live power LED
+
+      if (mode === 'hurt') {
+        // Glitch static scanline bars & white impact sparks
+        for (let gy = 15; gy < 75; gy += 5) {
+          buf.rect(22, gy + (f & 1), 196, 2, gy % 10 === 0 ? '#ffffff' : '#68f4ff');
+        }
+        buf.line(110, 22, 134, 58, '#ffffff', 2);
+      }
+    }
+
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+
+  b.addSprite('sprVenuzTV', 240, 96, 129, 96, 1, (ctx, x, y, w, h, f) => drawVenuzTV(ctx, x, y, w, h, f, 'idle'));
+  b.addSprite('sprVenuzTVHurt', 240, 96, 129, 96, 3, (ctx, x, y, w, h, f) => drawVenuzTV(ctx, x, y, w, h, f, 'hurt'));
+  b.addSprite('sprVenuzTVDead', 240, 96, 129, 96, 7, (ctx, x, y, w, h, f) => drawVenuzTV(ctx, x, y, w, h, f, 'dead'));
+
+  // 2. Plush Royal-Crimson Luxury Couch (`sprVenuzCouch` / `Dead`, 98x48, orig 49,24, 1/3f)
+  b.addSprite('sprVenuzCouch', 98, 48, 49, 24, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Gold lion-paw legs
+    buf.rect(8, 39, 7, 5, '#c89220');
+    buf.rect(9, 39, 5, 2, '#ffe878');
+    buf.rect(83, 39, 7, 5, '#c89220');
+    buf.rect(84, 39, 5, 2, '#ffe878');
+    // Wide tufted leather backrest
+    buf.rect(8, 6, 82, 22, '#7a1c38');
+    buf.rect(10, 5, 78, 4, '#b83c60');
+    buf.rect(12, 6, 74, 2, '#d86284');
+    // Tufted diamond leather buttons across backrest
+    for (let tx = 20; tx <= 78; tx += 12) {
+      buf.rect(tx - 1, 13, 3, 2, '#4a0e22');
+      buf.set(tx, 13, '#f5c838');
+      buf.rect(tx + 5, 19, 3, 2, '#4a0e22');
+      buf.set(tx + 6, 19, '#e8bc38');
+    }
+    // 3 plump velvet/leather seat cushions
+    for (let c = 0; c < 3; c++) {
+      const cx = 14 + c * 24;
+      buf.rect(cx, 24, 22, 12, '#9a284c');
+      buf.rect(cx + 1, 24, 20, 3, '#c84870');
+      buf.rect(cx + 2, 25, 16, 1, '#e47294');
+      buf.rect(cx, 34, 22, 2, '#62142c');
+      if (c > 0) buf.rect(cx - 1, 24, 1, 12, '#480e20');
+    }
+    // Lower front wood/gold trim skirt
+    buf.rect(8, 36, 82, 5, '#5a1428');
+    buf.rect(10, 37, 78, 1, '#e8b628');
+    // Rolled plush left & right armrests with gold studs
+    for (const ax of [4, 84]) {
+      buf.rect(ax, 12, 10, 26, '#8a2242');
+      buf.rect(ax + 1, 11, 8, 5, '#c44468');
+      buf.rect(ax + 2, 12, 6, 2, '#e26c8e');
+      buf.rect(ax, 34, 10, 4, '#561226');
+      for (let sy = 18; sy <= 32; sy += 4) {
+        buf.set(ax + 4, sy, '#f5c838');
+      }
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprVenuzCouchDead', 98, 48, 49, 24, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    // Splintered crimson sofa halves & exposed wooden frame
+    buf.rect(7, 16, 36, 24, '#5e142a');
+    buf.rect(9, 18, 30, 6, '#842240');
+    buf.rect(55, 14, 36, 26, '#5e142a');
+    buf.rect(57, 16, 30, 6, '#842240');
+    // Snapped timber crossbeams
+    buf.line(20, 34, 54, 26, '#6e4628', 3);
+    buf.line(44, 30, 76, 36, '#58361e', 3);
+    // Bursting fluffy cream cotton stuffing
+    buf.ellipse(46, 25, 11, 8, '#dfd8c8');
+    buf.ellipse(45, 23, 8, 5, '#f8f4ea');
+    buf.ellipse(32, 22, 6, 4, '#dfd8c8');
+    buf.ellipse(62, 27, 6, 4, '#c8bfa8');
+    // Coiled popped bronze sofa springs
+    for (const [sx, sy] of [[38, 17], [51, 15], [60, 20]]) {
+      buf.pixelRing(sx!, sy! - (f === 0 ? 1 : 0), 2, '#e0a838');
+      buf.set(sx!, sy! - 2, '#fff098');
+    }
+    // Scorched tear marks & settling dust puffs across 3 frames
+    buf.ellipse(49, 32, 10, 4, '#1c141c');
+    if (f < 2) {
+      buf.ellipse(26 - f * 3, 14 - f * 2, 4, 3, '#b8aeb8');
+      buf.ellipse(72 + f * 3, 12 - f * 2, 4, 3, '#b8aeb8');
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // 3. Royal Purple/Crimson Luxury Rug (`sprVenuzCarpet`, 164x68, orig 82,0, 1f — flat floor decal)
+  b.addSprite('sprVenuzCarpet', 164, 68, 82, 0, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Gold fringe tassels on left & right ends
+    for (let fy = 3; fy < h - 3; fy += 2) {
+      buf.rect(0, fy, 4, 1, '#e8bc38');
+      buf.rect(w - 4, fy, 4, 1, '#e8bc38');
+    }
+    // Deep wine outer border & plush crimson-plum body
+    buf.rect(4, 2, w - 8, h - 4, '#4c1228');
+    buf.rect(6, 4, w - 12, h - 8, '#6e1e38');
+    // Double ornate golden geometric border
+    buf.rect(7, 5, w - 14, 2, '#e8bc38');
+    buf.rect(7, h - 7, w - 14, 2, '#e8bc38');
+    buf.rect(7, 5, 2, h - 10, '#e8bc38');
+    buf.rect(w - 9, 5, 2, h - 10, '#e8bc38');
+    buf.rect(8, 6, w - 16, 1, '#fff098');
+    // Inner Greek-key gold dots & woven diamond carpet sheen
+    for (let gx = 12; gx < w - 12; gx += 6) {
+      buf.rect(gx, 9, 3, 1, '#c89220');
+      buf.rect(gx, h - 10, 3, 1, '#c89220');
+    }
+    for (let py = 12; py < h - 12; py++) {
+      for (let px = 12; px < w - 12; px++) {
+        if (((px + py) & 15) === 0 || ((px - py + 128) & 15) === 0) {
+          buf.set(px, py, '#7c2442');
+        }
+      }
+    }
+    // Centered royal gold medallion & Y.V. Triangle + "$" emblem!
+    const cx = 82;
+    const cy = 34;
+    buf.ellipse(cx, cy, 26, 20, '#54142c');
+    buf.ellipse(cx, cy, 23, 17, '#c89220');
+    buf.ellipse(cx, cy, 20, 14, '#6e1e38');
+    buf.poly([[cx, cy - 11], [cx + 13, cy + 10], [cx - 13, cy + 10]], '#e8bc38');
+    buf.poly([[cx, cy - 8], [cx + 9, cy + 8], [cx - 9, cy + 8]], '#fff098');
+    // Stylized Y.V. eye inside gold triangle
+    buf.rect(cx - 4, cy + 1, 8, 3, '#4c1228');
+    buf.rect(cx - 2, cy + 2, 4, 1, '#f4f2f8');
+    buf.set(cx, cy + 2, '#4c1228');
+    // Flanking miniature gold "$" emblems on left & right wings
+    for (const dx of [-48, 48]) {
+      const mx = cx + dx;
+      buf.grid(mx - 2, cy - 4, [
+        '..g..',
+        '.ggg.',
+        'g.g..',
+        '.ggg.',
+        '..g.g',
+        '.ggg.',
+        '..g..',
+      ], { g: '#f0c440' });
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  // 4. Yung Cuz NPC (`sprCuzIdle` 40f / `sprCuzCry` 15f / `sprCuzHorn` 22f, 32x32, orig 16,16)
+  const drawCuzBody = (buf: PxCanvas, cx: number, cy: number, tiltX: number, squashY: number): void => {
+    // Ground shadow
+    buf.ellipse(cx, cy + 10, 8, 3, '#261a30');
+    // Tiny cute stubby feet
+    buf.rect(cx - 5, cy + 8, 3, 3, '#c8c2d8');
+    buf.rect(cx + 2, cy + 8, 3, 3, '#c8c2d8');
+    // Plump pale-white teardrop-pyramid body
+    buf.poly([
+      [cx + tiltX, cy - 10 + squashY],
+      [cx + 8, cy + 3],
+      [cx + 7, cy + 8],
+      [cx - 7, cy + 8],
+      [cx - 8, cy + 3],
+    ], '#f4f2f8');
+    buf.ellipse(cx, cy + 3, 8, 6 - Math.floor(squashY * 0.5), '#f4f2f8');
+    // Soft lavender-grey shading along right/bottom curve & bright top-left highlight
+    buf.rect(cx - 6, cy + 6, 12, 2, '#c8c2d8');
+    buf.line(cx + tiltX + 1, cy - 8 + squashY, cx + 6, cy + 2, '#ded9ec');
+    buf.line(cx + tiltX - 1, cy - 8 + squashY, cx - 5, cy + 2, '#ffffff');
+    // Chunky gold bling chain necklace
+    buf.line(cx - 5, cy + 4, cx, cy + 6, '#e8b420');
+    buf.line(cx, cy + 6, cx + 5, cy + 4, '#e8b420');
+    buf.rect(cx - 1, cy + 5, 3, 3, '#ffe868');
+    buf.set(cx, cy + 6, '#a87414');
+  };
+
+  b.addSprite('sprCuzIdle', 32, 32, 16, 16, 40, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    const bounce = f >= 12 && f <= 16 ? -2 : (f % 8 < 4 ? 0 : 1);
+    const tilt = f >= 34 ? ((f & 1) === 0 ? -1 : 1) : 0;
+    const cy = 16 + bounce;
+    drawCuzBody(buf, 16, cy, tilt, bounce > 0 ? 1 : 0);
+
+    // Big glossy adorable cyclops eye (blinks gently on frames 28..31!)
+    const blinking = f >= 28 && f <= 31;
+    if (blinking) {
+      buf.rect(12, cy - 1, 8, 2, '#1c1424');
+    } else {
+      buf.ellipse(16, cy - 2, 4, 4, '#181220');
+      buf.ellipse(16, cy - 2, 3, 3, '#2c2238');
+      buf.set(14, cy - 4, '#ffffff');
+      buf.set(15, cy - 4, '#ffffff');
+      buf.set(18, cy - 1, '#b8a8d8');
+    }
+    // Handheld game controller held in front, mashing buttons!
+    const mash = (f & 1);
+    buf.rect(11, cy + 4 + mash, 10, 4, '#363242');
+    buf.rect(12, cy + 4 + mash, 8, 1, '#585268');
+    buf.set(13, cy + 6 + mash, '#d8d4e0'); // d-pad
+    buf.set(18, cy + 5 + mash, f % 4 < 2 ? '#ff4458' : '#ffe858'); // buttons
+    buf.set(19, cy + 6 + mash, '#48c8ff');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprCuzCry', 32, 32, 16, 16, 15, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    const shiver = (f & 1) === 0 ? -1 : 1;
+    const cy = 17 + (f % 3 === 0 ? 1 : 0);
+    drawCuzBody(buf, 16 + shiver, cy, 0, 1);
+    // Scrunched crying eye & open wailing mouth
+    buf.line(12 + shiver, cy - 3, 15 + shiver, cy - 1, '#181220');
+    buf.line(20 + shiver, cy - 3, 17 + shiver, cy - 1, '#181220');
+    buf.ellipse(16 + shiver, cy + 2, 2, 2, '#3a1428');
+    buf.set(16 + shiver, cy + 2, '#d84468');
+    // Streaming cyan tears pouring down both cheeks!
+    const flow = f % 3;
+    for (let ty = cy - 1; ty <= 27; ty++) {
+      const col = (ty + flow) % 3 === 0 ? '#b8f6ff' : '#48c8ff';
+      buf.set(12 + shiver, ty, col);
+      buf.set(11 + shiver, ty + 1, '#2898e0');
+      buf.set(20 + shiver, ty, col);
+      buf.set(21 + shiver, ty + 1, '#2898e0');
+    }
+    // Tear splash puddles
+    buf.ellipse(11, 27, 3 + (f & 1), 1, '#58d8ff');
+    buf.ellipse(21, 27, 3 + ((f + 1) & 1), 1, '#58d8ff');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprCuzHorn', 32, 32, 16, 16, 22, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    const blast = f >= 4 && f <= 18;
+    const pump = blast && (f % 4 < 2) ? -2 : 0;
+    const cy = 16 + pump;
+    drawCuzBody(buf, 15, cy, -1, 0);
+    // Excited wide glossy eye
+    buf.ellipse(15, cy - 2, 4, 4, '#181220');
+    buf.set(13, cy - 4, '#ffffff');
+    buf.set(14, cy - 4, '#ffffff');
+    // Red & brass airhorn raised up to the right!
+    const hx = 21;
+    const hy = cy - 3;
+    buf.rect(hx - 2, hy + 2, 3, 5, '#d82c28'); // canister
+    buf.rect(hx - 1, hy + 2, 1, 4, '#ff6858');
+    buf.poly([[hx, hy + 1], [hx + 6, hy - 3], [hx + 6, hy + 3]], '#f5c838'); // trumpet cone
+    buf.line(hx + 1, hy, hx + 5, hy - 2, '#fff498');
+    buf.outline(INK);
+    // Pulsing golden/white airhorn soundwave arcs!
+    if (blast) {
+      const r1 = 2 + (f % 4);
+      buf.line(hx + 7 + r1, hy - 3, hx + 8 + r1, hy, '#ffe858');
+      buf.line(hx + 8 + r1, hy, hx + 7 + r1, hy + 3, '#ffe858');
+      if (f % 2 === 0) {
+        buf.set(hx + 9 + r1, hy - 4, '#ffffff');
+        buf.set(hx + 9 + r1, hy + 4, '#ffffff');
+      }
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  // 5. Giant Y.V.'s Crib Chests (`sprGiantWepChest` / `Open`, `sprGiantAmmoChest` / `Open`, 64x64, orig 32,32, 7/1f)
+  const drawGiantChest = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    f: number,
+    isAmmo: boolean,
+    open: boolean,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    const lidMain = isAmmo ? '#e8b428' : '#c82c34';
+    const lidHi = isAmmo ? '#fff088' : '#ff6654';
+    const lidDark = isAmmo ? '#9e6810' : '#7c1822';
+    const bodyMain = isAmmo ? '#b87414' : '#881c28';
+    const bodyDark = isAmmo ? '#744408' : '#4e1018';
+    const trim = isAmmo ? '#dfe8f2' : '#f5c838';
+    const trimHi = '#ffffff';
+    const trimDark = isAmmo ? '#8896a8' : '#a87614';
+
+    if (!open && f === 1) {
+      // Authentic pure-white hurt flash frame (f1 in 7-frame glint cadence)
+      buf.rect(6, 12, 52, 42, '#ffffff');
+      buf.rect(9, 9, 46, 5, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+
+    if (open) {
+      // Wide open vaulted lid flipped back + hollow dark vault interior
+      buf.rect(8, 6, 48, 16, lidDark);
+      buf.rect(10, 7, 44, 12, lidMain);
+      buf.rect(10, 7, 44, 3, lidHi);
+      // Trim bands on raised lid
+      buf.rect(14, 6, 5, 16, trimDark);
+      buf.rect(45, 6, 5, 16, trimDark);
+      // Lower massive chest box
+      buf.rect(6, 22, 52, 34, bodyMain);
+      buf.rect(8, 22, 48, 14, '#140c18'); // deep dark empty vault interior
+      buf.rect(10, 24, 44, 8, '#22162c');
+      buf.rect(6, 36, 52, 3, trim);
+      buf.rect(6, 52, 52, 4, bodyDark);
+      buf.rect(14, 36, 5, 20, trim);
+      buf.rect(45, 36, 5, 20, trim);
+      buf.rect(28, 35, 8, 7, trimDark);
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+
+    // Ornate corner feet
+    buf.rect(8, 52, 8, 5, trimDark);
+    buf.rect(48, 52, 8, 5, trimDark);
+    // Domed colossal chest lid (y=10..31)
+    buf.rect(8, 10, 48, 22, lidMain);
+    buf.rect(6, 14, 52, 18, lidMain);
+    buf.rect(10, 10, 44, 4, lidHi);
+    buf.rect(8, 14, 48, 2, lidHi);
+    buf.rect(6, 29, 52, 3, lidDark);
+    // Heavy dark seam
+    buf.rect(6, 32, 52, 2, INK);
+    // Massive lower vault body (y=34..54)
+    buf.rect(6, 34, 52, 20, bodyMain);
+    buf.rect(6, 50, 52, 4, bodyDark);
+    // Twin forged vertical reinforcement straps with rivets
+    for (const sx of [13, 45]) {
+      buf.rect(sx, 10, 6, 44, trimDark);
+      buf.rect(sx + 1, 10, 4, 43, trim);
+      buf.rect(sx + 1, 11, 2, 18, trimHi);
+      for (const ry of [13, 25, 39, 49]) {
+        buf.set(sx + 2, ry, trimDark);
+        buf.set(sx + 3, ry, trimHi);
+      }
+    }
+    // Ornate gold/platinum edge corner plates
+    buf.rect(6, 14, 4, 6, trim);
+    buf.rect(54, 14, 4, 6, trim);
+    buf.rect(6, 48, 5, 6, trim);
+    buf.rect(53, 48, 5, 6, trim);
+    // Colossal central lock medallion & emblem
+    buf.rect(25, 26, 14, 14, trimDark);
+    buf.rect(26, 27, 12, 12, trim);
+    buf.rect(27, 27, 10, 2, trimHi);
+    buf.rect(29, 30, 6, 6, isAmmo ? '#744408' : '#4e1018');
+    if (isAmmo) {
+      // Embossed twin bullet shells emblem
+      buf.rect(30, 31, 1, 4, '#ffe868');
+      buf.rect(33, 31, 1, 4, '#ffe868');
+    } else {
+      // Embossed "$" crown crest
+      buf.rect(31, 31, 2, 4, '#fff498');
+      buf.set(30, 32, '#fff498');
+      buf.set(33, 34, '#fff498');
+    }
+
+    // Diagonal gleaming metallic glint sweep on frames 2..6
+    if (f >= 2 && f <= 6) {
+      const gx = 10 + (f - 2) * 10;
+      for (let d = 0; d < 20; d++) {
+        const px = gx + d - 6;
+        const py = 11 + d;
+        if (px >= 8 && px <= 54 && py >= 11 && py <= 52) {
+          buf.set(px, py, '#ffffff');
+          if (px + 1 <= 54) buf.set(px + 1, py, '#fff8c8');
+        }
+      }
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+
+  b.addSprite('sprGiantWepChest', 64, 64, 32, 32, 7, (ctx, x, y, w, h, f) => drawGiantChest(ctx, x, y, w, h, f, false, false));
+  b.addSprite('sprGiantWepChestOpen', 64, 64, 32, 32, 1, (ctx, x, y, w, h, f) => drawGiantChest(ctx, x, y, w, h, f, false, true));
+  b.addSprite('sprGiantAmmoChest', 64, 64, 32, 32, 7, (ctx, x, y, w, h, f) => drawGiantChest(ctx, x, y, w, h, f, true, false));
+  b.addSprite('sprGiantAmmoChestOpen', 64, 64, 32, 32, 1, (ctx, x, y, w, h, f) => drawGiantChest(ctx, x, y, w, h, f, true, true));
+
+  // 6. Sleek Sparkling Solid-Gold Crib Sports Coupe (`sprVenuzCar2` / `Hurt`, 32x32, orig 16,16, 1/3f)
+  const drawVenuzCar2 = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, hurt: boolean): void => {
+    const buf = new PxCanvas(w, h);
+    if (hurt && f === 0) {
+      buf.rect(3, 8, 26, 16, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    // Sport tires with gold rims
+    buf.rect(6, 6, 6, 3, '#1e1a24');
+    buf.rect(20, 6, 6, 3, '#1e1a24');
+    buf.rect(6, 23, 6, 3, '#1e1a24');
+    buf.rect(20, 23, 6, 3, '#1e1a24');
+    // Sleek sculpted solid-gold coupe body
+    const body = hurt && f === 1 ? '#fff6c0' : '#e8b624';
+    const hi = hurt && f === 1 ? '#ffffff' : '#fff498';
+    const mid = '#f5c838';
+    const dark = '#a67010';
+    buf.rect(3, 9, 26, 14, body);
+    buf.rect(4, 8, 24, 16, body);
+    buf.rect(5, 9, 22, 3, mid);
+    buf.rect(6, 9, 20, 1, hi);
+    buf.rect(4, 21, 24, 3, dark);
+    // Racing hood scoop & rear spoiler
+    buf.rect(22, 13, 5, 6, dark);
+    buf.rect(23, 14, 3, 4, hi);
+    buf.rect(3, 9, 2, 14, dark);
+    buf.rect(3, 10, 1, 12, hi);
+    // Sleek tinted royal-purple cabin windshield & rear window
+    buf.rect(8, 10, 14, 12, '#301e44');
+    buf.rect(11, 11, 7, 10, mid); // gold roof
+    buf.rect(12, 11, 5, 2, hi);
+    buf.line(19, 11, 21, 15, '#b894e8'); // glass specular glint
+    // Bright headlights & crimson sports taillights
+    buf.rect(28, 10, 1, 3, '#ffffff');
+    buf.rect(28, 19, 1, 3, '#ffffff');
+    buf.rect(3, 10, 1, 3, '#ff3444');
+    buf.rect(3, 19, 1, 3, '#ff3444');
+    // Sparkle glint on hood
+    buf.set(24, 10, '#ffffff');
+    buf.set(23, 10, '#fff498');
+    buf.set(25, 10, '#fff498');
+    buf.set(24, 9, '#fff498');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprVenuzCar2', 32, 32, 16, 16, 1, (ctx, x, y, w, h, f) => drawVenuzCar2(ctx, x, y, w, h, f, false));
+  b.addSprite('sprVenuzCar2Hurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawVenuzCar2(ctx, x, y, w, h, f, true));
+}
+
+// ============================================================================
+// SECTION 2: IDPD HQ-3 CAPTAIN'S OFFICE & HQ-1/2 PROPS
+// ============================================================================
+
+function registerIdpdHqProps(b: FallbackAtlasBuilder): void {
+  // 1. Captain's Executive Desk (`sprDeskEmpty` 128x85, `sprDeskDead` 128x64 3f, `sprDeskDebris` 24x24 4f)
+  b.addSprite('sprDeskEmpty', 128, 85, 64, 52, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Ground contact shadow
+    buf.rect(8, 74, 112, 6, '#141a28');
+    // Heavy executive curved brushed-steel & navy command desk
+    buf.poly([[10, 22], [118, 22], [122, 38], [116, 75], [12, 75], [6, 38]], '#3c485a');
+    // Desktop surface (top plane y=22..46)
+    buf.poly([[12, 22], [116, 22], [120, 44], [8, 44]], '#687688');
+    buf.rect(14, 23, 100, 3, '#98a8bc');
+    buf.rect(10, 43, 108, 2, '#2a3444');
+    // Glowing cobalt-blue holographic desk rim trim
+    buf.rect(10, 45, 108, 2, '#3278e8');
+    buf.rect(14, 45, 100, 1, '#78e4ff');
+    // Front modesty steel panels & central IDPD shield crest
+    buf.rect(12, 47, 104, 27, '#4a586c');
+    buf.rect(14, 49, 28, 22, '#344052');
+    buf.rect(86, 49, 28, 22, '#344052');
+    // Central recessed IDPD emblem plaque
+    buf.rect(46, 49, 36, 22, '#1e3464');
+    buf.rect(47, 50, 34, 20, '#2a4a8e');
+    buf.poly([[64, 52], [72, 56], [70, 66], [64, 69], [58, 66], [56, 56]], '#e8f2fc');
+    buf.poly([[64, 54], [69, 57], [68, 64], [64, 66], [60, 64], [59, 57]], '#3278e8');
+    buf.rect(62, 57, 4, 5, '#78f0ff');
+    // Dark leather executive desk blotter pad & dossier stacks
+    buf.rect(44, 27, 40, 14, '#242c3c');
+    buf.rect(46, 28, 36, 12, '#2e384c');
+    // Left angled dual holographic monitor console
+    buf.rect(16, 25, 22, 13, '#222a38');
+    buf.rect(18, 27, 18, 9, '#163868');
+    buf.line(19, 32, 24, 29, '#68e8ff');
+    buf.line(24, 29, 29, 34, '#68e8ff');
+    buf.line(29, 34, 34, 28, '#68e8ff');
+    // Right dossiers, blue IDPD folder & coffee mug
+    buf.rect(90, 27, 14, 10, '#dce6f2');
+    buf.rect(92, 29, 10, 1, '#3278e8');
+    buf.rect(92, 32, 8, 1, '#687888');
+    buf.rect(107, 30, 5, 6, '#e8eef4');
+    buf.rect(108, 30, 3, 2, '#5a3420');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprDeskDead', 128, 64, 64, 32, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    // Scorched crater & shattered left/right steel desk halves
+    buf.ellipse(64, 36, 36, 16, '#1a1e28');
+    buf.poly([[10, 16], [52, 20], [46, 52], [14, 54], [6, 34]], '#3e4a5c');
+    buf.poly([[12, 18], [48, 22], [44, 34], [10, 32]], '#647284');
+    buf.poly([[76, 18], [118, 14], [122, 36], [112, 54], [80, 50]], '#3e4a5c');
+    buf.poly([[78, 20], [116, 16], [118, 32], [82, 34]], '#647284');
+    // Jagged broken metallic shards & scattered white dossier papers
+    buf.rect(52, 28, 10, 6, '#283444');
+    buf.rect(64, 40, 12, 5, '#4c5c70');
+    buf.rect(40, 46, 8, 6, '#dce6f2');
+    buf.rect(74, 22, 7, 5, '#dce6f2');
+    // Crackling blue/yellow holographic wiring sparks across 3 frames
+    const spx = 56 + f * 8;
+    const spy = 28 + (f & 1) * 6;
+    buf.line(spx - 5, spy, spx + 5, spy, '#68f0ff');
+    buf.line(spx, spy - 4, spx, spy + 4, '#ffffff');
+    buf.rect(spx - 1, spy - 1, 2, 2, '#ffe868');
+    // Rising smoke puff
+    buf.ellipse(62 - f * 2, 18 - f * 3, 7, 5, '#545e6e');
+    buf.ellipse(61 - f * 2, 17 - f * 3, 4, 3, '#7c8898');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprDeskDebris', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Bent steel armor desk panel w/ blue trim
+      buf.poly([[4, 8], [18, 5], [20, 15], [6, 18]], '#5c6c80');
+      buf.line(5, 9, 17, 6, '#96a8bc');
+      buf.line(6, 16, 19, 13, '#3884f0');
+    } else if (f === 1) {
+      // Cracked desk monitor piece
+      buf.rect(5, 6, 14, 11, '#2c3442');
+      buf.rect(7, 8, 10, 7, '#183c70');
+      buf.line(8, 9, 15, 14, '#78f0ff');
+    } else if (f === 2) {
+      // Scattered IDPD dossier sheets
+      buf.poly([[4, 10], [16, 6], [20, 14], [8, 18]], '#e4eef8');
+      buf.line(8, 11, 15, 9, '#3278e8');
+      buf.line(9, 14, 16, 12, '#788898');
+    } else {
+      // Broken steel table leg
+      buf.line(5, 18, 19, 6, '#4c5a6c', 4);
+      buf.line(6, 17, 18, 6, '#8c9eb0', 1);
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // 2. Seated Captain Behind Desk (`sprDeskIdle`/`Trans`/`Turn`/`Wait`, 36x48, orig 18,48, 18/5/6/9f)
+  const drawCaptainAtDesk = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    pose: 'idle' | 'trans' | 'turn' | 'wait',
+    f: number,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    const breath = pose === 'idle' ? (f % 18 >= 9 ? 1 : 0) : pose === 'wait' ? (f % 9 >= 5 ? 1 : 0) : 0;
+    const facingFront = pose === 'wait' || (pose === 'turn' && f >= 3);
+    const turnOffset = pose === 'turn' ? (f - 3) : pose === 'trans' ? Math.min(2, f) - 1 : 0;
+    const cx = 18;
+    const cy = 22 + breath;
+
+    // Tall executive command chair headrest behind Captain
+    buf.rect(9, 14, 18, 30, '#222d40');
+    buf.rect(10, 14, 16, 2, '#4a5c78');
+    buf.rect(9, 16, 2, 26, '#364660');
+    buf.rect(25, 16, 2, 26, '#364660');
+
+    // Captain's imposing cobalt-blue & white armored mantle & cape shoulders
+    buf.poly([[6, 44], [8, cy + 2], [28, cy + 2], [30, 44]], '#2650a8');
+    buf.rect(9, cy + 2, 18, 10, '#1e3e86');
+    // White armored shoulder pauldrons & high collar cape
+    buf.rect(6, cy + 1, 7, 9, '#dce8f6');
+    buf.rect(7, cy + 1, 5, 2, '#ffffff');
+    buf.rect(23, cy + 1, 7, 9, '#dce8f6');
+    buf.rect(24, cy + 1, 5, 2, '#ffffff');
+    // Gold officer trim & insignia
+    buf.rect(13, cy + 3, 10, 2, '#f5d038');
+    buf.rect(16, cy + 5, 4, 6, '#e8f2fc');
+    buf.rect(17, cy + 6, 2, 4, '#3480e8');
+
+    // Captain's iconic helmeted head
+    const hx = cx + (pose === 'turn' ? Math.round(turnOffset * 0.5) : 0);
+    const hy = cy - 6;
+    buf.ellipse(hx, hy, 6, 6, '#2650a8');
+    buf.ellipse(hx, hy - 1, 5, 4, '#e8f2fc'); // white helmet dome
+    buf.rect(hx - 4, hy - 5, 8, 2, '#ffffff');
+    buf.rect(hx - 1, hy - 6, 2, 4, '#f5d038'); // central gold crest
+
+    if (facingFront) {
+      // Glowing cyan commander visor watching the player!
+      buf.rect(hx - 4, hy, 8, 3, '#101c34');
+      const glow = pose === 'wait' && (f % 4 === 0) ? '#ffffff' : '#68f4ff';
+      buf.rect(hx - 3, hy + 1, 6, 1, glow);
+      buf.set(hx - 1, hy + 1, '#ffffff');
+      // Resting glowing cyan energy gauntlet raised near desk edge
+      if (pose === 'wait') {
+        const gPulse = (f & 1) === 0 ? '#68f4ff' : '#3298ff';
+        buf.rect(22, 34 + breath, 6, 6, '#224898');
+        buf.rect(23, 35 + breath, 4, 4, gPulse);
+        buf.set(24, 36 + breath, '#ffffff');
+      }
+    } else if (pose === 'trans' || (pose === 'turn' && f < 3)) {
+      // Profile swivel view — visor emerging from side!
+      const vx = hx + (turnOffset >= 0 ? 1 : -4);
+      buf.rect(vx, hy, 4, 3, '#101c34');
+      buf.rect(vx + 1, hy + 1, 3, 1, '#68f4ff');
+    } else {
+      // Seated calmly with visor dimmed/turned slightly away
+      buf.rect(hx - 3, hy + 1, 6, 2, '#1a3266');
+      if (f % 6 < 2) buf.set(hx + 2, hy + 1, '#48a8e8');
+    }
+
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprDeskIdle', 36, 48, 18, 48, 18, (ctx, x, y, w, h, f) => drawCaptainAtDesk(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprDeskTrans', 36, 48, 18, 48, 5, (ctx, x, y, w, h, f) => drawCaptainAtDesk(ctx, x, y, w, h, 'trans', f));
+  b.addSprite('sprDeskTurn', 36, 48, 18, 48, 6, (ctx, x, y, w, h, f) => drawCaptainAtDesk(ctx, x, y, w, h, 'turn', f));
+  b.addSprite('sprDeskWait', 36, 48, 18, 48, 9, (ctx, x, y, w, h, f) => drawCaptainAtDesk(ctx, x, y, w, h, 'wait', f));
+
+  // 3. Giant Wall-Mounted HQ Surveillance Monitor (`sprBigTVOff`/`TurnOn`/`On`/`Lines`/`Dead`, 113x96, orig 56,48)
+  const drawBigTVFrame = (buf: PxCanvas): void => {
+    // Heavy steel mounting brackets & chamfered industrial frame
+    buf.rect(4, 6, 105, 84, '#3c4858');
+    buf.rect(6, 4, 101, 88, '#3c4858');
+    buf.rect(7, 5, 99, 3, '#64768c');
+    buf.rect(7, 88, 99, 3, '#222a36');
+    // Corner bolts
+    for (const [bx, by] of [[9, 9], [102, 9], [9, 85], [102, 85]]) {
+      buf.rect(bx!, by!, 2, 2, '#8c9eb4');
+    }
+    // Top camera sensor bar & bottom indicator bezel
+    buf.rect(44, 6, 25, 4, '#242c3a');
+    buf.rect(54, 7, 5, 2, '#3488e8');
+  };
+
+  b.addSprite('sprBigTVOff', 113, 96, 56, 48, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    drawBigTVFrame(buf);
+    buf.rect(11, 13, 91, 68, '#101622');
+    buf.rect(13, 15, 87, 64, '#162030');
+    // Subtle off-screen glass sheen
+    buf.line(18, 22, 34, 16, '#26344a', 2);
+    buf.line(22, 32, 46, 20, '#202c40', 1);
+    buf.rect(94, 84, 4, 2, '#b82c34'); // standby red LED
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprBigTVTurnOn', 113, 96, 56, 48, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    drawBigTVFrame(buf);
+    buf.rect(11, 13, 91, 68, '#101622');
+    if (f === 0) {
+      buf.rect(14, 45, 85, 4, '#68e8ff');
+      buf.rect(24, 46, 65, 2, '#ffffff');
+    } else if (f === 1) {
+      buf.rect(13, 28, 87, 38, '#1c4c8c');
+      buf.rect(15, 32, 83, 30, '#48b4ff');
+      for (let sy = 30; sy < 64; sy += 4) buf.rect(14, sy, 85, 1, '#c8f8ff');
+    } else {
+      buf.rect(13, 15, 87, 64, '#2874cc');
+      buf.rect(16, 18, 81, 58, '#68d4ff');
+      buf.rect(24, 26, 65, 42, '#c8f8ff');
+    }
+    buf.rect(94, 84, 4, 2, '#58ff74');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprBigTVOn', 113, 96, 56, 48, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    drawBigTVFrame(buf);
+    buf.rect(11, 13, 91, 68, '#101828');
+    buf.rect(13, 15, 87, 64, '#142844');
+    // Tactical blue surveillance grid
+    for (let gx = 21; gx < 98; gx += 12) buf.rect(gx, 15, 1, 64, '#1d3c66');
+    for (let gy = 23; gy < 78; gy += 12) buf.rect(13, gy, 87, 1, '#1d3c66');
+    // Glowing pixelated wasteland radar continent & portal rings
+    buf.poly([[22, 46], [36, 28], [58, 30], [72, 44], [64, 62], [38, 66], [24, 58]], '#245898');
+    buf.poly([[28, 46], [38, 34], [55, 36], [64, 45], [58, 56], [40, 58]], '#3884d8');
+    buf.pixelRing(48, 46, 10, '#68d8ff');
+    buf.pixelRing(48, 46, 5, '#b8f4ff');
+    // Red target anomaly blips
+    buf.rect(47, 45, 3, 3, '#ff4054');
+    buf.rect(34, 38, 2, 2, '#ffe858');
+    buf.rect(60, 52, 2, 2, '#ff4054');
+    // Right-hand telemetry readout bars
+    for (let ry = 20; ry <= 70; ry += 6) {
+      const len = 8 + ((ry * 7) % 12);
+      buf.rect(78, ry, len, 3, ry % 12 === 0 ? '#68f4ff' : '#3284d8');
+    }
+    buf.rect(94, 84, 4, 2, '#58ff74');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // Translucent-style CRT holographic scanline overlay (`sprBigTVLines`, 113x96, orig 56,48, 1f)
+  b.addSprite('sprBigTVLines', 113, 96, 56, 48, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    for (let sy = 15; sy < 79; sy += 3) {
+      buf.rect(13, sy, 87, 1, sy % 9 === 0 ? '#8ceeff' : '#48b4ff');
+    }
+    // Bright horizontal refresh sweep bar
+    buf.rect(13, 34, 87, 2, '#c8f8ff');
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprBigTVDead', 113, 96, 56, 48, 4, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    drawBigTVFrame(buf);
+    buf.rect(11, 13, 91, 68, '#0c1018');
+    buf.ellipse(54, 46, 16, 13, '#07090e');
+    // Spiderweb screen cracks
+    buf.line(54, 46, 14, 16, '#566478');
+    buf.line(54, 46, 98, 20, '#566478');
+    buf.line(54, 46, 20, 76, '#566478');
+    buf.line(54, 46, 94, 74, '#566478');
+    buf.line(54, 46, 54, 14, '#3e4a5a');
+    // Animated sparks & smoke wisps across 4 frames
+    const sx = 46 + (f * 7) % 20;
+    const sy = 40 + (f * 5) % 14;
+    if ((f & 1) === 0) {
+      buf.line(sx - 4, sy, sx + 4, sy, '#68f4ff');
+      buf.line(sx, sy - 4, sx, sy + 4, '#ffe868');
+      buf.set(sx, sy, '#ffffff');
+    }
+    buf.ellipse(58, 36 - f * 4, 6, 4, '#4c5464');
+    buf.ellipse(57, 35 - f * 4, 3, 2, '#747e90');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // 4. Captain's Swivel Chair (`sprLastChair`, 24x24, orig 12,12, 1f)
+  b.addSprite('sprLastChair', 24, 24, 12, 12, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Chrome swivel legs
+    buf.line(6, 20, 18, 20, '#788a9c', 2);
+    buf.rect(11, 16, 2, 5, '#9ab0c4');
+    // High navy leather backrest & padded seat cushion
+    buf.rect(6, 3, 12, 11, '#222e44');
+    buf.rect(7, 4, 10, 8, '#364866');
+    buf.rect(8, 4, 8, 2, '#526a8e');
+    buf.rect(5, 12, 14, 5, '#2b3a54');
+    buf.rect(6, 12, 12, 2, '#486084');
+    // Chrome armrests & blue IDPD accent
+    buf.rect(4, 10, 2, 6, '#90a4b8');
+    buf.rect(18, 10, 2, 6, '#90a4b8');
+    buf.rect(9, 7, 6, 1, '#48a4f8');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // 5. IDPD Messenger NPC (`sprMessengerIdle` 14f, `sprMessengerWalk` 6f, `sprMessengerSigh` 20f, 24x24, orig 12,12)
+  const drawMessenger = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    mode: 'idle' | 'walk' | 'sigh',
+    f: number,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    const bob = mode === 'walk' ? (f % 2 === 0 ? -1 : 0) : mode === 'sigh' && f >= 6 && f <= 15 ? 1 : 0;
+    const legL = mode === 'walk' ? [0, 2, 1, -1, -2, -1][f % 6]! : 0;
+    const legR = -legL;
+
+    buf.ellipse(12, 20, 5, 2, '#182032');
+    // Boots
+    buf.rect(8 + legL, 17, 3, 3, '#1a2c5a');
+    buf.rect(13 + legR, 17, 3, 3, '#1a2c5a');
+    // Cobalt-blue IDPD tunic
+    buf.rect(7, 10 + bob, 10, 8, '#2b5ec4');
+    buf.rect(8, 10 + bob, 4, 7, '#4c84e8');
+    buf.rect(7, 15 + bob, 10, 2, '#1a387a');
+    buf.rect(11, 15 + bob, 2, 2, '#e8eef8'); // silver belt buckle
+    // White IDPD dome helmet & cyan visor
+    const headDrop = mode === 'sigh' && f >= 6 && f <= 15 ? 1 : 0;
+    buf.ellipse(12, 7 + bob + headDrop, 5, 4, '#e6f0fa');
+    buf.rect(9, 3 + bob + headDrop, 6, 2, '#ffffff');
+    buf.rect(8, 7 + bob + headDrop, 8, 2, '#162850');
+    buf.rect(9, 7 + bob + headDrop, 6, 1, '#68f0ff');
+    // Tan wooden clipboard with white paper held in right hand
+    const clipY = 11 + bob + (mode === 'idle' && f >= 7 && f <= 10 ? -1 : 0);
+    buf.rect(15, clipY, 5, 6, '#b8864c');
+    buf.rect(16, clipY + 1, 3, 4, '#f4f6fa');
+    buf.set(17, clipY + 2, '#3478e0');
+    buf.set(17, clipY + 4, '#7a8a9c');
+    buf.outline(INK);
+    // Visible sigh puff during `sprMessengerSigh`
+    if (mode === 'sigh' && f >= 8 && f <= 16) {
+      const py = 7 - Math.floor((f - 8) * 0.6);
+      const px = 16 + Math.floor((f - 8) * 0.4);
+      buf.ellipse(px, py, 2, 1, '#dceaf6');
+      buf.set(px, py, '#ffffff');
+    }
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprMessengerIdle', 24, 24, 12, 12, 14, (ctx, x, y, w, h, f) => drawMessenger(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprMessengerWalk', 24, 24, 12, 12, 6, (ctx, x, y, w, h, f) => drawMessenger(ctx, x, y, w, h, 'walk', f));
+  b.addSprite('sprMessengerSigh', 24, 24, 12, 12, 20, (ctx, x, y, w, h, f) => drawMessenger(ctx, x, y, w, h, 'sigh', f));
+
+  // 6. HQ Office Tables (`sprTable1`/`2` + `Hurt`/`Dead`, 32x32, orig 16,16, 1/3/3f)
+  const drawHqTable = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    variant: 1 | 2,
+    mode: 'idle' | 'hurt' | 'dead',
+    f: number,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(4, 8, 24, 16, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.poly([[4, 16], [15, 13], [14, 24], [5, 25]], '#4a5868');
+      buf.poly([[17, 14], [28, 17], [26, 26], [18, 23]], '#5e6e80');
+      buf.line(8, 24, 22, 18, '#343e4c', 2);
+      // Scattered white/blue office papers & tiny dust puff
+      buf.rect(12, 10, 5, 4, '#e6eef8');
+      buf.rect(20, 22, 4, 3, '#c8d8ec');
+      if (f < 2) buf.ellipse(16, 14 - f * 2, 4, 3, '#8c98a8');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const topCol = mode === 'hurt' ? '#d8ecff' : '#7e8c9e';
+    const topHi = mode === 'hurt' ? '#ffffff' : '#aebcc8';
+    // Steel table legs
+    buf.rect(5, 20, 3, 7, '#445262');
+    buf.rect(24, 20, 3, 7, '#445262');
+    // Steel tabletop & front apron with blue IDPD trim
+    buf.rect(4, 9, 24, 11, topCol);
+    buf.rect(5, 9, 22, 2, topHi);
+    buf.rect(4, 19, 24, 3, '#4e5c6e');
+    buf.rect(5, 20, 22, 1, '#3884e8');
+    if (variant === 1) {
+      // Dossier stack, mug & datapad
+      buf.rect(7, 11, 7, 6, '#e6eef8');
+      buf.rect(8, 12, 5, 1, '#3884e8');
+      buf.rect(8, 14, 4, 1, '#7a8a9c');
+      buf.rect(17, 12, 6, 4, '#24344c');
+      buf.rect(18, 13, 4, 2, '#58d8ff');
+      buf.rect(24, 13, 2, 3, '#eef4fa');
+    } else {
+      // Twin-monitor HQ workstation desk
+      buf.rect(7, 8, 8, 7, '#2a3444');
+      buf.rect(8, 9, 6, 5, '#38b8ff');
+      buf.set(9, 10, '#c8f8ff');
+      buf.rect(17, 8, 8, 7, '#2a3444');
+      buf.rect(18, 9, 6, 5, '#2878d8');
+      buf.rect(19, 11, 4, 1, '#88f4ff');
+      buf.rect(10, 16, 12, 2, '#c8d4e0'); // keyboard
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprTable1', 32, 32, 16, 16, 1, (ctx, x, y, w, h, f) => drawHqTable(ctx, x, y, w, h, 1, 'idle', f));
+  b.addSprite('sprTable1Hurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawHqTable(ctx, x, y, w, h, 1, 'hurt', f));
+  b.addSprite('sprTable1Dead', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawHqTable(ctx, x, y, w, h, 1, 'dead', f));
+  b.addSprite('sprTable2', 32, 32, 16, 16, 1, (ctx, x, y, w, h, f) => drawHqTable(ctx, x, y, w, h, 2, 'idle', f));
+  b.addSprite('sprTable2Hurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawHqTable(ctx, x, y, w, h, 2, 'hurt', f));
+  b.addSprite('sprTable2Dead', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawHqTable(ctx, x, y, w, h, 2, 'dead', f));
+
+  // 7. IDPD Computer Terminal (`sprTerminal` + `Hurt`/`Dead`, 24x24, orig 12,12, 4/3/3f)
+  const drawTerminal = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(5, 3, 14, 18, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.rect(5, 11, 14, 10, '#3a4452');
+      buf.rect(7, 13, 10, 6, '#141a24');
+      buf.line(8, 14, 15, 18, '#68f0ff');
+      if ((f & 1) === 0) {
+        buf.set(12, 10, '#ffe868');
+        buf.set(14, 9, '#68f4ff');
+      }
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    // Sleek steel terminal housing & pedestal
+    buf.rect(5, 3, 14, 18, mode === 'hurt' ? '#d8ecff' : '#6c7c90');
+    buf.rect(6, 3, 12, 2, '#9eb0c4');
+    buf.rect(5, 18, 14, 3, '#3c4858');
+    // Glowing blue CRT screen with scrolling telemetry lines
+    buf.rect(7, 5, 10, 8, '#163668');
+    buf.rect(8, 6, 8, 6, '#2e88e8');
+    buf.rect(8, 6 + (f % 4), 6, 1, '#b8f8ff');
+    buf.rect(8, 8 + ((f + 2) % 3), 4, 1, '#68dcff');
+    buf.set(14, 10, (f & 1) === 0 ? '#ffffff' : '#68dcff');
+    // Illuminated keyboard & status LED
+    buf.rect(6, 14, 12, 3, '#2a3444');
+    buf.rect(7, 15, 8, 1, '#8ca0b4');
+    buf.set(16, 15, '#58ff74');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprTerminal', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawTerminal(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprTerminalHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawTerminal(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprTerminalDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawTerminal(ctx, x, y, w, h, 'dead', f));
+
+  // 8. Compact Plasma Generator Pod (`sprSmallGenerator` + `Hurt`/`Dead`, 32x32, orig 16,16, 11/3/3f)
+  const drawSmallGen = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(7, 4, 18, 24, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.rect(6, 16, 20, 12, '#3a424e');
+      buf.rect(8, 12, 16, 8, '#1a2028');
+      buf.rect(9, 10, 4, 6, '#5a6676');
+      buf.rect(19, 11, 4, 5, '#5a6676');
+      if (f < 2) {
+        buf.line(14, 14, 18, 10, '#68f4ff');
+        buf.set(16, 12, '#ffffff');
+      }
+      buf.ellipse(16, 19, 5, 3, '#1e5e54');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const phase = Math.sin((f / 11) * Math.PI * 2);
+    const coreA = phase > 0.3 ? '#68ffe8' : phase > -0.3 ? '#38d8c8' : '#24a89e';
+    const coreHi = phase > 0.2 ? '#ffffff' : '#b8fff4';
+    // Heavy steel octagonal base & top cap
+    buf.rect(6, 22, 20, 6, '#485464');
+    buf.rect(7, 22, 18, 2, '#7c8ca0');
+    buf.rect(7, 4, 18, 5, '#5a687a');
+    buf.rect(8, 4, 16, 2, '#96a6b8');
+    // Glowing cylindrical energy tube
+    buf.rect(9, 9, 14, 13, '#1c6c68');
+    buf.rect(10, 9, 12, 13, coreA);
+    buf.rect(11, 10, 4, 11, coreHi);
+    // Rising plasma bubble inside tube
+    const by = 20 - ((f * 2) % 10);
+    buf.rect(16, by, 2, 2, '#ffffff');
+    // Reinforced dark steel protective ribs
+    buf.rect(8, 13, 16, 1, '#2c3440');
+    buf.rect(8, 18, 16, 1, '#2c3440');
+    buf.rect(7, 9, 2, 13, '#4c5868');
+    buf.rect(23, 9, 2, 13, '#4c5868');
+    // Alternating top indicator LEDs
+    buf.set(11, 6, f % 2 === 0 ? '#58ff88' : '#246838');
+    buf.set(20, 6, f % 2 === 1 ? '#48c8ff' : '#1c4878');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprSmallGenerator', 32, 32, 16, 16, 11, (ctx, x, y, w, h, f) => drawSmallGen(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprSmallGeneratorHurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawSmallGen(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprSmallGeneratorDead', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawSmallGen(ctx, x, y, w, h, 'dead', f));
+
+  // 9. Open IDPD Supply Chest (`sprIDPDChestOpen`, 16x16, orig 8,8, 1f)
+  b.addSprite('sprIDPDChestOpen', 16, 16, 8, 8, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    buf.rect(2, 2, 12, 4, '#183062');
+    buf.rect(3, 2, 10, 1, '#4888e0');
+    buf.rect(2, 6, 12, 8, '#2650a0');
+    buf.rect(3, 6, 10, 4, '#101424');
+    buf.rect(2, 13, 12, 1, '#162d5c');
+    buf.rect(7, 10, 2, 2, '#78ecff');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // 10. Server Rack Hurt & Dead (`sprServerHurt` / `sprServerDead`, 32x32, orig 16,16, 3/3f)
+  b.addSprite('sprServerHurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      buf.rect(8, 3, 16, 26, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const ox = f === 1 ? -1 : 1;
+    buf.rect(8 + ox, 3, 16, 26, f === 1 ? '#dceeff' : '#4a5264');
+    for (let bay = 0; bay < 5; bay++) {
+      const by = 6 + bay * 4;
+      buf.rect(10 + ox, by, 12, 2, '#181c26');
+      buf.set(20 + ox, by, '#ff5858');
+      buf.set(21 + ox, by + 1, '#68f4ff');
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprServerDead', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    // Toppled smashed dark charcoal server rack
+    buf.rect(5, 13, 22, 14, '#242832');
+    buf.rect(6, 14, 20, 2, '#444c5c');
+    buf.rect(8, 17, 16, 8, '#12151c');
+    // Busted drive bays & hanging wires
+    buf.rect(9, 18, 6, 3, '#384050');
+    buf.rect(17, 20, 6, 4, '#2e3644');
+    buf.bezier(14, 21, 16, 26, 20, 27, '#e83838', 1);
+    buf.bezier(12, 22, 10, 26, 7, 27, '#48d4ff', 1);
+    // Crackling sparks & smoke across 3 frames
+    if ((f & 1) === 0) {
+      buf.set(16, 15, '#ffe868');
+      buf.set(17, 14, '#68f4ff');
+      buf.set(15, 14, '#ffffff');
+    }
+    buf.ellipse(15, 10 - f * 2, 4, 3, '#525866');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+}
+
+// ============================================================================
+// SECTION 3A: MISSING BIOME HAZARDS, CHESTS, STATUES & PROPS
+// ============================================================================
+
+function registerBiomeHazardsAndProps(b: FallbackAtlasBuilder): void {
+  // 1. SCRAPYARD FIRE TRAP (`sprTrap` 32x24 orig 8,8 1f, `sprTrapFire` 16x16 7f, `sprTrapScorchMark` 80x80 1f)
+  b.addSprite('sprTrap', 32, 24, 8, 8, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Heavy riveted rusty iron wall-mounted flamethrower grate
+    buf.rect(3, 3, 25, 17, '#584c48');
+    buf.rect(4, 3, 23, 2, '#867872');
+    buf.rect(3, 18, 25, 2, '#342c2a');
+    // Yellow/black industrial hazard stripe along left wall plate
+    for (let sy = 5; sy <= 15; sy += 4) {
+      buf.rect(4, sy, 4, 2, '#d89828');
+      buf.rect(4, sy + 2, 4, 2, '#241e20');
+    }
+    // Recessed scorched flamethrower exhaust vent & iron grill bars
+    buf.rect(10, 5, 16, 12, '#1c1518');
+    for (let gy = 7; gy <= 14; gy += 3) {
+      buf.rect(10, gy, 16, 1, '#4c4240');
+    }
+    // Red-hot inner nozzle & glowing pilot flame ember
+    buf.rect(11, 8, 6, 6, '#9c281c');
+    buf.rect(12, 9, 4, 4, '#e84820');
+    buf.rect(14, 10, 3, 2, '#ffd040');
+    buf.set(16, 11, '#fff6a8');
+    // Rusty protruding nozzle flange on right edge
+    buf.rect(25, 6, 4, 10, '#6e5e58');
+    buf.rect(26, 7, 2, 8, '#302424');
+    // Corner bolts
+    buf.set(5, 4, '#a49892');
+    buf.set(25, 4, '#a49892');
+    buf.set(5, 18, '#a49892');
+    buf.set(25, 18, '#a49892');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTrapFire', 16, 16, 8, 8, 7, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    const r = f === 0 ? 5 : f <= 4 ? 7 : Math.max(2, 9 - f);
+    const sway = (f & 1) === 0 ? -1 : 1;
+    // Roaring multi-tone orange/yellow flame jet tile
+    buf.ellipse(8 + sway, 8, r, Math.max(2, r - 1), '#c82814');
+    buf.ellipse(8, 8 + (f % 2 === 0 ? 0 : -1), Math.max(2, r - 1), Math.max(2, r - 2), '#ff6818');
+    if (f <= 5) {
+      buf.ellipse(8 - sway, 8, Math.max(1, r - 3), Math.max(1, r - 3), '#ffd83c');
+      buf.rect(7, 7, 2, 2, '#fff8c0');
+    }
+    // Flickering flame tongues & hot spark pixels
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + f * 0.7;
+      const sx = Math.round(8 + Math.cos(a) * r);
+      const sy = Math.round(8 + Math.sin(a) * (r - 1));
+      buf.set(sx, sy, i % 2 === 0 ? '#ff8424' : '#ffe868');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  // Flat charred soot scorch decal on Scrapyard cobblestones (`sprTrapScorchMark`, 80x80, orig 40,40, 1f)
+  b.addSprite('sprTrapScorchMark', 80, 80, 40, 40, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    const cx = 40;
+    const cy = 40;
+    for (let py = 4; py < h - 4; py++) {
+      for (let px = 4; px < w - 4; px++) {
+        const dx = (px - cx) / 34;
+        const dy = (py - cy) / 28;
+        const ang = Math.atan2(dy, dx);
+        const streak = 1 + Math.sin(ang * 7) * 0.14 + Math.cos(ang * 13) * 0.08;
+        const d = Math.hypot(dx, dy) / streak;
+        const n = hash2d(px, py, 709);
+        if (d < 0.42) {
+          buf.set(px, py, n > 200 ? '#1e171c' : '#100c10');
+        } else if (d < 0.72) {
+          if (n > 75) buf.set(px, py, n > 190 ? '#2b2226' : '#1a1418');
+        } else if (d < 0.96) {
+          if (n > 175) buf.set(px, py, '#261e22');
+        }
+      }
+    }
+    // Subtle glowing warm ash specks near blast heart
+    buf.set(37, 39, '#5a2c1c');
+    buf.set(44, 42, '#4c2618');
+    buf.flush(ctx, x, y);
+  });
+
+  // 2. OASIS WATER MINE (`sprWaterMine` / `Hurt` / `Dead`, 24x48, orig 12,36, 1/3/12f)
+  const drawWaterMine = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.ellipse(12, 16, 9, 9, '#ffffff');
+      buf.rect(11, 25, 2, 12, '#ffffff');
+      buf.rect(7, 36, 10, 6, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      // Seabed anchor block always remains grounded at y=36..43
+      buf.rect(7, 37, 10, 6, '#36424c');
+      buf.rect(8, 37, 8, 2, '#5a6c78');
+      buf.rect(11, 33, 2, 4, '#2a343c');
+      if (f <= 4) {
+        // Dramatic underwater fiery/aqua blast burst!
+        const r = Math.min(11, 4 + f * 2);
+        buf.ellipse(12, 16, r, r, f <= 1 ? '#ffffff' : f === 2 ? '#ffe868' : '#ff6824');
+        buf.ellipse(12, 16, Math.max(2, r - 3), Math.max(2, r - 3), f <= 2 ? '#ffffff' : '#ffe868');
+        buf.pixelRing(12, 16, Math.min(11, r + 1), '#88f4ec');
+      } else if (f <= 8) {
+        // Rising sea foam, bubbles & tumbling iron mine shrapnel
+        const rise = (f - 4) * 3;
+        buf.pixelRing(8, Math.max(3, 22 - rise), 2, '#d8f8f4');
+        buf.pixelRing(16, Math.max(4, 25 - rise), 2, '#96eae2');
+        buf.pixelRing(12, Math.max(2, 18 - rise), 3, '#c4f6f0');
+        buf.rect(5 + (f - 5), 14 + (f - 5) * 2, 3, 2, '#3c4854');
+        buf.rect(17 - (f - 5), 16 + (f - 5) * 2, 3, 2, '#4e5e6c');
+      } else {
+        // Snapped seabed chain link drifting calmly
+        buf.set(12, 31, '#4c5c68');
+        buf.set(13, 30, '#6a7e8c');
+        buf.pixelRing(11, 24 - (f - 9) * 3, 1, '#d8f8f4');
+      }
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+
+    // Heavy iron seabed tether block at origin y=36
+    buf.rect(6, 36, 12, 7, '#34404a');
+    buf.rect(7, 36, 10, 2, '#5a6c7a');
+    buf.rect(8, 41, 8, 2, '#222a32');
+    // Iron mooring chain rising from anchor to mine
+    for (let cy = 24; cy <= 35; cy += 3) {
+      buf.rect(11, cy, 2, 2, '#4a5a66');
+      buf.set(11, cy, '#7c909e');
+    }
+    // 8 protruding contact horns/spikes around spherical naval mine
+    const spikes: Array<[number, number, number, number]> = [
+      [12, 5, 12, 9], [12, 24, 12, 27], [2, 16, 6, 16], [18, 16, 22, 16],
+      [4, 8, 8, 12], [20, 8, 16, 12], [4, 24, 8, 20], [20, 24, 16, 20],
+    ];
+    for (const [x0, y0, x1, y1] of spikes) {
+      buf.line(x0, y0, x1, y1, '#2c3640', 2);
+      buf.set(x0, y0, '#6c7e8e');
+    }
+    // Spherical dark-steel naval mine hull
+    const hull = mode === 'hurt' ? '#e8f6ff' : '#3c4854';
+    const hi = mode === 'hurt' ? '#ffffff' : '#6a7e8e';
+    buf.ellipse(12, 16, 7, 7, '#222a32');
+    buf.ellipse(12, 15, 7, 6, hull);
+    buf.ellipse(10, 13, 3, 3, hi);
+    buf.set(9, 12, '#9eb2c0');
+    // Riveted equatorial metal seam & green algae patch
+    buf.rect(6, 16, 12, 1, '#263038');
+    buf.set(15, 19, '#2e8848');
+    buf.set(16, 18, '#4cc468');
+    // Blinking warning red sensor dome on top
+    buf.rect(11, 9, 2, 2, '#e82834');
+    buf.set(11, 9, '#ff9098');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprWaterMine', 24, 48, 12, 36, 1, (ctx, x, y, w, h, f) => drawWaterMine(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprWaterMineHurt', 24, 48, 12, 36, 3, (ctx, x, y, w, h, f) => drawWaterMine(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprWaterMineDead', 24, 48, 12, 36, 12, (ctx, x, y, w, h, f) => drawWaterMine(ctx, x, y, w, h, 'dead', f));
+
+  // 3. OASIS WATER PLANTS (`sprWaterPlant` & `sprWaterPlant2` + `Hurt`/`Dead`, 24x24, orig 12,12, 10/3/3f)
+  const drawWaterPlant = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    variant: 1 | 2,
+    mode: 'idle' | 'hurt' | 'dead',
+    f: number,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.ellipse(12, 13, 8, 8, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.ellipse(12, 19, 6, 2, '#1d563c');
+      buf.rect(8, 16, 2, 3, '#2c7a48');
+      buf.rect(13, 17, 2, 2, '#3a9c5c');
+      if (f < 2) {
+        buf.rect(6 + f, 10 - f * 2, 3, 2, variant === 2 ? '#ff6890' : '#58d078');
+        buf.pixelRing(16, 12 - f * 3, 1, '#d8f8f2');
+      }
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const sway = Math.round(Math.sin((f / 10) * Math.PI * 2) * 2);
+    const sway2 = Math.round(Math.cos((f / 10) * Math.PI * 2) * 2);
+    const baseCol = mode === 'hurt' ? '#c8ffe8' : variant === 1 ? '#247c44' : '#1e7864';
+    const hiCol = mode === 'hurt' ? '#ffffff' : variant === 1 ? '#58d078' : '#44c8a2';
+    const tipCol = variant === 1 ? '#9ef8b0' : '#ff6490';
+    // Grounded seabed stone base
+    buf.ellipse(12, 20, 6, 2, '#184c36');
+    // 3 swaying aquatic kelp/anemone fronds
+    buf.bezier(9, 20, 6 + sway, 12, 5 + sway2, 5, baseCol, 2);
+    buf.bezier(12, 20, 12 + sway2, 11, 12 + sway, 3, hiCol, 2);
+    buf.bezier(15, 20, 18 + sway, 13, 19 + sway2, 6, baseCol, 2);
+    buf.ellipse(5 + sway2, 5, 2, 2, tipCol);
+    buf.ellipse(12 + sway, 4, 2, 2, tipCol);
+    buf.ellipse(19 + sway2, 6, 2, 2, tipCol);
+    if (variant === 2) {
+      buf.set(12 + sway, 3, '#ffc0d4');
+      buf.set(5 + sway2, 4, '#ffc0d4');
+    }
+    buf.outline(INK);
+    // Tiny rising bubble on alternating frames
+    if (f % 3 === 0) {
+      buf.set(16, 4 + ((10 - f) % 8), '#e2faf6');
+    }
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprWaterPlant', 24, 24, 12, 12, 10, (ctx, x, y, w, h, f) => drawWaterPlant(ctx, x, y, w, h, 1, 'idle', f));
+  b.addSprite('sprWaterPlantHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawWaterPlant(ctx, x, y, w, h, 1, 'hurt', f));
+  b.addSprite('sprWaterPlantDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawWaterPlant(ctx, x, y, w, h, 1, 'dead', f));
+  b.addSprite('sprWaterPlant2', 24, 24, 12, 12, 10, (ctx, x, y, w, h, f) => drawWaterPlant(ctx, x, y, w, h, 2, 'idle', f));
+  b.addSprite('sprWaterPlant2Hurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawWaterPlant(ctx, x, y, w, h, 2, 'hurt', f));
+  b.addSprite('sprWaterPlant2Dead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawWaterPlant(ctx, x, y, w, h, 2, 'dead', f));
+
+  // 4. MANSION PROPS: GOLD BARREL (24x24) & CHANDELIER (16x32)
+  const drawGoldBarrel = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(6, 4, 12, 16, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.ellipse(12, 18, 8, 4, '#24141c');
+      buf.poly([[5, 17], [9, 12], [16, 13], [19, 19], [10, 20]], '#a87212');
+      buf.rect(8, 14, 6, 3, '#f5c838');
+      if (f === 0) buf.set(12, 11, '#ff7820');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const body = mode === 'hurt' ? '#fff4b0' : '#e0a820';
+    const hi = mode === 'hurt' ? '#ffffff' : '#fff498';
+    const dark = '#8c5a0c';
+    buf.rect(6, 4, 12, 16, body);
+    buf.rect(7, 4, 4, 16, '#f5c838');
+    buf.rect(8, 4, 2, 16, hi);
+    buf.rect(16, 4, 2, 16, dark);
+    // Oval gold lid rim
+    buf.rect(7, 3, 10, 3, hi);
+    buf.rect(8, 4, 8, 1, dark);
+    // Crimson Mansion hazard band & "$" mark
+    buf.rect(6, 9, 12, 6, '#c82438');
+    buf.rect(6, 8, 12, 1, dark);
+    buf.rect(6, 15, 12, 1, dark);
+    buf.rect(11, 10, 2, 4, '#fff498');
+    buf.set(10, 11, '#fff498');
+    buf.set(13, 13, '#fff498');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprGoldBarrel', 24, 24, 12, 12, 1, (ctx, x, y, w, h, f) => drawGoldBarrel(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprGoldBarrelHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawGoldBarrel(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprGoldBarrelDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawGoldBarrel(ctx, x, y, w, h, 'dead', f));
+
+  const drawChandelier = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(7, 2, 2, 14, '#ffffff');
+      buf.rect(2, 14, 12, 14, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      // Snapped chain & shattered golden chandelier wreckage on floor
+      buf.rect(7, 2, 2, 5, '#b07e18');
+      buf.rect(3, 23, 10, 5, '#c89220');
+      buf.rect(5, 22, 6, 2, '#f5c838');
+      buf.set(4, 26, '#c8f4ff');
+      buf.set(11, 26, '#f8f4e8');
+      if (f === 0) buf.set(8, 20, '#ffe878');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const gold = mode === 'hurt' ? '#fff4b0' : '#e8b628';
+    const goldHi = '#fff498';
+    const goldDark = '#986610';
+    // Hanging brass chain
+    for (let cy = 2; cy <= 14; cy += 3) {
+      buf.rect(7, cy, 2, 2, goldDark);
+      buf.set(7, cy, goldHi);
+    }
+    // Ornate central gold stem & sweeping double candle arms
+    buf.rect(7, 14, 2, 12, gold);
+    buf.rect(2, 21, 12, 2, gold);
+    buf.rect(3, 22, 10, 1, goldDark);
+    buf.rect(2, 18, 2, 4, gold);
+    buf.rect(12, 18, 2, 4, gold);
+    // Hanging crystal teardrop prisms underneath
+    buf.set(4, 24, '#c4f4ff');
+    buf.set(8, 27, '#ffffff');
+    buf.set(11, 24, '#c4f4ff');
+    // 3 white wax candles + animated flickering golden candle flames!
+    const fl = (f & 1) === 0 ? 0 : -1;
+    for (const [cx, cy] of [[3, 15], [8, 12], [13, 15]]) {
+      buf.rect(cx! - 1, cy!, 2, 4, '#f4efe6');
+      buf.rect(cx! - 1, cy! - 3 + fl, 2, 3, '#ff8c20');
+      buf.set(cx!, cy! - 2 + fl, '#fff6a0');
+      buf.set(cx! - 1, cy! - 1, '#ffffff');
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprChandelier', 16, 32, 8, 16, 4, (ctx, x, y, w, h, f) => drawChandelier(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprChandelierHurt', 16, 32, 8, 16, 3, (ctx, x, y, w, h, f) => drawChandelier(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprChandelierDead', 16, 32, 8, 16, 3, (ctx, x, y, w, h, f) => drawChandelier(ctx, x, y, w, h, 'dead', f));
+
+  // 5. FROZEN CITY SNOWMAN (32x32), JUNGLE COCOON (24x24, 8f) & JUNGLE BUSH (24x24)
+  const drawSnowMan = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.ellipse(16, 23, 8, 6, '#ffffff');
+      buf.ellipse(16, 15, 6, 5, '#ffffff');
+      buf.ellipse(16, 9, 5, 4, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.ellipse(16, 24, 10, 4, '#c4d2de');
+      buf.ellipse(15, 22, 7, 3, '#edf4fa');
+      buf.rect(19, 23, 4, 2, '#ff7420'); // dropped carrot nose
+      buf.rect(8, 22, 5, 2, '#d82838'); // crumpled red scarf
+      buf.line(10, 20, 6, 17, '#6e482c');
+      if (f < 2) {
+        buf.set(12 - f * 2, 16 - f * 2, '#ffffff');
+        buf.set(20 + f * 2, 15 - f * 2, '#dce8f4');
+      }
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    // Stick arms
+    buf.line(9, 17, 4, 13, '#6e482c', 2);
+    buf.line(23, 17, 28, 13, '#6e482c', 2);
+    // 3 stacked frosty snowballs
+    buf.ellipse(16, 23, 8, 6, '#9cb2c6');
+    buf.ellipse(15, 22, 7, 5, '#dce8f2');
+    buf.ellipse(14, 21, 4, 3, '#ffffff');
+    buf.ellipse(16, 15, 6, 5, '#a8bdd0');
+    buf.ellipse(15, 14, 5, 4, '#e6f0f8');
+    buf.ellipse(14, 13, 3, 2, '#ffffff');
+    buf.ellipse(16, 9, 4, 4, '#b8cadc');
+    buf.ellipse(15, 8, 4, 3, '#eef6fc');
+    buf.set(14, 7, '#ffffff');
+    // Red winter scarf draped between head & torso
+    buf.rect(11, 12, 10, 2, '#d82838');
+    buf.rect(12, 12, 8, 1, '#ff5464');
+    buf.rect(18, 14, 2, 4, '#b81e2c');
+    // Coal eyes, smile buttons & bright orange carrot nose!
+    buf.set(14, 8, '#1a1820');
+    buf.set(18, 8, '#1a1820');
+    buf.rect(16, 9, 4, 2, '#ff7420');
+    buf.set(17, 9, '#ffac48');
+    buf.set(16, 16, '#1a1820');
+    buf.set(16, 19, '#1a1820');
+    buf.set(16, 22, '#1a1820');
+    // Jaunty dark winter hat
+    buf.rect(11, 4, 10, 2, '#2a2c38');
+    buf.rect(13, 1, 6, 4, '#3a3e4e');
+    buf.rect(13, 3, 6, 1, '#d82838');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprSnowMan', 32, 32, 16, 16, 1, (ctx, x, y, w, h, f) => drawSnowMan(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprSnowManHurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawSnowMan(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprSnowManDead', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawSnowMan(ctx, x, y, w, h, 'dead', f));
+
+  const drawCocoon = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.ellipse(12, 12, 7, 9, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.ellipse(12, 17, 8, 4, '#3e6e24');
+      buf.ellipse(12, 17, 5, 2, '#7ce048');
+      buf.poly([[6, 16], [8, 10], [11, 14], [15, 10], [18, 16]], '#9cb868');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const swell = (f === 2 || f === 3 || f === 6) ? 1 : 0;
+    // Anchoring silk strands
+    buf.line(12, 2, 12, 5, '#d4d8b8');
+    buf.line(4, 15, 7, 14, '#c4c8a8');
+    buf.line(20, 15, 17, 14, '#c4c8a8');
+    // Pulsing olive-green bug cocoon sac
+    const outer = mode === 'hurt' ? '#eaffd8' : '#5a7a34';
+    const mid = mode === 'hurt' ? '#ffffff' : '#8cb850';
+    buf.ellipse(12, 12, 6 + swell, 8, outer);
+    buf.ellipse(11, 11, 5 + swell, 7, mid);
+    buf.ellipse(10, 9, 2, 4, '#c8ec88');
+    // Silk cross-wrapping bands & wriggling internal maggot shadow
+    buf.line(7, 9, 17, 11, '#b8cc88');
+    buf.line(7, 14, 17, 16, '#a4b878');
+    const wriggle = (f % 4) - 1;
+    buf.ellipse(12 + Math.round(wriggle * 0.5), 12, 2, 3, '#3c5822');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprCocoon', 24, 24, 12, 12, 8, (ctx, x, y, w, h, f) => drawCocoon(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprCocoonHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawCocoon(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprCocoonDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawCocoon(ctx, x, y, w, h, 'dead', f));
+
+  const drawJungleBush = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.ellipse(12, 13, 9, 8, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      // Chopped woody bush stems & scattered cut Jungle leaves
+      buf.line(10, 19, 8, 14, '#5a3e22', 2);
+      buf.line(13, 19, 16, 15, '#5a3e22', 2);
+      buf.ellipse(7, 18, 3, 2, '#347a20');
+      buf.ellipse(17, 17, 3, 2, '#4ea02c');
+      if (f < 2) buf.rect(11 + f, 10 - f * 2, 2, 2, '#68bc36');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const rustle = f === 1 ? -1 : f === 3 ? 1 : 0;
+    const dark = '#205212';
+    const mid = mode === 'hurt' ? '#c8ffba' : '#367c20';
+    const light = mode === 'hurt' ? '#ffffff' : '#56ae2c';
+    const hi = '#78cc40';
+    // Dense layered leafy bush lobes (conceals Jungle Assassins!)
+    buf.ellipse(12, 15, 9, 6, dark);
+    buf.ellipse(7 + rustle, 12, 5, 5, mid);
+    buf.ellipse(17 + rustle, 12, 5, 5, mid);
+    buf.ellipse(12, 9, 6, 5, mid);
+    buf.ellipse(9 + rustle, 10, 4, 3, light);
+    buf.ellipse(15 + rustle, 10, 4, 3, light);
+    buf.ellipse(12, 7, 4, 2, hi);
+    // Tiny crimson Jungle berries tucked among leaves
+    buf.set(8 + rustle, 13, '#e83448');
+    buf.set(16 + rustle, 11, '#e83448');
+    buf.set(12, 15, '#e83448');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprBushIdle', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawJungleBush(ctx, x, y, w, h, 'idle', f));
+  b.addAlias('sprBush', 'sprBushIdle');
+  b.addSprite('sprBushHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawJungleBush(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprBushDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawJungleBush(ctx, x, y, w, h, 'dead', f));
+
+  // 6. SEWERS & SCRAPYARD: SEWER PIPE (24x24), TORCH (32x32, 5f), TIRES (24x24)
+  const drawSewerPipe = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(4, 5, 16, 14, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.ellipse(12, 18, 8, 4, '#3ea832');
+      buf.ellipse(12, 18, 5, 2, '#7cf054');
+      buf.rect(5, 11, 6, 7, '#46524a');
+      buf.rect(14, 12, 5, 6, '#38443c');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const iron = mode === 'hurt' ? '#dcffe2' : '#4a564e';
+    const ironHi = mode === 'hurt' ? '#ffffff' : '#6c7c72';
+    // Curved mossy cast-iron sewer drain pipe
+    buf.rect(4, 6, 12, 10, iron);
+    buf.rect(5, 6, 10, 2, ironHi);
+    buf.rect(13, 5, 6, 12, '#3c4840');
+    buf.rect(15, 7, 4, 8, '#161c18'); // dark pipe bore
+    // Mossy green crust & dripping toxic slime droplet!
+    buf.rect(5, 5, 6, 2, '#488c34');
+    buf.rect(15, 14, 3, 2, '#5ec840');
+    const dripY = 16 + (f % 4) * 2;
+    if (dripY < 22) {
+      buf.rect(16, dripY, 2, 2, '#78f050');
+      buf.set(16, dripY, '#c8ffa8');
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprSewerPipe', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawSewerPipe(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprSewerPipeHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawSewerPipe(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprSewerPipeDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawSewerPipe(ctx, x, y, w, h, 'dead', f));
+
+  const drawTorch = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.rect(12, 13, 8, 15, '#ffffff');
+      buf.ellipse(16, 11, 6, 7, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      // Toppled extinguished iron torch sconce & curling grey smoke
+      buf.rect(8, 22, 16, 4, '#3c444e');
+      buf.rect(10, 21, 12, 2, '#626e7c');
+      buf.ellipse(22, 23, 3, 3, '#262a30');
+      buf.set(22, 18 - f * 2, '#6a707c');
+      buf.set(23, 15 - f * 2, '#868e9c');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    // Forged iron brazier stand & fire bowl
+    buf.rect(11, 26, 10, 3, '#3c444e');
+    buf.rect(14, 16, 4, 11, '#4c5662');
+    buf.rect(15, 16, 1, 10, '#788694');
+    buf.poly([[10, 14], [22, 14], [20, 19], [12, 19]], '#46505c');
+    buf.rect(10, 14, 12, 2, '#7c8a98');
+    // Flickering 5-frame dancing orange-gold pixel flame
+    const sway = [0, -1, 1, -1, 1][f % 5]!;
+    const lift = [0, 1, 2, 1, 0][f % 5]!;
+    buf.poly([[11, 14], [10, 9], [16 + sway, 3 - lift], [22, 9], [21, 14]], '#d83018');
+    buf.poly([[12, 14], [12, 10], [16 + sway, 6 - lift], [20, 10], [20, 14]], '#ff7c20');
+    buf.poly([[14, 14], [14, 11], [16 + sway, 9], [18, 11], [18, 14]], '#ffe048');
+    buf.rect(15, 12, 2, 2, '#fffbd0');
+    buf.outline(INK);
+    // Rising spark pixel
+    buf.set(14 + ((f * 3) % 5), 2 + (f & 1), '#ffe868');
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprTorch', 32, 32, 16, 16, 5, (ctx, x, y, w, h, f) => drawTorch(ctx, x, y, w, h, 'idle', f));
+  b.addAlias('sprWallTorch', 'sprTorch');
+  b.addSprite('sprTorchHurt', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawTorch(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprTorchDead', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => drawTorch(ctx, x, y, w, h, 'dead', f));
+
+  const drawTires = (ctx: DrawCtx, x: number, y: number, w: number, h: number, mode: 'idle' | 'hurt' | 'dead', f: number): void => {
+    const buf = new PxCanvas(w, h);
+    if (mode === 'hurt' && f === 0) {
+      buf.ellipse(12, 14, 9, 7, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.rect(4, 15, 7, 4, '#2c2a30');
+      buf.rect(13, 14, 7, 5, '#3c3a44');
+      buf.rect(9, 18, 6, 3, '#201e24');
+      if (f === 0) buf.set(12, 12, '#78727c');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const rub = mode === 'hurt' ? '#e8e8f0' : '#2c2a30';
+    const hi = mode === 'hurt' ? '#ffffff' : '#4a4854';
+    // Bottom tire + slightly offset upper stacked rubber tire
+    buf.ellipse(12, 16, 9, 5, '#1e1c22');
+    buf.ellipse(12, 15, 9, 5, rub);
+    buf.ellipse(12, 14, 4, 2, '#141218');
+    buf.ellipse(11, 10, 8, 5, rub);
+    buf.ellipse(11, 9, 8, 4, hi);
+    buf.ellipse(11, 9, 4, 2, '#141218');
+    // Tread marks & Scrapyard mud specks
+    buf.set(5, 10, '#62606e');
+    buf.set(17, 10, '#62606e');
+    buf.set(15, 16, '#7c5640');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprTires', 24, 24, 12, 12, 1, (ctx, x, y, w, h, f) => drawTires(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprTiresHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawTires(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprTiresDead', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawTires(ctx, x, y, w, h, 'dead', f));
+
+  // 7. PALACE & VAULT GUARDIAN STATUES
+  // `sprThroneStatue` (24x48, orig 12,26, 14f) / `Dead` (64x64, orig 32,34, 13f)
+  // `sprVaultStatue` (24x48, orig 12,26, 10f) / `Hurt` (24x48, 3f) / `Dead` (64x64, orig 32,34, 13f)
+  const drawGuardianStatue = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    kind: 'throne' | 'vault',
+    f: number,
+    totalFrames: number,
+    hurt: boolean,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    if (hurt && f === 0) {
+      buf.rect(4, 38, 16, 7, '#ffffff');
+      buf.poly([[6, 39], [6, 12], [12, 3], [18, 12], [18, 39]], '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const isVault = kind === 'vault';
+    const stone = hurt ? '#d8f4ff' : isVault ? '#465868' : '#6e3034';
+    const stoneHi = hurt ? '#ffffff' : isVault ? '#70889c' : '#9a5052';
+    const stoneDark = isVault ? '#2a3642' : '#441a1e';
+    const rune = isVault ? '#48f0a4' : '#58f048';
+    const runeHi = isVault ? '#d8fff0' : '#ccff9c';
+
+    // Stepped stone pedestal base
+    buf.rect(3, 40, 18, 5, stoneDark);
+    buf.rect(4, 37, 16, 4, stone);
+    buf.rect(5, 37, 14, 1, stoneHi);
+    // Tall robed Guardian statue silhouette
+    buf.poly([[5, 37], [6, 14], [12, 4], [18, 14], [19, 37]], stone);
+    buf.poly([[6, 36], [7, 14], [12, 5], [12, 36]], stoneHi);
+    buf.rect(15, 14, 3, 22, stoneDark);
+    // Stoic hooded crest & crowned brow (Vault statue carries subtle gold crown band!)
+    buf.rect(8, 10, 8, 5, stoneDark);
+    if (isVault) {
+      buf.rect(8, 7, 8, 2, '#d8b448');
+      buf.set(11, 6, '#fff098');
+      buf.set(12, 6, '#fff098');
+    }
+    // Folded stone arms across chest
+    buf.rect(6, 20, 12, 4, stoneHi);
+    buf.rect(6, 24, 12, 1, stoneDark);
+    // Shimmering emerald/aqua rune wave ascending torso across idle frames!
+    const waveY = 35 - Math.floor((f / totalFrames) * 24);
+    buf.rect(11, 16, 2, 19, stoneDark);
+    buf.rect(11, 17, 2, 17, rune);
+    buf.rect(10, Math.max(12, waveY), 4, 2, runeHi);
+    // Glowing stoic Guardian eyes
+    const eyeGlow = f % 4 === 0 ? runeHi : rune;
+    buf.set(10, 12, eyeGlow);
+    buf.set(13, 12, eyeGlow);
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+
+  const drawGuardianStatueDead = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    kind: 'throne' | 'vault',
+    f: number,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    const isVault = kind === 'vault';
+    const stone = isVault ? '#465868' : '#6e3034';
+    const stoneHi = isVault ? '#728aa0' : '#9a5052';
+    const stoneDark = isVault ? '#283440' : '#441a1e';
+    const energy = isVault ? '#48f0a4' : '#58f048';
+    const cx = 32;
+    const baseY = 44;
+
+    // Grounded broken plinth remains at center
+    buf.rect(cx - 10, baseY, 20, 6, stoneDark);
+    buf.rect(cx - 9, baseY - 2, 18, 4, stone);
+    buf.rect(cx - 8, baseY - 2, 16, 1, stoneHi);
+
+    if (f <= 3) {
+      // Cracking statue blazing with emerald/aqua energy before shattering!
+      buf.poly([[cx - 7, baseY - 2], [cx - 6, 18], [cx, 10], [cx + 6, 18], [cx + 7, baseY - 2]], stone);
+      buf.line(cx - 5, 22, cx + 5, 34, energy, 1 + Math.floor(f / 2));
+      buf.line(cx + 4, 20, cx - 4, 36, '#ffffff', 1);
+      buf.ellipse(cx, 28, 3 + f * 2, 3 + f * 2, energy);
+      buf.ellipse(cx, 28, 1 + f, 1 + f, '#ffffff');
+    } else if (f <= 8) {
+      // Exploding stone fragments & radiant energy shockwave!
+      const t = f - 3;
+      const spread = t * 4.5;
+      buf.pixelRing(cx, 30, Math.min(26, 6 + t * 4), energy);
+      if (f <= 6) buf.pixelRing(cx, 30, Math.min(20, 3 + t * 3), '#ffffff');
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + 0.3;
+        const fx = Math.round(cx + Math.cos(a) * spread);
+        const fy = Math.round(28 + Math.sin(a) * spread * 0.8 + t * 1.5);
+        buf.rect(fx - 2, fy - 2, 5, 4, i % 2 === 0 ? stone : stoneHi);
+        buf.set(fx - 1, fy - 1, stoneDark);
+      }
+    } else {
+      // Settled stone rubble pile scattered around empty fractured pedestal
+      const rubble: Array<[number, number, number, number]> = [
+        [cx - 18, baseY + 1, 6, 4], [cx - 12, baseY + 4, 5, 3],
+        [cx + 12, baseY + 2, 6, 4], [cx + 16, baseY - 1, 4, 3],
+        [cx - 4, baseY - 3, 5, 3], [cx + 4, baseY + 5, 5, 3],
+      ];
+      for (const [rx, ry, rw, rh] of rubble) {
+        buf.rect(rx, ry, rw, rh, stone);
+        buf.rect(rx, ry, rw - 1, 1, stoneHi);
+      }
+      if (f <= 10) {
+        buf.set(cx - 2, baseY - 5, energy);
+        buf.set(cx + 3, baseY - 4, '#ffffff');
+      }
+    }
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+
+  b.addSprite('sprThroneStatue', 24, 48, 12, 26, 14, (ctx, x, y, w, h, f) =>
+    drawGuardianStatue(ctx, x, y, w, h, 'throne', f, 14, false),
+  );
+  b.addSprite('sprThroneStatueDead', 64, 64, 32, 34, 13, (ctx, x, y, w, h, f) =>
+    drawGuardianStatueDead(ctx, x, y, w, h, 'throne', f),
+  );
+  b.addSprite('sprVaultStatue', 24, 48, 12, 26, 10, (ctx, x, y, w, h, f) =>
+    drawGuardianStatue(ctx, x, y, w, h, 'vault', f, 10, false),
+  );
+  b.addSprite('sprVaultStatueHurt', 24, 48, 12, 26, 3, (ctx, x, y, w, h, f) =>
+    drawGuardianStatue(ctx, x, y, w, h, 'vault', f, 3, true),
+  );
+  b.addSprite('sprVaultStatueDead', 64, 64, 32, 34, 13, (ctx, x, y, w, h, f) =>
+    drawGuardianStatueDead(ctx, x, y, w, h, 'vault', f),
+  );
+
+  // 8. CHESTS, PICKUPS & PIZZA SEWERS PROPS
+  // Bloated Rad Maggot Canister (`sprRadChestMaggot` 15f / `Hurt` 3f / `Dead` 4f, 24x24, orig 12,12)
+  const drawRadMaggotChest = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    mode: 'idle' | 'hurt' | 'dead',
+    f: number,
+  ): void => {
+    const buf = new PxCanvas(w, h);
+    // Reserve f===1 on idle for renderer's 7+ frame Chest hurt-flash convention too!
+    if ((mode === 'idle' && f === 1) || (mode === 'hurt' && f === 0)) {
+      buf.ellipse(12, 13, 8, 9, '#ffffff');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    if (mode === 'dead') {
+      buf.ellipse(12, 17, 9, 4, '#2ca83c');
+      buf.ellipse(12, 17, 6, 3, '#72ff68');
+      buf.rect(6, 14, 12, 5, '#54606e');
+      buf.rect(7, 13, 10, 1, '#8492a2');
+      // Squished/wriggling tiny maggot bits around burst rim
+      buf.rect(5 + (f & 1), 16, 3, 2, '#b4ff78');
+      buf.rect(16 - (f & 1), 15, 3, 2, '#b4ff78');
+      buf.outline(INK);
+      buf.flush(ctx, x, y);
+      return;
+    }
+    const pulse = (f % 6 < 3) ? 1 : 0;
+    // Heavy bolted steel top & bottom canister caps
+    buf.rect(6, 3, 12, 3, '#6c7888');
+    buf.rect(7, 3, 10, 1, '#9aa8b8');
+    buf.rect(9, 1, 6, 2, '#54606e');
+    buf.rect(6, 18, 12, 3, '#54606e');
+    // Swollen bulging neon-green radioactive canister belly
+    buf.ellipse(12, 12, 7 + pulse, 7, '#2cc440');
+    buf.ellipse(12, 11, 6 + pulse, 6, '#58f858');
+    buf.ellipse(10, 10, 3, 4, '#c8ffb4');
+    // Cracked glass containment frame & 3 animated crawling Rad Maggots!
+    buf.line(8, 8, 16, 15, '#184e20');
+    const mx1 = 6 + ((f * 2) % 10);
+    const my1 = 9 + Math.round(Math.sin(f * 0.8) * 2);
+    buf.rect(mx1, my1, 4, 2, '#a8ff68');
+    buf.set(mx1, my1, '#ffffff');
+    const mx2 = 16 - ((f * 2) % 9);
+    const my2 = 14 + (f & 1);
+    buf.rect(mx2, my2, 4, 2, '#96f858');
+    buf.set(mx2 + 3, my2, '#ffffff');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  };
+  b.addSprite('sprRadChestMaggot', 24, 24, 12, 12, 15, (ctx, x, y, w, h, f) => drawRadMaggotChest(ctx, x, y, w, h, 'idle', f));
+  b.addSprite('sprRadChestMaggotHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawRadMaggotChest(ctx, x, y, w, h, 'hurt', f));
+  b.addSprite('sprRadChestMaggotDead', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawRadMaggotChest(ctx, x, y, w, h, 'dead', f));
+
+  // Empty Vault Proto Chest (`sprProtoChestEmpty`, 24x24, orig 12,12, 1f)
+  b.addSprite('sprProtoChestEmpty', 24, 24, 12, 12, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Open flipped metallic Vault chest lid
+    buf.rect(4, 3, 16, 5, '#3c485a');
+    buf.rect(5, 3, 14, 2, '#687a94');
+    buf.rect(6, 4, 12, 1, '#2c8a56');
+    // Hollow dark empty Proto Chest cavity
+    buf.rect(3, 8, 18, 12, '#4a586e');
+    buf.rect(5, 9, 14, 6, '#141a24');
+    buf.rect(6, 10, 12, 3, '#1e2836');
+    // Dimmed emerald trim & metallic corner brackets
+    buf.rect(3, 18, 18, 2, '#2a3444');
+    buf.rect(5, 15, 2, 5, '#2e3848');
+    buf.rect(17, 15, 2, 5, '#2e3848');
+    buf.rect(10, 15, 4, 3, '#38b870');
+    buf.rect(11, 16, 2, 1, '#78ffa8');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // Glowing Purple Cursed Ammo Pack (`sprCursedAmmo`, 10x10, orig 5,5, 7f)
+  b.addSprite('sprCursedAmmo', 10, 10, 5, 5, 7, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    const bright = f === 0 || f === 3 || f === 6;
+    buf.grid(1, 2, [
+      '.pppppp.',
+      'pPPPPPPp',
+      'pPWWWWPp',
+      'pPWdPWPp',
+      'pddddmdp',
+      '.dddddd.',
+    ], {
+      p: '#6c20a8',
+      P: bright ? '#c458ff' : '#9c36e0',
+      W: f === 6 ? '#ffffff' : '#ffa8ff',
+      d: '#3e1064',
+      m: '#ff64e0',
+    });
+    buf.outline(INK);
+    // Flickering purple curse sparkle pixel orbiting pack
+    const spX = [1, 8, 2, 7, 1, 8, 4][f % 7]!;
+    const spY = [1, 1, 8, 8, 4, 5, 0][f % 7]!;
+    buf.set(spX, spY, f % 2 === 0 ? '#ff88ff' : '#c048ff');
+    buf.flush(ctx, x, y);
+  });
+
+  // Pizza Sewers Chests (`sprPizzaChest1` / `sprPizzaChest2` / `sprPizzaChestOpen`, 16x15, orig 8,7, 1f)
+  b.addSprite('sprPizzaChest1', 16, 15, 8, 7, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    buf.rect(2, 3, 12, 9, '#d8b070');
+    buf.rect(3, 3, 10, 2, '#f2d49c');
+    buf.rect(2, 10, 12, 2, '#a47c42');
+    // Classic red Italian checker border & pizza emblem on box lid
+    for (let px = 3; px <= 11; px += 2) {
+      buf.set(px, 4, '#d83028');
+      buf.set(px + 1, 4, '#ffffff');
+    }
+    buf.rect(6, 6, 4, 3, '#d83028');
+    buf.rect(7, 7, 2, 1, '#ffe048');
+    buf.set(7, 8, '#48b848');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprPizzaChest2', 16, 15, 8, 7, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Double-stacked deluxe pizza chest
+    buf.rect(2, 7, 12, 6, '#b88c50');
+    buf.rect(2, 2, 12, 6, '#dfc082');
+    buf.rect(3, 2, 10, 2, '#f5dcb0');
+    buf.rect(2, 6, 12, 1, '#8c6632');
+    // Bold yellow slice icon w/ pepperoni
+    buf.poly([[8, 3], [11, 7], [5, 7]], '#ffe048');
+    buf.set(8, 5, '#d83028');
+    buf.set(9, 6, '#d83028');
+    buf.rect(3, 9, 10, 2, '#d83028');
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprPizzaChestOpen', 16, 15, 8, 7, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Open flipped cardboard pizza box lid
+    buf.rect(2, 1, 12, 5, '#c49c60');
+    buf.rect(3, 2, 10, 3, '#e8ca94');
+    buf.rect(6, 2, 4, 2, '#d83028');
+    // Open lower grease-stained box interior w/ leftover crust crumbs
+    buf.rect(2, 6, 12, 7, '#b0864a');
+    buf.rect(3, 7, 10, 4, '#7c5c34');
+    buf.ellipse(8, 9, 3, 2, '#967240'); // grease ring
+    buf.set(6, 9, '#f0c448'); // crumb
+    buf.set(10, 8, '#d83028'); // stray pepperoni bit
+    buf.outline(INK);
+    buf.flush(ctx, x, y);
+  });
+
+  // Pizza Sewers Floor/Wall Graffiti Decal (`sprPizzaSewerDecal`, 36x32, orig 18,16, 1f)
+  b.addSprite('sprPizzaSewerDecal', 36, 32, 18, 16, 1, (ctx, x, y, w, h) => {
+    const buf = new PxCanvas(w, h);
+    // Neon-green sewer slime splatter backdrop
+    buf.ellipse(18, 18, 14, 10, '#2d6824');
+    buf.ellipse(17, 17, 11, 8, '#4cb838');
+    buf.rect(10, 24, 3, 5, '#4cb838');
+    buf.rect(22, 23, 2, 6, '#5ed844');
+    // Bold graffiti pixel-art Pizza Slice!
+    buf.poly([[18, 5], [29, 23], [7, 23]], '#d49a48'); // golden crust outer
+    buf.poly([[18, 7], [27, 21], [9, 21]], '#f5c838'); // melted cheese
+    buf.poly([[18, 8], [23, 18], [13, 18]], '#ffe868');
+    // Crust rim along bottom of slice
+    buf.rect(7, 21, 22, 3, '#c88838');
+    buf.rect(8, 21, 20, 1, '#e8b460');
+    // Juicy crimson pepperoni circles & green herb flecks
+    buf.ellipse(18, 13, 2, 2, '#d82c28');
+    buf.ellipse(14, 18, 2, 2, '#d82c28');
+    buf.ellipse(22, 18, 2, 2, '#d82c28');
+    buf.set(17, 17, '#42a834');
+    buf.set(20, 15, '#42a834');
+    buf.flush(ctx, x, y);
+  });
+}
+
+// ============================================================================
+// SECTION 3B: BIOME ROOF-EDGE DECALS (`sprTopDecal*`, 32x32, orig 16,16, 3f each)
+// ============================================================================
+
+function registerRoofTopDecals(b: FallbackAtlasBuilder): void {
+  // Subtle roof-matched ceiling decals (no harsh INK outline so they blend cleanly into solid roof masses!)
+  b.addSprite('sprTopDecalCave', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Faceted amethyst crystal outcrop & amber ember glow
+      buf.poly([[10, 22], [14, 8], [19, 10], [22, 22]], '#5e3892');
+      buf.poly([[11, 21], [14, 9], [16, 12], [15, 21]], '#9c74d4');
+      buf.poly([[18, 22], [23, 12], [26, 21]], '#4a2878');
+      buf.rect(14, 16, 3, 3, '#ff8c28');
+      buf.set(15, 16, '#ffe066');
+    } else if (f === 1) {
+      // Jagged cave ceiling rock fissure & hanging stalactite rim
+      buf.line(6, 12, 16, 17, '#42246a', 2);
+      buf.line(16, 17, 25, 14, '#42246a', 2);
+      buf.line(7, 11, 16, 15, '#8f66c4');
+      buf.rect(20, 18, 2, 2, '#ff8c28');
+      buf.set(20, 18, '#ffe066');
+    } else {
+      // Clustered amethyst mineral pebbles
+      buf.ellipse(12, 15, 5, 3, '#5e3892');
+      buf.ellipse(11, 14, 3, 2, '#966ecc');
+      buf.ellipse(21, 18, 4, 3, '#4e2c7c');
+      buf.set(20, 17, '#ff9838');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTopDecalInvCave', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Cursed magenta crystal spire vent
+      buf.poly([[9, 23], [15, 6], [21, 23]], '#482274');
+      buf.poly([[11, 22], [15, 8], [16, 22]], '#8a58c4');
+      buf.rect(14, 15, 3, 4, '#f054cc');
+      buf.set(15, 15, '#ffa8f2');
+    } else if (f === 1) {
+      // Glowing magenta curse fracture lines
+      buf.line(6, 16, 15, 13, '#3a1a5e', 2);
+      buf.line(15, 13, 26, 19, '#3a1a5e', 2);
+      buf.line(10, 15, 22, 16, '#f054cc');
+      buf.set(15, 14, '#ffa8f2');
+    } else {
+      buf.ellipse(16, 16, 7, 5, '#462070');
+      buf.ellipse(16, 16, 4, 3, '#b838c8');
+      buf.set(15, 15, '#ffa8f2');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTopDecalCity', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Snow-dusted rooftop HVAC exhaust vent
+      buf.rect(8, 10, 16, 12, '#6c767e');
+      buf.rect(9, 11, 14, 10, '#858e96');
+      for (let vy = 13; vy <= 19; vy += 2) buf.rect(10, vy, 12, 1, '#525c64');
+      buf.rect(8, 9, 14, 3, '#dce6ee'); // snow drift on top rim
+    } else if (f === 1) {
+      // Wind-sculpted snowbank & icy blue fracture
+      buf.ellipse(16, 17, 10, 5, '#b8c4cc');
+      buf.ellipse(15, 15, 8, 4, '#e2ecf4');
+      buf.line(9, 22, 22, 20, '#7da8c4');
+    } else {
+      // Rusty broken rooftop pipe/antenna stub in snow
+      buf.ellipse(16, 18, 6, 4, '#dce6ee');
+      buf.rect(14, 10, 4, 9, '#5e6872');
+      buf.rect(15, 10, 1, 8, '#96a2ac');
+      buf.rect(12, 12, 8, 1, '#7c523c');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTopDecalJungle', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Radiating lush tropical palm fronds
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.2;
+        buf.line(16, 16, Math.round(16 + Math.cos(a) * 11), Math.round(16 + Math.sin(a) * 9), '#286416', 3);
+        buf.line(16, 16, Math.round(16 + Math.cos(a) * 10), Math.round(16 + Math.sin(a) * 8), '#5eb228', 1);
+      }
+      buf.ellipse(16, 16, 3, 3, '#72c836');
+    } else if (f === 1) {
+      // Bright crimson Jungle canopy blossom cluster
+      buf.ellipse(16, 16, 8, 6, '#286416');
+      buf.ellipse(15, 15, 6, 4, '#438428');
+      for (const [fx, fy] of [[12, 14], [19, 13], [16, 18]]) {
+        buf.rect(fx! - 1, fy! - 1, 3, 3, '#e43c4c');
+        buf.set(fx!, fy!, '#ffe048');
+      }
+    } else {
+      // Tangled canopy vines & mossy leaf mound
+      buf.bezier(6, 11, 16, 22, 26, 12, '#245812', 2);
+      buf.bezier(8, 22, 16, 10, 24, 21, '#58ac28', 1);
+      buf.ellipse(16, 16, 4, 3, '#6cc234');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTopDecalPizzaSewers', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Mossy pizza-sewer roof grate & grease stain
+      buf.rect(9, 10, 14, 12, '#232c20');
+      for (let gx = 11; gx <= 20; gx += 3) buf.rect(gx, 11, 1, 10, '#4a5a44');
+      buf.rect(18, 18, 4, 3, '#d87e34');
+    } else if (f === 1) {
+      // Weathered pipe junction & neon slime drip
+      buf.rect(6, 14, 20, 5, '#424e3e');
+      buf.rect(6, 14, 20, 1, '#5e6e58');
+      buf.rect(14, 13, 4, 7, '#2d382a');
+      buf.rect(15, 20, 2, 4, '#5cb844');
+    } else {
+      // Mini discarded cardboard pizza box flap on roof
+      buf.rect(10, 11, 12, 10, '#8c6e44');
+      buf.rect(11, 12, 10, 8, '#b8945c');
+      buf.rect(14, 14, 4, 3, '#c83a2c');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTopDecalScrapyard', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Twisted rusted steel I-beam girder
+      buf.line(6, 22, 25, 10, '#5a3422', 4);
+      buf.line(7, 21, 24, 10, '#a25c3a', 2);
+      buf.line(8, 20, 23, 10, '#c87c54', 1);
+    } else if (f === 1) {
+      // Corrugated scrap metal sheet w/ rivets
+      buf.rect(7, 9, 18, 14, '#626870');
+      for (let ry = 11; ry <= 21; ry += 3) {
+        buf.rect(8, ry, 16, 1, '#8c949e');
+        buf.rect(8, ry + 1, 16, 1, '#4a5058');
+      }
+      buf.rect(18, 15, 5, 5, '#965032'); // rust blotch
+    } else {
+      // Bolted concrete roof grate & rebar
+      buf.rect(9, 11, 14, 10, '#4c525a');
+      buf.rect(11, 13, 10, 6, '#32363e');
+      buf.line(12, 12, 22, 22, '#a25c3a');
+    }
+    buf.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprTopDecalSewers', 32, 32, 16, 16, 3, (ctx, x, y, w, h, f) => {
+    const buf = new PxCanvas(w, h);
+    if (f === 0) {
+      // Damp iron sewer ceiling grate with glowing green slime seepage
+      buf.rect(9, 10, 14, 12, '#1c2419');
+      buf.rect(10, 11, 12, 10, '#2c3828');
+      for (let gx = 12; gx <= 19; gx += 3) buf.rect(gx, 11, 1, 10, '#141a12');
+      buf.rect(12, 19, 5, 3, '#5ec440');
+      buf.set(14, 20, '#8cf064');
+    } else if (f === 1) {
+      // Mossy fractured sewer roof crack & slime puddle
+      buf.line(7, 15, 16, 13, '#1e261b', 2);
+      buf.line(16, 13, 25, 18, '#1e261b', 2);
+      buf.ellipse(16, 15, 5, 3, '#3c682c');
+      buf.set(15, 14, '#5ec440');
+    } else {
+      // Thick mossy ceiling pipe elbow
+      buf.rect(8, 13, 16, 6, '#2b3628');
+      buf.rect(8, 13, 16, 2, '#485a42');
+      buf.rect(13, 12, 6, 8, '#364432');
+      buf.rect(14, 18, 3, 3, '#5ec440');
+    }
+    buf.flush(ctx, x, y);
+  });
 }
