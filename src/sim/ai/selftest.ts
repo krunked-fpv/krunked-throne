@@ -320,8 +320,8 @@ function runTest2AllNineBossesAndLoopChain(): void {
     state.rngState = killRng.getState();
     assert(damagedDuringFight, `Boss ${bossId} never took damage`);
 
-    // Step through hitstop + death resolution (incl. Lil' Hunter's visible jetpack death spiral!)
-    for (let k = 0; k < 50 && !state.portal.active && state.phase === 'playing'; k++) {
+    // Step through hitstop + death resolution (incl. Lil' Hunter's visible jetpack death spiral + 30-tick portal spawn delay!)
+    for (let k = 0; k < 110 && !state.portal.active && state.phase === 'playing'; k++) {
       stepSimulation(state, makeInput({ aimWorldX: state.player.x + 20, aimWorldY: state.player.y }));
     }
 
@@ -390,7 +390,7 @@ function runTest2AllNineBossesAndLoopChain(): void {
     assert(!sitState.portal.active, 'Sitting on Throne unexpectedly opened Loop portal');
   }
 
-  console.log(`[PASS 2/5] All 5 Bosses verified across 180 ticks + defeat portals + Loop chain + Throne victory: ${bossSummary.join(', ')}`);
+  console.log(`[PASS 2/5] All 9 Bosses verified across 180 ticks + defeat portals + Loop chain + Throne victory: ${bossSummary.join(', ')}`);
 }
 
 /**

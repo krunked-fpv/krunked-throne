@@ -143,7 +143,7 @@ function handleSecretInteractions(state: SimState, input: InputFrame, rng: Seede
       if (Math.hypot(player.x - p.x, player.y - p.y) <= 38) {
         const target = state.cribReturnArea ?? '1-1';
         state.cribReturnArea = null;
-        emitEvent(state, { type: 'sfx', sound: 'sndPortalEnter', x: p.x, y: p.y });
+        emitEvent(state, { type: 'sfx', sound: 'sndPortalClose', x: p.x, y: p.y });
         loadAreaIntoState(state, target, state.loop, populateAreaEntities);
         return true;
       }

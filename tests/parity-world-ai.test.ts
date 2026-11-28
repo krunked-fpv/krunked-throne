@@ -276,7 +276,7 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
     applyDamageToEnemy(state, bigDog, 9999, 0, 0, rng);
     state.rngState = rng.getState();
 
-    for (let t = 0; t < 8; t++) stepSimulation(state, makeInput());
+    for (let t = 0; t < 45 && !state.portal.active; t++) stepSimulation(state, makeInput());
     expect(state.portal.active).toBe(true);
     expect(state.portal.targetArea).toBe('4-?');
   });
@@ -836,6 +836,8 @@ describe('boss multi-phase & mechanic parity', () => {
     expect(sawSpiralFlame).toBe(true);
     expect(rt.lilHunterSpiral).toBeNull();
     expect(sLH.enemies.some((e) => e.bossId === 'lil_hunter')).toBe(false);
+    // Step through authentic 30-tick PORTAL_SPAWN_DELAY_TICKS after Lil' Hunter's death spiral detonates
+    for (let t = 0; t < 40 && !sLH.portal.active; t++) stepSimulation(sLH, makeInput());
     expect(sLH.portal.active).toBe(true);
     expect(sLH.portal.targetArea).toBe('6-1');
 

@@ -13,6 +13,7 @@ import {
   AREAS,
   AREA_CODES,
   BOSS_IDS,
+  ENEMIES,
   MUTANTS,
   MUTANT_IDS,
   MUTATION_IDS,
@@ -34,6 +35,7 @@ import {
 } from '@/sim/core';
 import {
   applyDamageToEnemy,
+  damageProp,
   getPlayerMoveSpeed,
   healPlayer,
   spawnCorpse,
@@ -372,9 +374,10 @@ function runCampaignProgressionSoak(): string {
     if (state.phase === 'mutation_select' || state.phase === 'ultra_select') {
       const wasUltra = state.phase === 'ultra_select';
       if (wasUltra) {
+        const expectedUltras = MUTANTS[state.player.mutant].ultras.length;
         assert(
-          state.pendingUltras.length === 2,
-          `Ultra select offered ${state.pendingUltras.length} choices instead of 2`,
+          state.pendingUltras.length === expectedUltras,
+          `Ultra select offered ${state.pendingUltras.length} choices instead of ${expectedUltras}`,
         );
       } else {
         assert(
@@ -406,6 +409,7 @@ function runCampaignProgressionSoak(): string {
       let aimY = state.player.y;
       let shouldFire = false;
       let combatStandOff = 0;
+      let hasCombatGoal = false;
 
       if (state.portal.active) {
         // Guarantee steady XP pace across the 16-stage campaign so Ultra triggers before Loop 1
@@ -431,6 +435,7 @@ function runCampaignProgressionSoak(): string {
           }
         }
         if (bestGen) {
+          hasCombatGoal = true;
           goalX = bestGen.x;
           goalY = bestGen.y;
           aimX = bestGen.x;
@@ -459,6 +464,7 @@ function runCampaignProgressionSoak(): string {
         }
 
         if (bestEnemy) {
+          hasCombatGoal = true;
           const safeTarget = isWorldSolid(state.map, bestEnemy.x, bestEnemy.y)
             ? findNearestFloor(state.map, bestEnemy.x, bestEnemy.y, 12)
             : { x: bestEnemy.x, y: bestEnemy.y };
@@ -501,14 +507,14 @@ function runCampaignProgressionSoak(): string {
         const strafe = toTarget + (totalTicks % 60 < 30 ? Math.PI * 0.5 : -Math.PI * 0.5);
         moveX = Math.cos(strafe) * 0.7;
         moveY = Math.sin(strafe) * 0.7;
-      } else {
+      } else if (hasCombatGoal) {
         const mv = getBfsMoveVector(state.map, state.player.x, state.player.y, goalX, goalY, cachedBfs);
         moveX = mv.mx;
         moveY = mv.my;
       }
 
-      // If blocked by a solid destructible prop (e.g. car/pillar), fire ahead to clear path
-      if (stallTicks > 14 && !state.portal.active) {
+      // If blocked by a solid destructible prop (e.g. car/pillar) while pursuing a combat goal, fire ahead to clear path
+      if (stallTicks > 14 && hasCombatGoal && !state.portal.active) {
         aimX = state.player.x + moveX * 48;
         aimY = state.player.y + moveY * 48;
         shouldFire = true;
@@ -523,7 +529,7 @@ function runCampaignProgressionSoak(): string {
           aimWorldY: aimY,
           fireHeld: shouldFire,
           firePressed: shouldFire && totalTicks % 2 === 0,
-          activePressed: !state.portal.active && totalTicks % 75 === 20,
+          activePressed: hasCombatGoal && !state.portal.active && totalTicks % 75 === 20,
         }),
       );
 
@@ -532,7 +538,7 @@ function runCampaignProgressionSoak(): string {
       assertSimInvariants(state, `campaign:${state.areaCode}@L${state.loop}`);
 
       const moved = Math.hypot(state.player.x - lastPlayerX, state.player.y - lastPlayerY);
-      stallTicks = moved < 0.35 && !state.portal.entered ? stallTicks + 1 : 0;
+      stallTicks = moved < 0.35 && hasCombatGoal && !state.portal.entered ? stallTicks + 1 : 0;
       lastPlayerX = state.player.x;
       lastPlayerY = state.player.y;
     }
@@ -577,39 +583,236 @@ function runCampaignProgressionSoak(): string {
   assert(mutationsPicked >= 4, `Expected >= 4 mutations picked, got ${mutationsPicked}`);
   assert(ultraPicked && state.player.ultra !== null, 'Campaign soak never completed Ultra selection');
   assert(throneGeneratorsDestroyed, '7-3 Throne Generators were not destroyed before Nuclear Throne defeat');
-  for (const bossId of BOSS_IDS) {
+
+  const LOOP_0_BOSS_IDS: readonly BossId[] = [
+    'big_bandit',
+    'big_dog',
+    'lil_hunter',
+    'nuclear_throne',
+    'throne_ii',
+  ];
+  const allDefeatedBosses = new Set<BossId>(state.stats.bossesDefeated);
+  for (const bossId of LOOP_0_BOSS_IDS) {
     assert(
-      state.stats.bossesDefeated.includes(bossId),
-      `Campaign soak missing boss defeat: ${bossId}`,
+      allDefeatedBosses.has(bossId),
+      `Loop-0 campaign soak missing boss defeat: ${bossId}`,
     );
   }
 
-  return `PASS (1-1 -> 7-3[4 gens + Throne] -> 0-1[Throne II] -> Loop 1-1 in ${totalTicks} ticks | kills=${state.stats.kills}, level=${state.player.level}, mutations=${mutationsPicked}, ultra=${state.player.ultra}, bosses=${state.stats.bossesDefeated.length}/5, loop=${state.loop})`;
+  // Verify Y.V.'s Crib ($$$), IDPD HQ-2 (hq-2), and the 4 Loop-1+ / HQ bosses (Mom, Hyper Crystal, Technomancer, Captain)
+  // so ALL 9/9 bosses and special areas are empirically verified in Pillar 1!
+  {
+    // A. Y.V.'s Crib ($$$): base 2 Giant Weapon Chests, Open Mind + Crown of Love = exact 3 Giant Ammo Chests, 0 enemies
+    const cribState = createRunState({ mutant: 'yv', seed: 20261201 });
+    cribState.player.godMode = true;
+    cribState.cribReturnArea = '3-2';
+    warpToArea(cribState, '$$$', 0);
+    assert(checkMapConnectivity(cribState.map).connected, '$$$ Crib map disconnected');
+    assert(cribState.enemies.length === 0, `$$$ Crib expected 0 enemies, got ${cribState.enemies.length}`);
+    assert(
+      cribState.props.filter((p) => p.kind === 'giant_weapon_chest').length === 2,
+      '$$$ Crib base expected 2 giant_weapon_chest props',
+    );
+    assert(
+      cribState.props.filter((p) => p.kind === 'venuz_car_exit').length >= 4,
+      '$$$ Crib expected >= 4 venuz_car_exit cars',
+    );
+    for (let t = 0; t < 15; t++) {
+      stepSimulation(cribState, makeInput({ aimWorldX: cribState.player.x + 20, aimWorldY: cribState.player.y }));
+      assertSimInvariants(cribState, `crib@t${t}`);
+    }
+    assert(!cribState.portal.active, '$$$ Crib must never auto-open a portal');
+
+    const cribLove = createRunState({ mutant: 'yv', seed: 20261202, crown: 'love' });
+    cribLove.player.mutations.push('open_mind');
+    warpToArea(cribLove, '$$$', 0);
+    assert(
+      cribLove.props.filter((p) => p.kind === 'giant_weapon_chest').length === 0 &&
+        cribLove.props.filter((p) => p.kind === 'giant_ammo_chest').length === 3,
+      '$$$ Crib with open_mind + Crown of Love must spawn exactly 3 giant_ammo_chest props',
+    );
+
+    // B. IDPD HQ-2 (hq-2): HQ props, 0 rad canisters, Elites + Van on L1
+    const hq2State = createRunState({ mutant: 'rogue', seed: 20261203 });
+    hq2State.player.godMode = true;
+    warpToArea(hq2State, 'hq-2', 1);
+    assert(checkMapConnectivity(hq2State.map).connected, 'hq-2 map disconnected');
+    assert(
+      !hq2State.props.some((p) => p.kind === 'rad_canister' || p.kind === 'rad_maggot_canister'),
+      'hq-2 must have 0 rad canisters',
+    );
+    assert(
+      hq2State.props.some((p) => p.kind === 'server') && hq2State.props.some((p) => p.kind === 'terminal'),
+      'hq-2 missing HQ server/terminal props',
+    );
+    assert(
+      hq2State.enemies.some((e) => e.defId === 'idpd_van') &&
+        hq2State.enemies.some((e) => ENEMIES[e.defId]?.isIdpd),
+      'hq-2 L1 missing IDPD Van / Elites',
+    );
+    for (let t = 0; t < 20; t++) {
+      stepSimulation(hq2State, makeInput({ aimWorldX: hq2State.player.x + 24, aimWorldY: hq2State.player.y }));
+      assertSimInvariants(hq2State, `hq-2@t${t}`);
+    }
+
+    // C. Loop-1+ & HQ-3 Boss Verification: Mom (2-1 L1), Hyper Crystal (4-1 L1), Technomancer (6-1 L1), Captain (hq-3 L1)
+    const extendedBossSpecs: ReadonlyArray<{
+      bossId: BossId;
+      area: AreaCode;
+      loop: number;
+      nextArea?: AreaCode;
+      nextLoop?: number;
+      victory?: boolean;
+    }> = [
+      { bossId: 'mom', area: '2-1', loop: 1, nextArea: '3-1', nextLoop: 1 },
+      { bossId: 'hyper_crystal', area: '4-1', loop: 1, nextArea: '5-1', nextLoop: 1 },
+      { bossId: 'technomancer', area: '6-1', loop: 1, nextArea: '7-1', nextLoop: 1 },
+      { bossId: 'captain', area: 'hq-3', loop: 1, victory: true },
+    ];
+
+    for (let bIdx = 0; bIdx < extendedBossSpecs.length; bIdx++) {
+      const spec = extendedBossSpecs[bIdx]!;
+      const bState = createRunState({ mutant: 'fish', seed: 20261300 + bIdx * 17 });
+      bState.player.godMode = true;
+      warpToArea(bState, spec.area, spec.loop);
+      assert(checkMapConnectivity(bState.map).connected, `${spec.area}@L${spec.loop} map disconnected`);
+      assert(
+        bState.boss?.bossId === spec.bossId,
+        `Expected boss ${spec.bossId} on ${spec.area}@L${spec.loop}, got ${bState.boss?.bossId}`,
+      );
+
+      if (spec.bossId === 'technomancer') {
+        const stations = bState.enemies.filter((e) => e.bossId === 'technomancer');
+        assert(stations.length === 3, `Technomancer L1 expected 3 Battle Stations, got ${stations.length}`);
+      } else if (spec.bossId === 'captain') {
+        const desk = bState.props.find((p) => p.kind === 'captain_desk');
+        assert(desk, 'hq-3 missing captain_desk');
+        const cap = bState.enemies.find((e) => e.bossId === 'captain');
+        assert(cap && cap.aiState === 'idle_desk', 'Captain should start passive in idle_desk');
+        const dRng = SeededRng.fromState(bState.rngState);
+        damageProp(bState, desk!, 10, dRng);
+        bState.rngState = dRng.getState();
+        stepSimulation(bState, makeInput({ aimWorldX: cap!.x, aimWorldY: cap!.y }));
+        assert(bState.boss?.introTicks === 45, `Captain wake did not trigger introTicks=45 (got ${bState.boss?.introTicks})`);
+      }
+
+      // Isolate boss encounter (keep all Technomancer stations; keep Hyper Crystal orbiters)
+      if (spec.bossId === 'mom' || spec.bossId === 'captain' || spec.bossId === 'technomancer') {
+        bState.enemies = bState.enemies.filter((e) => e.bossId === spec.bossId);
+      } else if (spec.bossId === 'hyper_crystal') {
+        bState.enemies = bState.enemies.filter(
+          (e) => e.bossId === 'hyper_crystal' || e.defId === 'laser_crystal' || e.defId === 'cursed_laser_crystal',
+        );
+      }
+
+      // Step 90 ticks of live boss AI combat
+      for (let t = 0; t < 90; t++) {
+        const target = bState.enemies.find((e) => e.bossId === spec.bossId);
+        stepSimulation(
+          bState,
+          makeInput({
+            moveX: Math.cos(t * 0.1) * 0.35,
+            moveY: Math.sin(t * 0.1) * 0.35,
+            aimWorldX: target ? target.x : bState.player.x + 30,
+            aimWorldY: target ? target.y : bState.player.y,
+          }),
+        );
+        assertSimInvariants(bState, `extBoss:${spec.bossId}@t${t}`);
+      }
+
+      // Defeat boss + any remaining hostiles/summons cleanly
+      const killRng = SeededRng.fromState(bState.rngState);
+      for (const e of [...bState.enemies]) {
+        if (!e.friendly && e.hp > 0) {
+          e.invulnerable = false;
+          applyDamageToEnemy(bState, e, e.hp + 999, 1, 0, killRng);
+        }
+      }
+      bState.rngState = killRng.getState();
+
+      // Step through hitstop + 30-tick PORTAL_SPAWN_DELAY_TICKS (or Captain ending transition)
+      for (let k = 0; k < 70 && !bState.portal.active && bState.phase === 'playing'; k++) {
+        // Clear any late-hatching frog eggs / turrets spawned during death frames
+        if (k === 12) {
+          const cleanRng = SeededRng.fromState(bState.rngState);
+          for (const e of [...bState.enemies]) {
+            if (!e.friendly && e.hp > 0) {
+              applyDamageToEnemy(bState, e, e.hp + 999, 1, 0, cleanRng);
+            }
+          }
+          bState.rngState = cleanRng.getState();
+        }
+        stepSimulation(bState, makeInput({ aimWorldX: bState.player.x + 20, aimWorldY: bState.player.y }));
+        assertSimInvariants(bState, `extBossPost:${spec.bossId}@k${k}`);
+      }
+
+      assert(bState.boss?.defeated === true, `Extended boss ${spec.bossId} not marked defeated`);
+      assert(
+        bState.stats.bossesDefeated.includes(spec.bossId),
+        `Extended boss ${spec.bossId} missing from stats.bossesDefeated`,
+      );
+      if (spec.victory) {
+        assert(
+          bState.phase === 'victory_throne' && bState.endingType === 'captain',
+          `Captain defeat expected victory_throne/captain, got ${bState.phase}/${bState.endingType}`,
+        );
+      } else {
+        assert(bState.portal.active, `Portal did not open after defeating ${spec.bossId}`);
+        assert(
+          bState.portal.targetArea === spec.nextArea && bState.portal.nextLoop === spec.nextLoop,
+          `${spec.bossId} portal expected ${spec.nextArea}@L${spec.nextLoop}, got ${bState.portal.targetArea}@L${bState.portal.nextLoop}`,
+        );
+      }
+      allDefeatedBosses.add(spec.bossId);
+    }
+  }
+
+  for (const bossId of BOSS_IDS) {
+    assert(
+      allDefeatedBosses.has(bossId),
+      `Campaign + Loop-1+/HQ soak missing boss defeat: ${bossId}`,
+    );
+  }
+
+  return `PASS (1-1 -> 7-3[4 gens + Throne] -> 0-1[Throne II] -> Loop 1-1 in ${totalTicks} ticks + Loop-1+/HQ bosses[Mom/HyperCrystal/Technomancer/Captain] + $$$ + hq-2 | kills=${state.stats.kills}, level=${state.player.level}, mutations=${mutationsPicked}, ultra=${state.player.ultra}, bosses=${allDefeatedBosses.size}/${BOSS_IDS.length}, loop=${state.loop})`;
 }
 
 // ============================================================================
-// 2. ALL 12 MUTANTS MATRIX (PASSIVE + ACTIVE + THRONE BUTT + ULTRA A & B)
+// 2. ALL 14 MUTANTS MATRIX (PASSIVE + ACTIVE + THRONE BUTT + ALL 29 ULTRAS)
 // ============================================================================
-function resolveToUltra(state: SimState, ultraChoiceIndex: 0 | 1): void {
+function resolveToUltra(
+  state: SimState,
+  ultraChoiceIndex: 0 | 1 | 2,
+  opts: { stopAfterFirstUltra?: boolean } = {},
+): void {
   const rng = SeededRng.fromState(state.rngState);
   addRads(state, 4000, rng);
   state.rngState = rng.getState();
 
-  for (let guard = 0; guard < 20 && (state.pendingLevelUps > 0 || state.phase !== 'playing'); guard++) {
+  for (let guard = 0; guard < 35 && (state.pendingLevelUps > 0 || state.phase !== 'playing'); guard++) {
     if (state.phase === 'playing' && state.pendingLevelUps > 0) {
       const r = SeededRng.fromState(state.rngState);
       openPendingLevelUp(state, r);
       state.rngState = r.getState();
     }
     if (state.phase === 'ultra_select') {
+      const expectedChoices = MUTANTS[state.player.mutant].ultras.length;
+      assert(
+        state.pendingUltras.length === expectedChoices,
+        `${state.player.mutant} ultra_select offered ${state.pendingUltras.length}, expected ${expectedChoices}`,
+      );
       const r = SeededRng.fromState(state.rngState);
-      const ok = applyMutationSelection(state, ultraChoiceIndex, r, populateAreaEntities);
-      assert(ok, `applyMutationSelection failed for ultra index ${ultraChoiceIndex}`);
+      const pickIdx = Math.min(ultraChoiceIndex, state.pendingUltras.length - 1);
+      const ok = applyMutationSelection(state, pickIdx, r, populateAreaEntities);
+      assert(ok, `applyMutationSelection failed for ultra index ${pickIdx} on ${state.player.mutant}`);
       state.rngState = r.getState();
+      if (opts.stopAfterFirstUltra) {
+        return;
+      }
     } else if (state.phase === 'mutation_select') {
       const r = SeededRng.fromState(state.rngState);
       const ok = applyMutationSelection(state, 0, r, populateAreaEntities);
-      assert(ok, 'applyMutationSelection failed for mutation index 0');
+      assert(ok, `applyMutationSelection failed for mutation index 0 on ${state.player.mutant}`);
       state.rngState = r.getState();
     }
   }
@@ -628,8 +831,10 @@ function prepareMutantContext(state: SimState, mutant: MutantId): void {
   }
 }
 
-function runAll12MutantsMatrix(): string {
+function runAll14MutantsMatrix(): string {
+  assert(MUTANT_IDS.length === 14, `Expected 14 mutants in MUTANT_IDS, got ${MUTANT_IDS.length}`);
   let totalTicks = 0;
+  let ultrasVerified = 0;
 
   for (let idx = 0; idx < MUTANT_IDS.length; idx++) {
     const mutant = MUTANT_IDS[idx]!;
@@ -688,9 +893,36 @@ function runAll12MutantsMatrix(): string {
     }
 
     // Resolve to Ultra A and exercise combat
-    resolveToUltra(stateA, 0);
-    assert(stateA.player.ultra === `${mutant}_a`, `Expected ${mutant}_a, got ${stateA.player.ultra}`);
-    prepareMutantContext(stateA, mutant);
+    if (mutant === 'skeleton') {
+      // Skeleton Ultra A (REDEMPTION): transforms back to Melting with ultra='skeleton_a' initially,
+      // queuing 9 fresh Melting mutations + Melting Ultra!
+      resolveToUltra(stateA, 0, { stopAfterFirstUltra: true });
+      const postRedemptionMutant: MutantId = stateA.player.mutant;
+      const postRedemptionUltra: string | null = stateA.player.ultra;
+      assert(
+        postRedemptionMutant === 'melting' && postRedemptionUltra === 'skeleton_a',
+        `Skeleton REDEMPTION expected mutant='melting' & ultra='skeleton_a', got mutant=${postRedemptionMutant}, ultra=${postRedemptionUltra}`,
+      );
+      assert(
+        stateA.player.maxHp === MUTANTS.melting.maxHp && stateA.pendingLevelUps === 10,
+        `Skeleton REDEMPTION expected Melting maxHp=${MUTANTS.melting.maxHp} & pendingLevelUps=10, got maxHp=${stateA.player.maxHp}, pending=${stateA.pendingLevelUps}`,
+      );
+      ultrasVerified += 1;
+      // Finish resolving the 9 fresh Melting mutations + Melting Ultra cleanly
+      resolveToUltra(stateA, 0);
+      const finalUltra: string | null = stateA.player.ultra;
+      assert(
+        stateA.player.mutant === 'melting' &&
+          finalUltra === 'melting_a' &&
+          stateA.player.mutations.length === 9,
+        `Skeleton REDEMPTION follow-up expected melting_a + 9 mutations, got ultra=${finalUltra}, muts=${stateA.player.mutations.length}`,
+      );
+    } else {
+      resolveToUltra(stateA, 0);
+      assert(stateA.player.ultra === `${mutant}_a`, `Expected ${mutant}_a, got ${stateA.player.ultra}`);
+      ultrasVerified += 1;
+    }
+    prepareMutantContext(stateA, stateA.player.mutant);
     for (let t = 0; t < 24; t++) {
       stepSimulation(
         stateA,
@@ -709,11 +941,12 @@ function runAll12MutantsMatrix(): string {
       assertSimInvariants(stateA, `mutant:${mutant}:ultraA@t${t}`);
     }
 
-    // Run B: Fresh mutant -> Ultra B (including Melting's Detachment +3 mutations!)
+    // Run B: Fresh mutant -> Ultra B (including Melting's Detachment +3 mutations, Skeleton DAMNATION, Frog INTIMACY)
     const stateB = createRunState({ mutant, seed: 20000 + idx * 31 });
     stateB.player.godMode = true;
     resolveToUltra(stateB, 1);
     assert(stateB.player.ultra === `${mutant}_b`, `Expected ${mutant}_b, got ${stateB.player.ultra}`);
+    ultrasVerified += 1;
     prepareMutantContext(stateB, mutant);
     for (let t = 0; t < 24; t++) {
       stepSimulation(
@@ -732,9 +965,45 @@ function runAll12MutantsMatrix(): string {
       totalTicks += 1;
       assertSimInvariants(stateB, `mutant:${mutant}:ultraB@t${t}`);
     }
+
+    // Run C: 3rd Ultra (Horror's MELTDOWN -> double 1,200 rad cap!)
+    if (def.ultras.length >= 3) {
+      const stateC = createRunState({ mutant, seed: 30000 + idx * 31 });
+      stateC.player.godMode = true;
+      resolveToUltra(stateC, 2);
+      assert(stateC.player.ultra === `${mutant}_c`, `Expected ${mutant}_c, got ${stateC.player.ultra}`);
+      if (mutant === 'horror') {
+        const capRng = SeededRng.fromState(stateC.rngState);
+        addRads(stateC, 2000, capRng);
+        stateC.rngState = capRng.getState();
+        assert(
+          stateC.player.rads === 1200,
+          `Horror MELTDOWN expected 1200 rad cap, got ${stateC.player.rads}`,
+        );
+      }
+      ultrasVerified += 1;
+      prepareMutantContext(stateC, mutant);
+      for (let t = 0; t < 24; t++) {
+        stepSimulation(
+          stateC,
+          makeInput({
+            moveX: 0.3,
+            moveY: 0.4,
+            aimWorldX: stateC.player.x + 42,
+            aimWorldY: stateC.player.y - 12,
+            fireHeld: true,
+            firePressed: t % 3 === 0,
+            activeHeld: t < 10,
+            activePressed: t === 0,
+          }),
+        );
+        totalTicks += 1;
+        assertSimInvariants(stateC, `mutant:${mutant}:ultraC@t${t}`);
+      }
+    }
   }
 
-  return `PASS (12/12 mutants verified: passive + RMB active + Throne Butt + Ultra A & B across ${totalTicks} ticks, 0 NaNs, 0 wall traps)`;
+  return `PASS (${MUTANT_IDS.length}/14 mutants verified: passive + RMB active + Throne Butt + ${ultrasVerified}/29 Ultras incl. Skeleton REDEMPTION/DAMNATION, Frog DISTANCE/INTIMACY & Horror MELTDOWN across ${totalTicks} ticks, 0 NaNs, 0 wall traps)`;
 }
 
 // ============================================================================
@@ -957,6 +1226,8 @@ function runDeterminismReplayTest(): string {
 // 5. 500-SEED CONNECTIVITY & BOSS WARP STRESS
 // ============================================================================
 function runConnectivityAndBossWarpStress(): string {
+  assert(AREA_CODES.length === 26, `Expected 26 AREA_CODES, got ${AREA_CODES.length}`);
+  assert(BOSS_IDS.length === 9, `Expected 9 BOSS_IDS, got ${BOSS_IDS.length}`);
   for (let i = 0; i < 500; i++) {
     const code = AREA_CODES[i % AREA_CODES.length]!;
     const areaDef = AREAS[code];
@@ -975,7 +1246,7 @@ function runConnectivityAndBossWarpStress(): string {
     assert(!isWorldSolid(map, map.spawnX, map.spawnY), `Spawn solid on seed=${seed}, area=${code}`);
   }
 
-  // Verify warpToArea + spawnBossEntity across all 5 bosses cleanly
+  // Verify warpToArea + spawnBossEntity across all 9 bosses cleanly
   const warpState = createRunState({ mutant: 'eyes', seed: 91919 });
   warpState.player.godMode = true;
   for (const bossId of BOSS_IDS) {
@@ -1017,7 +1288,7 @@ function runConnectivityAndBossWarpStress(): string {
     );
   }
 
-  return `PASS (500/500 seeds 100% connected across all ${AREA_CODES.length} areas & loops 0-2; 20/20 safe spawn pockets; 5/5 bosses warp-spawned & stepped cleanly)`;
+  return `PASS (500/500 seeds 100% connected across all ${AREA_CODES.length} areas & loops 0-2; 20/20 safe spawn pockets; ${BOSS_IDS.length}/${BOSS_IDS.length} bosses warp-spawned & stepped cleanly)`;
 }
 
 function main(): void {
@@ -1029,8 +1300,8 @@ function main(): void {
   const r1 = runCampaignProgressionSoak();
   console.log(`[1/5 Campaign Soak]        ${r1}`);
 
-  const r2 = runAll12MutantsMatrix();
-  console.log(`[2/5 12-Mutant Matrix]     ${r2}`);
+  const r2 = runAll14MutantsMatrix();
+  console.log(`[2/5 14-Mutant Matrix]     ${r2}`);
 
   const r3 = runMutationsAmmoAndMeleeDeflection();
   console.log(`[3/5 29 Muts+Ammo+Melee]   ${r3}`);

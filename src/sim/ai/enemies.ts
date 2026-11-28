@@ -113,7 +113,6 @@ const CORPSE_SPRITE_TO_SPECIAL_DEF: Record<string, string> = {
   sprHyperCrystalDead: 'hyper_crystal',
   sprTechnoMancerDead: 'technomancer',
   sprLastDeath: 'captain',
-  sprLastDead: 'captain',
 };
 
 const BOSS_CORPSE_SPRITES: ReadonlySet<string> = new Set([
@@ -126,7 +125,6 @@ const BOSS_CORPSE_SPRITES: ReadonlySet<string> = new Set([
   'sprHyperCrystalDead',
   'sprTechnoMancerDead',
   'sprLastDeath',
-  'sprLastDead',
 ]);
 
 const BOSS_DEF_IDS: ReadonlySet<string> = new Set([
@@ -3561,7 +3559,7 @@ function stepHostileEnemy(
               radius: 4,
               lifeTicks: 76,
               sprite: 'sprIDPDBullet',
-              sound: k === 0 ? 'sndIDPDShoot' : undefined,
+              sound: k === 0 ? 'sndGruntFire' : undefined,
             });
           }
           e.attackCooldown = 58;

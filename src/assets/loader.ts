@@ -31,6 +31,20 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
+/**
+ * Applies canonical aliases for Steam Update 100 manifests where `data.win` omits a B-skin sprite
+ * that shares its A-skin counterpart (`sprMutant9BDead` -> `sprMutant9Dead`), while preserving
+ * the Built-In fallback atlas's dedicated `sprMutant9BDead`.
+ */
+function applySteamSpriteAliases(manifest: AssetManifest): AssetManifest {
+  if (manifest.sourceMode === 'steam' && manifest.sprites) {
+    if (!manifest.sprites['sprMutant9BDead'] && manifest.sprites['sprMutant9Dead']) {
+      manifest.sprites['sprMutant9BDead'] = manifest.sprites['sprMutant9Dead'];
+    }
+  }
+  return manifest;
+}
+
 function createFallbackBundleWithOrigin(): AssetBundle {
   const bundle = createFallbackBundle();
   bundle.origin = 'fallback';
@@ -43,6 +57,7 @@ function createBundleFromManifest(
   baseUrl: string,
   origin: AssetBundleOrigin,
 ): AssetBundle {
+  applySteamSpriteAliases(manifest);
   const cleanBase = normalizeBaseUrl(baseUrl);
   return {
     manifest,
@@ -176,7 +191,7 @@ export async function loadManifestNode(rootDir?: string): Promise<AssetManifest>
         const raw = await fs.readFile(candidate, 'utf8');
         const parsed = JSON.parse(raw) as AssetManifest;
         if (parsed && typeof parsed === 'object' && parsed.sprites && Array.isArray(parsed.textures)) {
-          return parsed;
+          return applySteamSpriteAliases(parsed);
         }
       } catch {
         // Try next candidate

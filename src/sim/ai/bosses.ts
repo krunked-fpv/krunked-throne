@@ -2262,7 +2262,7 @@ function stepCaptain(state: SimState, boss: EnemyEntity, rng: SeededRng): void {
         radius: 4,
         lifeTicks: 90,
         sprite: 'sprIDPDBullet',
-        sound: k === 0 ? 'sndIDPDShoot' : undefined,
+        sound: k === 0 ? 'sndLastPattern2' : undefined,
       });
     }
   }

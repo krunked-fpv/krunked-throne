@@ -124,6 +124,14 @@ export async function createLocalBundleFromPayload(
 
   let disposed = false;
   const manifest = payload.manifest;
+  if (
+    manifest.sourceMode === 'steam' &&
+    manifest.sprites &&
+    !manifest.sprites['sprMutant9BDead'] &&
+    manifest.sprites['sprMutant9Dead']
+  ) {
+    manifest.sprites['sprMutant9BDead'] = manifest.sprites['sprMutant9Dead'];
+  }
 
   const dispose = (): void => {
     if (disposed) return;

@@ -389,7 +389,7 @@ describe('gameplay: All 9 Bosses & Full Progression Determinism', () => {
       expect(statesSeen.size).toBeGreaterThanOrEqual(2);
       expect(enemyProjSeen).toBeGreaterThan(0);
 
-      // Defeat boss and verify portal (allow up to 60 ticks for Lil' Hunter visible death_spiral detonation!)
+      // Defeat boss and verify portal (allow up to 110 ticks for Lil' Hunter death_spiral + 30-tick portal spawn delay!)
       const live = state.enemies.find((e) => e.id === boss!.id);
       if (live) {
         live.invulnerable = false;
@@ -398,7 +398,7 @@ describe('gameplay: All 9 Bosses & Full Progression Determinism', () => {
         state.rngState = killRng.getState();
       }
 
-      for (let k = 0; k < 60 && !state.portal.active; k++) {
+      for (let k = 0; k < 110 && !state.portal.active; k++) {
         stepSimulation(state, makeInput({ aimWorldX: state.player.x, aimWorldY: state.player.y }));
       }
       expect(state.boss?.defeated).toBe(true);
@@ -423,76 +423,101 @@ describe('gameplay: All 9 Bosses & Full Progression Determinism', () => {
     }
   });
 
-  it('rolls over portal-vacuumed rads and rad canisters into immediate level-ups before area exit (RT-09)', () => {
-    for (const source of ['big_rad', 'rad_canister'] as const) {
-      const state = createRunState({ mutant: 'fish', seed: 101 });
-      state.enemies = [];
-      state.pickups = [];
-      state.props = [];
-      state.portal.active = true;
-      state.portal.x = state.player.x + 80;
-      state.portal.y = state.player.y;
+  it('vacuums loose floor rads into immediate level-ups while leaving intact rad_canisters un-vacuumed to increment radCanisterSkipStreak (RT-09)', () => {
+    // 1. Loose floor rad pickup vacuums immediately and rolls over into Level 2 before area exit
+    const radState = createRunState({ mutant: 'fish', seed: 101 });
+    radState.enemies = [];
+    radState.pickups = [];
+    radState.props = [];
+    radState.portal.active = true;
+    radState.portal.x = radState.player.x + 80;
+    radState.portal.y = radState.player.y;
+    radState.pickups.push({
+      id: allocEntityId(radState),
+      kind: 'big_rad',
+      x: radState.portal.x + 20,
+      y: radState.portal.y,
+      vx: 0,
+      vy: 0,
+      value: 80,
+      lifeTicks: 300,
+      animFrame: 0,
+    });
 
-      if (source === 'big_rad') {
-        state.pickups.push({
-          id: allocEntityId(state),
-          kind: 'big_rad',
-          x: state.portal.x + 20,
-          y: state.portal.y,
-          vx: 0,
-          vy: 0,
-          value: 80,
-          lifeTicks: 300,
-          animFrame: 0,
-        });
-      } else {
-        state.props.push({
-          id: allocEntityId(state),
-          kind: 'rad_canister',
-          x: state.portal.x + 20,
-          y: state.portal.y,
-          radius: 8,
-          hp: 6,
-          maxHp: 6,
-          solid: false,
-          opened: false,
-          hurtFlashTicks: 0,
-          sprite: 'sprRadChest',
-          radsStored: 80,
-        });
+    let sawLevelUpEvent = false;
+    for (let t = 0; t < 15; t++) {
+      stepSimulation(radState, makeInput({ aimWorldX: radState.player.x + 10, aimWorldY: radState.player.y }));
+      if (radState.events.some((e) => e.type === 'level_up' && e.level === 2)) {
+        sawLevelUpEvent = true;
       }
-
-      let sawLevelUpEvent = false;
-      for (let t = 0; t < 15; t++) {
-        stepSimulation(state, makeInput({ aimWorldX: state.player.x + 10, aimWorldY: state.player.y }));
-        if (state.events.some((e) => e.type === 'level_up' && e.level === 2)) {
-          sawLevelUpEvent = true;
-        }
-      }
-
-      expect(state.areaCode).toBe('1-1');
-      expect(state.player.level).toBe(2);
-      expect(state.player.rads).toBe(20);
-      expect(state.player.radsToNextLevel).toBe(120);
-      expect(state.pendingLevelUps).toBeGreaterThanOrEqual(1);
-      expect(sawLevelUpEvent).toBe(true);
-
-      // Entering portal immediately offers mutation selection before loading 1-2
-      state.player.x = state.portal.x;
-      state.player.y = state.portal.y;
-      for (let t = 0; t < 35 && state.phase !== 'mutation_select'; t++) {
-        stepSimulation(state, makeInput({ aimWorldX: state.player.x, aimWorldY: state.player.y }));
-      }
-      expect(state.phase).toBe('mutation_select');
-      expect(state.pendingMutations.length).toBeGreaterThanOrEqual(1);
-
-      stepSimulation(
-        state,
-        makeInput({ aimWorldX: state.player.x, aimWorldY: state.player.y, selectIndex: 0 }),
-      );
-      expect(state.areaCode).toBe('1-2');
-      expect(state.player.mutations.length).toBe(1);
     }
+
+    expect(radState.areaCode).toBe('1-1');
+    expect(radState.player.level).toBe(2);
+    expect(radState.player.rads).toBe(20);
+    expect(radState.player.radsToNextLevel).toBe(120);
+    expect(radState.pendingLevelUps).toBeGreaterThanOrEqual(1);
+    expect(sawLevelUpEvent).toBe(true);
+
+    // Entering portal immediately offers mutation selection before loading 1-2
+    radState.player.x = radState.portal.x;
+    radState.player.y = radState.portal.y;
+    for (let t = 0; t < 35 && radState.phase !== 'mutation_select'; t++) {
+      stepSimulation(radState, makeInput({ aimWorldX: radState.player.x, aimWorldY: radState.player.y }));
+    }
+    expect(radState.phase).toBe('mutation_select');
+    expect(radState.pendingMutations.length).toBeGreaterThanOrEqual(1);
+
+    stepSimulation(
+      radState,
+      makeInput({ aimWorldX: radState.player.x, aimWorldY: radState.player.y, selectIndex: 0 }),
+    );
+    expect(radState.areaCode).toBe('1-2');
+    expect(radState.player.mutations.length).toBe(1);
+
+    // 2. Authentic NT Wiki parity: intact rad_canister is NEVER auto-vacuumed by portal & increments radCanisterSkipStreak on exit!
+    const canState = createRunState({ mutant: 'fish', seed: 101 });
+    canState.enemies = [];
+    canState.pickups = [];
+    canState.props = [];
+    canState.portal.active = true;
+    canState.portal.x = canState.player.x + 80;
+    canState.portal.y = canState.player.y;
+    canState.props.push({
+      id: allocEntityId(canState),
+      kind: 'rad_canister',
+      x: canState.portal.x + 20,
+      y: canState.portal.y,
+      radius: 8,
+      hp: 6,
+      maxHp: 6,
+      solid: false,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprRadChest',
+      radsStored: 80,
+    });
+
+    for (let t = 0; t < 15; t++) {
+      stepSimulation(canState, makeInput({ aimWorldX: canState.player.x + 10, aimWorldY: canState.player.y }));
+    }
+
+    expect(canState.areaCode).toBe('1-1');
+    expect(canState.player.level).toBe(1);
+    expect(canState.player.rads).toBe(0);
+    expect(canState.pendingLevelUps).toBe(0);
+    expect(canState.props.some((p) => p.kind === 'rad_canister' && !p.opened)).toBe(true);
+    expect(canState.radCanisterSkipStreak).toBe(0);
+
+    // Exiting portal without breaking the rad canister increments radCanisterSkipStreak (toward Hostile Horror at 2)
+    canState.player.x = canState.portal.x;
+    canState.player.y = canState.portal.y;
+    for (let t = 0; t < 35 && canState.areaCode === '1-1'; t++) {
+      stepSimulation(canState, makeInput({ aimWorldX: canState.player.x, aimWorldY: canState.player.y }));
+    }
+    expect(canState.areaCode).toBe('1-2');
+    expect(canState.radCanisterSkipStreak).toBe(1);
+    expect(canState.player.level).toBe(1);
   });
 
   it('triggers victory_throne when Nuclear Throne falls with generators intact vs Loop 0-1 when all 4 broken (RT-10)', () => {

@@ -2347,8 +2347,8 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
           const wepChest = state.props.find((p) => p.kind === 'weapon_chest' && !p.opened);
           if (wepChest) {
             wepChest.kind = 'big_weapon_chest';
-            wepChest.sprite = 'sprBigWeaponChest';
-            wepChest.openSprite = 'sprBigWeaponChestOpen';
+            wepChest.sprite = 'sprWeaponChestBig';
+            wepChest.openSprite = 'sprWeaponChestBigOpen';
             state.weaponChestSkipStreak = 0;
           }
         }

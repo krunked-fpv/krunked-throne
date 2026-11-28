@@ -67,7 +67,10 @@ const ALL_AREAS: ReadonlyArray<{ code: AreaCode; biome: BiomeId }> = [
   { code: '3-?', biome: 'mansion' },
   { code: '4-?', biome: 'cursed_caves' },
   { code: '5-?', biome: 'jungle' },
+  { code: '$$$', biome: 'crib' },
   { code: 'hq-1', biome: 'hq' },
+  { code: 'hq-2', biome: 'hq' },
+  { code: 'hq-3', biome: 'hq' },
 ];
 
 function verifyWallMask(map: WorldMap): void {

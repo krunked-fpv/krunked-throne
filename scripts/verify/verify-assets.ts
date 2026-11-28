@@ -375,15 +375,9 @@ function verifySteamMode(
   const uniqueAmbience = new Set<string>();
 
   // 1. Verify every referenced sprite + TPAG bounds + backing texture PNG
-  // Steam Update 100 omits sprMutant9BDead (Chicken B-skin shares sprMutant9Dead; renderer falls back cleanly)
-  const STEAM_SPRITE_ALIASES: Readonly<Record<string, string>> = {
-    sprMutant9BDead: 'sprMutant9Dead',
-  };
   for (const ref of refs.sprites) {
-    const resolvedKey =
-      manifest.sprites[ref.key] ? ref.key : (STEAM_SPRITE_ALIASES[ref.key] ?? ref.key);
-    uniqueSprites.add(resolvedKey);
-    const spr = manifest.sprites[resolvedKey];
+    uniqueSprites.add(ref.key);
+    const spr = manifest.sprites[ref.key];
     if (!spr) {
       errors.push(`Missing sprite "${ref.key}" referenced by ${ref.ctx}`);
       continue;

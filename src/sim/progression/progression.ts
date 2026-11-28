@@ -1607,7 +1607,7 @@ export function loadAreaIntoState(
     populateFn(state, rng);
   }
 
-  // Y.V.'s Crib ($$$): enforce Crown of Love conversion, Open Mind +1 Giant Chest, and fallback props if no populator
+  // Y.V.'s Crib ($$$): enforce Crown of Love conversion and fallback props only when no populator populated Giant Chests
   if (effectiveAreaCode === '$$$') {
     const hasAnyGiant = state.props.some(
       (p) => p.kind === 'giant_weapon_chest' || p.kind === 'giant_ammo_chest',
@@ -1636,24 +1636,24 @@ export function loadAreaIntoState(
           openSprite: isWep ? 'sprGiantWepChestOpen' : 'sprGiantAmmoChestOpen',
         });
       }
-    }
-    if (hasMutation(player, 'open_mind')) {
-      const extraSpot = findNearestFloor(state.map, map.spawnX + 36, map.spawnY + 12, 8);
-      const isAmmo = state.crown === 'love';
-      state.props.push({
-        id: allocEntityId(state),
-        kind: isAmmo ? 'giant_ammo_chest' : 'giant_weapon_chest',
-        x: extraSpot.x,
-        y: extraSpot.y,
-        radius: 12,
-        hp: 999,
-        maxHp: 999,
-        solid: false,
-        opened: false,
-        hurtFlashTicks: 0,
-        sprite: isAmmo ? 'sprGiantAmmoChest' : 'sprGiantWepChest',
-        openSprite: isAmmo ? 'sprGiantAmmoChestOpen' : 'sprGiantWepChestOpen',
-      });
+      if (hasMutation(player, 'open_mind')) {
+        const extraSpot = findNearestFloor(state.map, map.spawnX + 36, map.spawnY + 12, 8);
+        const isAmmo = state.crown === 'love';
+        state.props.push({
+          id: allocEntityId(state),
+          kind: isAmmo ? 'giant_ammo_chest' : 'giant_weapon_chest',
+          x: extraSpot.x,
+          y: extraSpot.y,
+          radius: 12,
+          hp: 999,
+          maxHp: 999,
+          solid: false,
+          opened: false,
+          hurtFlashTicks: 0,
+          sprite: isAmmo ? 'sprGiantAmmoChest' : 'sprGiantWepChest',
+          openSprite: isAmmo ? 'sprGiantAmmoChestOpen' : 'sprGiantWepChestOpen',
+        });
+      }
     }
     if (state.crown === 'love') {
       for (let i = 0; i < state.props.length; i++) {
