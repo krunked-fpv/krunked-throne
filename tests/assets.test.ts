@@ -147,7 +147,7 @@ describe('assets: Procedural Fallback Manifest Integrity', () => {
       expect(manifest.sprites[key], `Missing fallback overhaul sprite ${key}`).toBeDefined();
     }
 
-    // Crisp native 5x5 fntSmall V & Q glyphs (distinct from U/0/9), unscaled fntL base metrics, native 8x8 skull, 24 bespoke Ultra frames
+    // Crisp native 5x5 fntSmall V & Q glyphs (distinct from U/0/9), unscaled fntL base metrics, native 8x8 skull, 29 bespoke Ultra frames
     const fntSmall = manifest.fonts.fntSmall!;
     expect(fntSmall.glyphs[86]!.w).toBe(5); // 'V'
     expect(fntSmall.glyphs[81]!.w).toBe(5); // 'Q'
@@ -157,8 +157,8 @@ describe('assets: Procedural Fallback Manifest Integrity', () => {
     expect(measureText(manifest.fonts.fntL, 'PLAY').height).toBe(16);
     expect(manifest.sprites.sprKillsIcon!.width).toBe(8);
     expect(manifest.sprites.sprKillsIcon!.height).toBe(8);
-    expect(manifest.sprites.sprEGSkillIcon!.frames.length).toBe(24);
-    expect(manifest.sprites.sprEGIconHUD!.frames.length).toBe(24);
+    expect(manifest.sprites.sprEGSkillIcon!.frames.length).toBe(29);
+    expect(manifest.sprites.sprEGIconHUD!.frames.length).toBe(29);
     expect(manifest.sprites.sprCharSelect!.frames.length).toBe(18);
   });
 

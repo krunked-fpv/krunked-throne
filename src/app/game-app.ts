@@ -60,8 +60,222 @@ import {
   type MenuAction,
   type MenuRenderContext,
 } from '@/ui';
+import { BSKIN_UNLOCK_HINTS, MUTANT_UNLOCK_HINTS } from '@/ui/menus';
 import { createGameDataProvider } from './data-adapter';
 import { DevPlaytestOverlay } from './debug-overlay';
+
+const CORE_12_MUTANTS: readonly MutantId[] = [
+  'fish',
+  'crystal',
+  'eyes',
+  'melting',
+  'plant',
+  'yv',
+  'steroids',
+  'robot',
+  'chicken',
+  'rebel',
+  'horror',
+  'rogue',
+];
+
+const SEWERS_OR_BEYOND_AREAS = new Set<AreaCode>([
+  '2-1',
+  '2-?',
+  '3-1',
+  '3-2',
+  '3-3',
+  '3-?',
+  '4-1',
+  '4-?',
+  'vault',
+  '5-1',
+  '5-2',
+  '5-3',
+  '5-?',
+  '$$$',
+  '6-1',
+  '7-1',
+  '7-2',
+  '7-3',
+  '0-1',
+  'hq-1',
+  'hq-2',
+  'hq-3',
+]);
+
+type SimStateWithUnlockBridges = SimState & {
+  protoChestWeaponId?: string | null;
+  pendingUnlocks?: string[];
+};
+
+export interface LiveUnlockEvalOptions {
+  victory?: boolean;
+  ateHyperWeapon?: boolean;
+}
+
+/**
+ * Pure Nuclear Throne Wiki unlock & Proto Chest evaluator.
+ * Evaluates all 12 B-skin unlock triggers, Skeleton & Frog secret unlocks,
+ * Hard Mode (Loop 2+), Crown unlocks, and Proto Chest persistence cleanly.
+ * Returns human-readable ASCII toast notifications for any newly granted unlocks.
+ */
+export function evaluateRunUnlocks(
+  state: SimState,
+  saveManager: SaveManager,
+  opts: LiveUnlockEvalOptions = {},
+): string[] {
+  const newlyUnlocked: string[] = [];
+  const p = state.player;
+  const save = saveManager.getData();
+  const bridged = state as SimStateWithUnlockBridges;
+  const victory = Boolean(opts.victory);
+
+  // 1. Sync Proto Chest stored weapon from SimState -> SaveManager
+  if (bridged.protoChestWeaponId !== undefined) {
+    const incoming =
+      typeof bridged.protoChestWeaponId === 'string' && bridged.protoChestWeaponId.trim().length > 0
+        ? bridged.protoChestWeaponId.trim()
+        : null;
+    if (incoming !== saveManager.getProtoChestWeapon()) {
+      saveManager.setProtoChestWeapon(incoming);
+    }
+  }
+
+  const carriedWeapons = [p.weapons[0]?.weaponId ?? null, p.weapons[1]?.weaponId ?? null].filter(
+    (id): id is string => Boolean(id),
+  );
+
+  // 2. Drain optional sim-side pendingUnlocks bridge tokens (if populated by sim modules)
+  if (Array.isArray(bridged.pendingUnlocks) && bridged.pendingUnlocks.length > 0) {
+    const tokens = bridged.pendingUnlocks.splice(0, bridged.pendingUnlocks.length);
+    for (const token of tokens) {
+      if (token === 'skeleton' && !save.skeletonUnlocked) {
+        saveManager.unlockSkeleton();
+        newlyUnlocked.push('SKELETON UNLOCKED!');
+      } else if (token === 'frog' && !save.frogUnlocked) {
+        saveManager.unlockFrog();
+        newlyUnlocked.push('FROG UNLOCKED!');
+      } else if (token === 'hard_mode' && !save.hardModeUnlocked) {
+        saveManager.unlockHardMode();
+        newlyUnlocked.push('HARD MODE UNLOCKED!');
+      } else if (token.startsWith('bskin:')) {
+        const mId = token.slice(6) as MutantId;
+        if (CORE_12_MUTANTS.includes(mId) && !save.mutants[mId]?.bSkinUnlocked) {
+          saveManager.unlockBSkin(mId);
+          newlyUnlocked.push(`${mId.toUpperCase()} B-SKIN UNLOCKED!`);
+        }
+      } else if (token.startsWith('crown:')) {
+        const cId = token.slice(6) as CrownId;
+        if (cId !== 'none' && !save.mutants[p.mutant]?.crownsUnlocked.includes(cId)) {
+          saveManager.unlockCrown(p.mutant, cId);
+          newlyUnlocked.push(`CROWN UNLOCKED!`);
+        }
+      }
+    }
+  }
+
+  // 3. Secret Mutants: Skeleton & Frog
+  if ((p.mutant === 'skeleton' || Boolean(p.skeletonTransformed)) && !save.skeletonUnlocked) {
+    saveManager.unlockSkeleton();
+    newlyUnlocked.push('SKELETON UNLOCKED!');
+  }
+
+  const protoWeapon = saveManager.getProtoChestWeapon();
+  if (
+    (p.mutant === 'frog' ||
+      protoWeapon === 'golden_frog_pistol' ||
+      carriedWeapons.includes('golden_frog_pistol')) &&
+    !save.frogUnlocked
+  ) {
+    saveManager.unlockFrog();
+    newlyUnlocked.push('FROG UNLOCKED!');
+  }
+
+  // 4. Hard Mode unlock (reach Loop 2+)
+  if (state.loop >= 2 && !save.hardModeUnlocked) {
+    saveManager.unlockHardMode();
+    newlyUnlocked.push('HARD MODE UNLOCKED!');
+  }
+
+  // 5. Crown unlock (carry crown into Loop 1+ or Victory)
+  if (
+    state.crown !== 'none' &&
+    (state.loop >= 1 || victory) &&
+    !save.mutants[p.mutant]?.crownsUnlocked.includes(state.crown)
+  ) {
+    saveManager.unlockCrown(p.mutant, state.crown);
+    newlyUnlocked.push(`CROWN UNLOCKED!`);
+  }
+
+  // 6. All 12 authentic Nuclear Throne B-Skin unlock triggers
+  const tryUnlockBSkin = (mutant: MutantId, label: string): void => {
+    if (!save.mutants[mutant]?.bSkinUnlocked) {
+      saveManager.unlockBSkin(mutant);
+      newlyUnlocked.push(`${label} B-SKIN UNLOCKED!`);
+    }
+  };
+
+  const bosses = state.stats.bossesDefeated;
+  const reachedThrone = state.areaCode === '7-3' || state.loop >= 1 || victory;
+
+  // Fish B: Loop with all 12 core mutants
+  const allCoreLooped = CORE_12_MUTANTS.every((m) => {
+    const savedLoop = save.mutants[m]?.bestLoop ?? 0;
+    const activeLoop = p.mutant === m ? state.loop : 0;
+    return Math.max(savedLoop, activeLoop) >= 1;
+  });
+  if (allCoreLooped) {
+    tryUnlockBSkin('fish', 'FISH');
+  }
+
+  // Y.V. B: Golden weapon unlocked for all 12 core mutants
+  const allCoreGolden = CORE_12_MUTANTS.every((m) => Boolean(save.mutants[m]?.goldenWeapon));
+  if (allCoreGolden) {
+    tryUnlockBSkin('yv', 'Y.V.');
+  }
+
+  if (p.mutant === 'crystal' && state.areaCode === '4-?') {
+    tryUnlockBSkin('crystal', 'CRYSTAL');
+  }
+  if (p.mutant === 'eyes' && state.areaCode === '2-?') {
+    tryUnlockBSkin('eyes', 'EYES');
+  }
+  if (
+    p.mutant === 'melting' &&
+    reachedThrone &&
+    !p.mutations.includes('rhino_skin') &&
+    !p.mutations.includes('strong_spirit')
+  ) {
+    tryUnlockBSkin('melting', 'MELTING');
+  }
+  if (p.mutant === 'plant' && reachedThrone && state.stats.timeTicks < 18000) {
+    tryUnlockBSkin('plant', 'PLANT');
+  }
+  if (p.mutant === 'steroids' && bosses.includes('technomancer')) {
+    tryUnlockBSkin('steroids', 'STEROIDS');
+  }
+  if (p.mutant === 'robot' && Boolean(opts.ateHyperWeapon)) {
+    tryUnlockBSkin('robot', 'ROBOT');
+  }
+  if (p.mutant === 'chicken' && Boolean(state.hardMode) && SEWERS_OR_BEYOND_AREAS.has(state.areaCode)) {
+    tryUnlockBSkin('chicken', 'CHICKEN');
+  }
+  if (p.mutant === 'rebel' && bosses.includes('mom')) {
+    tryUnlockBSkin('rebel', 'REBEL');
+  }
+  if (p.mutant === 'horror' && bosses.includes('hyper_crystal')) {
+    tryUnlockBSkin('horror', 'HORROR');
+  }
+  if (
+    p.mutant === 'rogue' &&
+    (bosses.includes('captain') || (victory && state.endingType === 'captain'))
+  ) {
+    tryUnlockBSkin('rogue', 'ROGUE');
+  }
+
+  return newlyUnlocked;
+}
 
 declare global {
   interface Window {
@@ -201,6 +415,8 @@ export class GameApp {
   private lastPlayerHp = 0;
   private lastLowHpWarnSec = -10;
   private lastBossMusicState = '';
+  private runAteHyperWeapon = false;
+  private runPrevWeaponIds: string[] = [];
 
   // Custom Pack / Built-In Krunked Art Pack switcher state
   private hasCachedLocal = false;
@@ -211,7 +427,7 @@ export class GameApp {
   private lastPickerOpenMs = 0;
   private fileInputEl: HTMLInputElement | null = null;
 
-  // Non-blocking pixel controller toast banner (connect / disconnect / rumble test)
+  // Non-blocking pixel controller toast banner (connect / disconnect / rumble test / unlock alerts)
   private controllerToastText = '';
   private controllerToastUntilSec = 0;
   private controllerToastAccent = '#52e864';
@@ -224,6 +440,7 @@ export class GameApp {
   private boundResize = () => this.handleResize();
   private boundVisibilityChange = () => this.handleVisibilityChange();
   private boundUnlock = () => this.tryUnlockAudio();
+  private boundCampfireKeyDown = (e: KeyboardEvent) => this.handleCampfireKeyDown(e);
   private boundCanvasClick = (e: MouseEvent) => this.handleCanvasSyncClick(e);
   private boundWindowError = (e: ErrorEvent) => {
     this.consoleErrors.push(e.message || String(e.error ?? 'Unknown error'));
@@ -261,6 +478,10 @@ export class GameApp {
     this.bundle = await loadAssets('/nt-assets', { modePreference });
     if (this.bundle.origin === 'steam-server') {
       this.hasServerSteam = true;
+    } else if (forceBuiltinQuery) {
+      // Bug #19 fix: when ?assets=builtin (or ?fallback=1) explicitly forces Built-In Art mode,
+      // skip the HEAD /nt-assets/manifest.json startup probe to eliminate net::ERR_ABORTED!
+      this.hasServerSteam = false;
     } else {
       // Quietly probe `/nt-assets/manifest.json` even under `'builtin'` modePreference
       // so Title Screen keeps `USE CUSTOM PACK` clickable across page reloads whenever `.nt-assets/` exists!
@@ -310,6 +531,7 @@ export class GameApp {
       window.addEventListener('touchend', this.boundUnlock, { passive: true });
       window.addEventListener('mousedown', this.boundUnlock);
       window.addEventListener('keydown', this.boundUnlock);
+      window.addEventListener('keydown', this.boundCampfireKeyDown);
       window.addEventListener('gamepadconnected', this.boundUnlock);
       const bridge = this.createDebugBridge();
       window.__NT_DEBUG__ = bridge;
@@ -347,6 +569,7 @@ export class GameApp {
       window.removeEventListener('orientationchange', this.boundResize);
       window.visualViewport?.removeEventListener('resize', this.boundResize);
       this.removeAudioUnlockListeners();
+      window.removeEventListener('keydown', this.boundCampfireKeyDown);
       window.removeEventListener('error', this.boundWindowError);
       window.removeEventListener('unhandledrejection', this.boundRejection);
     }
@@ -828,6 +1051,7 @@ export class GameApp {
       height,
       inputMode,
       gamepadFamily,
+      protoChestWeaponId: this.saveManager.getProtoChestWeapon(),
     };
     this.hud.render(this.ctx, hudCtx);
   }
@@ -1007,6 +1231,37 @@ export class GameApp {
     this.renderer.getCamera().snapTo(st.player.x, st.player.y);
   }
 
+  private handleCampfireKeyDown(e: KeyboardEvent): void {
+    if (this.screen !== 'campfire' || this.rebindingField || e.repeat) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.code === 'KeyB') {
+      const selected = this.saveManager.getData().selectedMutant;
+      this.handleMenuAction({ type: 'toggle_bskin', mutant: selected });
+    } else if (e.code === 'KeyH') {
+      if (this.saveManager.isHardModeUnlocked()) {
+        const next = !this.saveManager.getData().hardModeEnabled;
+        this.handleMenuAction({ type: 'toggle_hard_mode', enabled: next });
+      }
+    }
+  }
+
+  private snapshotCarriedWeapons(state: SimState): string[] {
+    return [state.player.weapons[0]?.weaponId ?? '', state.player.weapons[1]?.weaponId ?? ''].filter(
+      (id) => id.length > 0,
+    );
+  }
+
+  private syncLiveUnlocksAndProtoChest(victory: boolean = false): void {
+    if (!this.simState) return;
+    const unlocked = evaluateRunUnlocks(this.simState, this.saveManager, {
+      victory,
+      ateHyperWeapon: this.runAteHyperWeapon,
+    });
+    if (unlocked.length > 0) {
+      this.showControllerToast(`@y${unlocked[0]}`, 3.6, '#ffe047');
+    }
+  }
+
   private persistCarriedGoldenWeapon(state: SimState): void {
     const p = state.player;
     const goldenSlot = [p.weapons[0], p.weapons[1]].find((w) => {
@@ -1075,7 +1330,21 @@ export class GameApp {
     const bossSig = `${bossStatus.activeBossId ?? ''}:${bossStatus.bossDefeated ? 1 : 0}`;
     if (bossSig !== this.lastBossMusicState) {
       this.lastBossMusicState = bossSig;
+      if (bossStatus.bossDefeated) {
+        this.syncLiveUnlocksAndProtoChest(false);
+      }
       this.syncMusicRouting();
+    }
+
+    // Keep Skeleton transformation, Proto Chest changes, and sim pendingUnlocks persisted live
+    const bridged = this.simState as SimStateWithUnlockBridges;
+    if (
+      (this.simState.player.skeletonTransformed && !this.saveManager.getData().skeletonUnlocked) ||
+      (bridged.protoChestWeaponId !== undefined &&
+        bridged.protoChestWeaponId !== this.saveManager.getProtoChestWeapon()) ||
+      (Array.isArray(bridged.pendingUnlocks) && bridged.pendingUnlocks.length > 0)
+    ) {
+      this.syncLiveUnlocksAndProtoChest(false);
     }
   }
 
@@ -1096,6 +1365,7 @@ export class GameApp {
 
     let areaChanged = false;
     let shouldSyncMusic = false;
+    let ateWeapon = false;
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
       if (ev.type === 'area_change') {
@@ -1103,14 +1373,29 @@ export class GameApp {
         shouldSyncMusic = true;
       } else if (ev.type === 'boss_intro' || ev.type === 'player_died') {
         shouldSyncMusic = true;
+      } else if (ev.type === 'sfx' && ev.sound === 'sndRobotEat') {
+        ateWeapon = true;
       }
     }
+
+    const currentWeapons = this.snapshotCarriedWeapons(this.simState);
+    if (ateWeapon) {
+      const lostHyper = this.runPrevWeaponIds.some(
+        (id) => id.startsWith('hyper_') && !currentWeapons.includes(id),
+      );
+      if (lostHyper) {
+        this.runAteHyperWeapon = true;
+        this.syncLiveUnlocksAndProtoChest(false);
+      }
+    }
+    this.runPrevWeaponIds = currentWeapons;
 
     if (areaChanged) {
       this.resetInterpolationSnapshot();
       if (this.simState.tick > 0) {
         this.persistCarriedGoldenWeapon(this.simState);
       }
+      this.syncLiveUnlocksAndProtoChest(false);
       this.preloadAreaSteamAudio(this.simState);
     }
 
@@ -1273,6 +1558,7 @@ export class GameApp {
       crown: this.simState.crown,
       goldenWeapon: goldenSlot?.weaponId ?? null,
     });
+    this.syncLiveUnlocksAndProtoChest(victory);
   }
 
   private syncMusicRouting(): void {
@@ -1299,8 +1585,9 @@ export class GameApp {
     const areaCode = inRunMusicContext ? this.simState?.areaCode : undefined;
     const biome = inRunMusicContext ? this.simState?.biome : undefined;
     const loop = inRunMusicContext ? this.simState?.loop : 0;
+    const mutant = inRunMusicContext ? this.simState?.player.mutant : undefined;
 
-    const sig = `${effectiveScreen}:${areaCode ?? ''}:${biome ?? ''}:${loop ?? 0}:${bossStatus.activeBossId ?? ''}:${bossStatus.bossDefeated ? 1 : 0}:${isPausedOrPauseOptions ? 1 : 0}`;
+    const sig = `${effectiveScreen}:${areaCode ?? ''}:${biome ?? ''}:${loop ?? 0}:${mutant ?? ''}:${bossStatus.activeBossId ?? ''}:${bossStatus.bossDefeated ? 1 : 0}:${isPausedOrPauseOptions ? 1 : 0}`;
     if (sig === this.lastMusicSignature) return;
     this.lastMusicSignature = sig;
 
@@ -1309,6 +1596,7 @@ export class GameApp {
       areaCode,
       biome,
       loop,
+      mutant,
       bossId: bossStatus.activeBossId,
       bossDefeated: bossStatus.bossDefeated,
       paused: isPausedOrPauseOptions,
@@ -1320,6 +1608,7 @@ export class GameApp {
     skin: 'a' | 'b';
     crown: CrownId;
     useGoldenWeapon: boolean;
+    hardMode?: boolean;
     seed?: number;
     playConfirmSfx?: boolean;
   }): void {
@@ -1330,11 +1619,13 @@ export class GameApp {
       opts.seed !== undefined
         ? opts.seed >>> 0
         : ((Date.now() ^ Math.floor(this.timeSec * 1000) ^ (save.totalRuns * 2654435761)) >>> 0) || 1;
+    const hardMode = Boolean(opts.hardMode);
 
     this.lastRunSeed = seed;
     this.runEndRecorded = false;
     this.lastBossMusicState = '';
     this.lastLowHpWarnSec = -10;
+    this.runAteHyperWeapon = false;
 
     this.simState = createRunState({
       mutant: opts.mutant,
@@ -1343,6 +1634,13 @@ export class GameApp {
       skin: opts.skin,
       goldenWeapon,
     });
+    this.simState.hardMode = hardMode;
+    if (hardMode && !this.simState.difficulty) {
+      this.simState.difficulty = 7;
+    }
+    (this.simState as SimStateWithUnlockBridges).protoChestWeaponId =
+      this.saveManager.getProtoChestWeapon();
+    this.runPrevWeaponIds = this.snapshotCarriedWeapons(this.simState);
     this.lastPlayerHp = this.simState.player.hp;
 
     this.saveManager.recordRunStart(opts.mutant);
@@ -1396,11 +1694,34 @@ export class GameApp {
       }
 
       case 'start_run': {
+        if (!this.saveManager.isMutantUnlocked(action.mutant)) {
+          this.audio.playSfx('sndClickBack', 0, 0, {
+            listenerX: 0,
+            listenerY: 0,
+            pitchJitter: 0.02,
+            volume: 0.85,
+          });
+          this.showControllerToast(
+            `@yLOCKED: @w${MUTANT_UNLOCK_HINTS[action.mutant]}`,
+            3.0,
+            '#ffe047',
+          );
+          break;
+        }
+        const safeSkin = this.saveManager.isBSkinUnlocked(action.mutant) ? action.skin : 'a';
+        const safeCrown = this.saveManager.isCrownUnlocked(action.mutant, action.crown)
+          ? action.crown
+          : 'none';
+        const hardMode =
+          action.hardMode !== undefined
+            ? Boolean(action.hardMode) && this.saveManager.isHardModeUnlocked()
+            : this.saveManager.isHardModeActive();
         this.startNewRun({
           mutant: action.mutant,
-          skin: action.skin,
-          crown: action.crown,
+          skin: safeSkin,
+          crown: safeCrown,
           useGoldenWeapon: action.useGoldenWeapon,
+          hardMode,
           playConfirmSfx: true,
         });
         break;
@@ -1430,11 +1751,19 @@ export class GameApp {
         }
         const save = this.saveManager.getData();
         const mutant = this.simState?.player.mutant ?? save.selectedMutant;
+        const safeCrown = this.saveManager.isCrownUnlocked(mutant, save.selectedCrown)
+          ? save.selectedCrown
+          : 'none';
+        const hardMode =
+          this.simState?.hardMode !== undefined
+            ? Boolean(this.simState.hardMode) && this.saveManager.isHardModeUnlocked()
+            : this.saveManager.isHardModeActive();
         this.startNewRun({
           mutant,
           skin: this.saveManager.getSelectedSkin(mutant),
-          crown: save.selectedCrown,
+          crown: safeCrown,
           useGoldenWeapon: save.useGoldenWeapon,
+          hardMode,
           playConfirmSfx: true,
         });
         break;
@@ -1455,6 +1784,20 @@ export class GameApp {
       }
 
       case 'toggle_bskin': {
+        if (!this.saveManager.isBSkinUnlocked(action.mutant)) {
+          this.audio.playSfx('sndClickBack', 0, 0, {
+            listenerX: 0,
+            listenerY: 0,
+            pitchJitter: 0.02,
+            volume: 0.85,
+          });
+          const hint =
+            action.mutant === 'skeleton' || action.mutant === 'frog'
+              ? `@dNO B-SKIN FOR ${action.mutant.toUpperCase()}`
+              : `@yB-SKIN LOCKED: @w${BSKIN_UNLOCK_HINTS[action.mutant]}`;
+          this.showControllerToast(hint, 3.0, '#ffe047');
+          break;
+        }
         const nextSkin = this.saveManager.toggleSelectedSkin(action.mutant);
         this.audio.playSfx(nextSkin === 'b' ? 'sndMenuBSkin' : 'sndMenuASkin', 0, 0, {
           listenerX: 0,
@@ -1484,6 +1827,40 @@ export class GameApp {
           pitchJitter: 0.02,
           volume: 0.85,
         });
+        break;
+      }
+
+      case 'toggle_hard_mode': {
+        if (!this.saveManager.isHardModeUnlocked()) {
+          this.audio.playSfx('sndClickBack', 0, 0, {
+            listenerX: 0,
+            listenerY: 0,
+            pitchJitter: 0.02,
+            volume: 0.85,
+          });
+          break;
+        }
+        this.saveManager.setHardModeEnabled(action.enabled);
+        this.audio.playSfx(action.enabled ? 'sndClick' : 'sndClickBack', 0, 0, {
+          listenerX: 0,
+          listenerY: 0,
+          pitchJitter: 0.02,
+          volume: 0.85,
+        });
+        break;
+      }
+
+      case 'set_unlock_all': {
+        this.saveManager.setUnlockAll(action.enabled);
+        if (!action.enabled) {
+          const save = this.saveManager.getData();
+          if (!this.saveManager.isMutantUnlocked(save.selectedMutant)) {
+            this.saveManager.setSelectedMutant('fish');
+          }
+          if (!this.saveManager.isHardModeUnlocked() && save.hardModeEnabled) {
+            this.saveManager.setHardModeEnabled(false);
+          }
+        }
         break;
       }
 

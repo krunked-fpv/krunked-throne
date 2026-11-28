@@ -1,4 +1,4 @@
-import type { AmmoType, GamepadFamily, RenderSettings, SimState } from '@/contracts';
+import type { AmmoType, GamepadFamily, RenderSettings, SimState, UltraId } from '@/contracts';
 import type { AssetBundle } from '@/assets';
 import { getGamepadGlyphs } from '@/input';
 import { BitmapFontRenderer } from '@/render/bitmap-font';
@@ -45,6 +45,48 @@ export interface HudRenderContext {
   height: number;
   inputMode?: HudInputDeviceMode;
   gamepadFamily?: GamepadFamily;
+  protoChestWeaponId?: string | null;
+}
+
+/**
+ * Canonical Nuclear Throne Level 10 (Ultra) radiation reserve cap:
+ * 600 rads globally, doubled to 1,200 rads with Horror's 3rd Ultra (`MELTDOWN`).
+ */
+export function resolveUltraRadCap(ultra: UltraId | null | undefined): number {
+  return ultra === 'horror_c' ? 1200 : 600;
+}
+
+/**
+ * Smoothly scales Portal `GENERATING...` percentage across ticksIn = 4..24 (Bug #15b).
+ */
+export function computePortalGeneratingPercent(ticksIn: number): number {
+  return Math.max(0, Math.min(100, Math.floor(((ticksIn - 4) / 20) * 100)));
+}
+
+export const BOSS_INTRO_MAX_TICKS = 45;
+
+/**
+ * Normalized Boss Intro animation curve against INTRO_MAX_TICKS = 45 (Bug #6):
+ * - Slide-in: ticks 45..37
+ * - Entry white flash: ticks 45..42
+ * - Ink-splat frames 0..3: ticks 45..33
+ * - Fade-out: ticks 12..0
+ */
+export function computeBossIntroAnimState(introTicks: number): {
+  fadeOut: number;
+  slideIn: number;
+  slideOffsetX: number;
+  flash: number;
+  splatFrame: number;
+} {
+  const t = Math.max(0, Math.min(BOSS_INTRO_MAX_TICKS, introTicks));
+  const fadeOut = t > 12 ? 1 : Math.min(1, t / 12);
+  const slideIn = t > 37 ? Math.max(0, Math.min(1, (t - 37) / 8)) : 0;
+  const slideOffsetX = Math.round(slideIn * 68);
+  const flash = t >= 42 ? Number((0.16 + 0.22 * ((t - 42) / 3)).toFixed(3)) : 0;
+  const elapsed = BOSS_INTRO_MAX_TICKS - t;
+  const splatFrame = Math.max(0, Math.min(3, Math.floor(elapsed / 4)));
+  return { fadeOut, slideIn, slideOffsetX, flash, splatFrame };
 }
 
 /**
@@ -66,7 +108,7 @@ export function resolveHealthFillFrame(hurtFlashTicks: number): number {
 export function computeUltraIconFrame(
   raceIndex: number,
   slot: 'a' | 'b' | 'c', // Wave 2B
-  totalFrames: number = 24,
+  totalFrames: number = 29,
 ): number {
   const offset = slot === 'c' ? 2 : slot === 'b' ? 1 : 0;
   if (totalFrames >= 51) {
@@ -139,6 +181,30 @@ export function resolveBossDisplayName(
     return isSteamMode ? 'THE THRONE' : 'THE KRUNKED THRONE';
   }
   return fallbackName.toUpperCase();
+}
+
+export const BOSS_INTRO_SUBTITLES: Readonly<Record<string, string>> = {
+  big_bandit: 'KING OF THE WASTELAND',
+  big_dog: 'GUARDIAN OF THE SCRAPYARD',
+  lil_hunter: 'ROGUE I.D.P.D. CAPTAIN',
+  nuclear_throne: 'THE END OF THE ROAD',
+  throne_ii: 'REBORN IN RADIATION',
+  mom: 'MATRIARCH OF THE SEWERS',
+  hyper_crystal: 'PRISM OF THE CAVES',
+  technomancer: 'MACHINE GOD',
+  captain: 'I.D.P.D. COMMANDER',
+};
+
+export function resolveBossSubtitle(bossId: string, fallbackSubtitle?: string): string {
+  if (
+    bossId === 'mom' ||
+    bossId === 'hyper_crystal' ||
+    bossId === 'technomancer' ||
+    bossId === 'captain'
+  ) {
+    return BOSS_INTRO_SUBTITLES[bossId]!;
+  }
+  return (fallbackSubtitle && fallbackSubtitle.trim()) || BOSS_INTRO_SUBTITLES[bossId] || '';
 }
 
 export const PORTAL_INDICATOR_PAD_TOP = 44;
@@ -215,7 +281,7 @@ const BUILTIN_BOSS_THEMES: Readonly<Record<string, BuiltinBossBannerTheme>> = {
   },
   hyper_crystal: { // Wave 2B
     sprite: 'sprHyperCrystalIdle',
-    scale: 2,
+    scale: 1,
     bandA: '#2b1342',
     bandB: '#4f2275',
     accent: '#e085ff',
@@ -223,7 +289,7 @@ const BUILTIN_BOSS_THEMES: Readonly<Record<string, BuiltinBossBannerTheme>> = {
   },
   technomancer: { // Wave 2B
     sprite: 'sprTechnoMancer',
-    scale: 2,
+    scale: 1,
     bandA: '#0f2b33',
     bandB: '#1c4d59',
     accent: '#54e8ff',
@@ -420,13 +486,14 @@ export function renderTopLeftGameplayHud(
   const displayedHpFrac = params.displayedHpFrac ?? hpFrac;
 
   // ------------------------------------------------------------------------
-  // 1. RAD CANISTER (x=4, y=4, ~14x24px) with Level digit centered ON tube!
+  // 1. RAD CANISTER (x=4, y=4, ~14x24px) with Level digit or sprUltraLevel badge ON tube!
   // ------------------------------------------------------------------------
   const radX = 4;
   const radY = 4;
   const isUltraLevel = player.level >= 10 || player.radsToNextLevel >= 9999;
+  const ultraRadCap = resolveUltraRadCap(player.ultra);
   const radFrac = isUltraLevel
-    ? 1
+    ? Math.max(0, Math.min(1, player.rads / ultraRadCap))
     : player.radsToNextLevel > 0
       ? Math.max(0, Math.min(1, player.rads / player.radsToNextLevel))
       : 1;
@@ -468,20 +535,35 @@ export function renderTopLeftGameplayHud(
     canisterH = 22;
   }
 
-  // Bold white-outlined Level number (1..9 or U) centered RIGHT ON THE CANISTER!
-  const levelDigit = player.level >= 10 ? 'U' : String(Math.max(1, player.level));
-  fonts.draw(
-    ctx,
-    levelDigit,
-    radX + Math.floor(canisterW * 0.5),
-    radY + Math.floor(canisterH * 0.5) - 4,
-    'fntM1',
-    {
-      align: 'center',
-      color: player.level >= 10 ? '#8cff66' : '#ffffff',
-      outline: true,
-    },
-  );
+  // Subtle radioactive rim highlight when Horror MELTDOWN exceeds base 600 cap (601..1200)
+  if (isUltraLevel && player.ultra === 'horror_c' && player.rads > 600) {
+    drawPixelBorder(ctx, radX - 1, radY - 1, canisterW + 2, canisterH + 2, '#9eff64', 1);
+  }
+
+  // Bold white-outlined Level number (1..9) OR crisp sprUltraLevel badge centered RIGHT ON THE CANISTER!
+  if (isUltraLevel && sprites.hasSprite('sprUltraLevel')) {
+    sprites.draw(
+      ctx,
+      'sprUltraLevel',
+      radX + Math.floor(canisterW * 0.5),
+      radY + Math.floor(canisterH * 0.5),
+      { frame: 0, pixelSnap: true },
+    );
+  } else {
+    const levelDigit = isUltraLevel ? 'U' : String(Math.max(1, player.level));
+    fonts.draw(
+      ctx,
+      levelDigit,
+      radX + Math.floor(canisterW * 0.5),
+      radY + Math.floor(canisterH * 0.5) - 4,
+      'fntM1',
+      {
+        align: 'center',
+        color: isUltraLevel ? '#8cff66' : '#ffffff',
+        outline: true,
+      },
+    );
+  }
 
   // ------------------------------------------------------------------------
   // 2. HP BAR (x=22, y=5, w=84, h=11) + LOW HP blinking red warning
@@ -758,6 +840,21 @@ export function renderTopLeftGameplayHud(
               tintColor: '#ffffff',
             });
           }
+        } else if (isSteamMode || count === 0) {
+          // Bug #3: Subtle dark-slate #262430 1px silhouette outline/underlay so empty/unequipped
+          // Steam ammo icons stay readable against pure #000000 dark biomes!
+          for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+            drawSpriteIntegerOrFitShared(ctx, sprites, candidate, 0, ax + ox, ammoY + oy, iconBoxW, iconBoxH, {
+              alpha: 0.88,
+              tintColor: '#262430',
+            });
+          }
+          if (isSteamMode && count === 0 && player.gunWarrantTicks <= 0) {
+            drawSpriteIntegerOrFitShared(ctx, sprites, candidate, 0, ax, ammoY, iconBoxW, iconBoxH, {
+              alpha: 0.34,
+              tintColor: '#3a3848',
+            });
+          }
         }
         // Both Steam AND Built-In Wave 2 pack full 8-frame draining sheets (f0=FULL .. f7=EMPTY)!
         if (isSteamMode || iconDef.frames.length >= 8) {
@@ -814,9 +911,16 @@ export function renderTopLeftGameplayHud(
   }
 
   // Blinking bright red `LOW ENERGY` / `LOW BULLETS` / `LOW SHELLS` right beside ammo icons!
-  if (lowAmmoWarningText && Math.floor(state.tick / 10) % 2 === 0) {
+  const showingLowAmmo = Boolean(lowAmmoWarningText && Math.floor(state.tick / 10) % 2 === 0);
+  if (showingLowAmmo) {
     fonts.draw(ctx, lowAmmoWarningText, warnX, ammoY + 1, 'fntM1', {
       color: '#ff3020',
+      outline: true,
+    });
+  } else if (isUltraLevel) {
+    // Show clean 600 / 1200 Level Ultra radiation reserve beside ammo icons when not flashing LOW AMMO
+    const clampedRads = Math.max(0, Math.min(ultraRadCap, Math.floor(player.rads)));
+    fonts.draw(ctx, `@g${clampedRads}/${ultraRadCap}`, warnX, ammoY + 2, 'fntSmall', {
       outline: true,
     });
   }
@@ -948,13 +1052,49 @@ export class HudRenderer {
     this.renderTopLeftHud(ctx, state, inputMode, gamepadFamily);
     this.renderTopRightMutations(ctx, state, renderSettings, fps, width);
     this.renderBottomRightTimer(ctx, state, width, height);
+    this.renderVaultProtoChestIndicator(ctx, state, hud.protoChestWeaponId, height);
     this.renderOffscreenChestIndicators(ctx, state, camera, width, height);
     this.renderOffscreenPortalIndicator(ctx, state, camera, width, height);
   }
 
   /**
+   * Displays the persistently stored Proto Chest weapon when inside the Crown Vault.
+   */
+  private renderVaultProtoChestIndicator(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: SimState,
+    protoChestWeaponId: string | null | undefined,
+    height: number,
+  ): void {
+    if (state.areaCode !== 'vault' && state.biome !== 'vault') return;
+    const simProto = (state as SimState & { protoChestWeaponId?: string | null }).protoChestWeaponId;
+    const storedId = simProto !== undefined ? simProto : protoChestWeaponId;
+    if (!storedId) return;
+
+    const label = resolveWeaponLabel(storedId, this.data);
+    const text = `@gPROTO CHEST: @w${label}`;
+    const textW = this.fonts.measure(text, 'fntSmall').width;
+    const boxX = 4;
+    const boxY = height - 15;
+    const boxW = Math.min(200, textW + 22);
+    ctx.fillStyle = 'rgba(8, 10, 14, 0.84)';
+    ctx.fillRect(boxX, boxY, boxW, 12);
+    drawPixelBorder(ctx, boxX, boxY, boxW, 12, '#3ad868', 1);
+    const drewChest = this.drawSpriteIntegerOrFit(ctx, 'sprProtoChest', 0, boxX + 2, boxY + 1, 10, 10);
+    if (!drewChest) {
+      ctx.fillStyle = '#52ff7a';
+      ctx.fillRect(boxX + 4, boxY + 3, 6, 6);
+    }
+    this.fonts.draw(ctx, text, boxX + 14, boxY + 3, 'fntSmall', {
+      maxWidth: boxW - 16,
+      outline: true,
+    });
+  }
+
+  /**
    * Authentic Nuclear Throne Portal Generating transition screen:
    * - Full-screen animated swirling purple vortex + white pixel lightning + 28px black letterbox bars
+   * - Extended top-left ink backing (y=40) so all 5 ammo pool icons sit cleanly inside black ink (Bug #12)
    * - Top-left vitals/weapons/ammo + Top-right mutations cleanly visible on top black bar
    * - Centered `GENERATING... 064%`
    * - Two jagged black ink-splat strokes: destination area code (left) + `[skull] kills` (right)
@@ -970,13 +1110,20 @@ export class HudRenderer {
     gamepadFamily: GamepadFamily = 'generic',
   ): void {
     const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
-    const pct = Math.max(0, Math.min(100, Math.floor(((ticksIn - 6) / 18) * 100)));
+    const pct = computePortalGeneratingPercent(ticksIn);
     const pctStr = String(pct).padStart(3, '0');
     const timeSec = (state.tick + ticksIn) / 30;
     const cx = Math.round(width * 0.5);
 
     // 1. Swirling purple portal vortex + white pixel lightning + 28px pure black letterbox bars
     drawPortalVortex(ctx, width, height, timeSec, true);
+
+    // Bug #12: Extend top-left black ink backing to y=40 so all 5 ammo icons sit cleanly inside black ink!
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 28, 126, 13);
+    ctx.fillRect(126, 28, 10, 9);
+    ctx.fillRect(136, 28, 10, 5);
+    ctx.fillRect(146, 28, 8, 2);
 
     // 2. Keep HUD visible cleanly in top-left & top-right (just like the video!)
     this.renderTopLeftHud(ctx, state, inputMode, gamepadFamily);
@@ -1120,7 +1267,7 @@ export class HudRenderer {
       const mutantDef = this.data.getMutant(state.player.mutant);
       const egHudSpr = this.sprites.getSprite('sprEGIconHUD');
       const ultraFrame = uDef
-        ? computeUltraIconFrame(mutantDef.raceIndex, uDef.slot, egHudSpr?.frames.length ?? 24)
+        ? computeUltraIconFrame(mutantDef.raceIndex, uDef.slot, egHudSpr?.frames.length ?? 29)
         : 0;
       const x = cursorRight - iconSize;
       const drew = uDef
@@ -1366,24 +1513,30 @@ export class HudRenderer {
 
     const rawName = this.data.getEnemy(boss.bossId)?.name ?? boss.name;
     const bossDisplayName = resolveBossDisplayName(boss.bossId, rawName, this.isSteamMode);
-    const bossSubtitle =
-      boss.bossId === 'nuclear_throne'
-        ? (boss.subtitle || 'THE END OF THE ROAD')
-        : boss.subtitle;
+    const bossSubtitle = resolveBossSubtitle(boss.bossId, boss.subtitle);
 
-    const fadeOut = boss.introTicks > 12 ? 1 : Math.min(1, boss.introTicks / 12);
-    const slideIn = boss.introTicks > 50 ? Math.max(0, (boss.introTicks - 50) / 10) : 0;
-    const slideOffsetX = Math.round(slideIn * 68);
-    const flash = boss.introTicks >= 56 ? 0.38 : 0;
+    // Bug #6: Normalize Boss Intro slide-in (45..37), white flash (45..42) & splat (0..3 over 45..33) against 45 ticks!
+    const anim = computeBossIntroAnimState(boss.introTicks);
+    const fadeOut = anim.fadeOut;
+    const slideOffsetX = anim.slideOffsetX;
+    const flash = anim.flash;
 
     ctx.save();
     ctx.globalAlpha = fadeOut;
 
-    const steamBossFrame = BOSS_INTRO_FRAME_MAP[boss.bossId];
+    const baseBossFrame = BOSS_INTRO_FRAME_MAP[boss.bossId];
+    const steamBossFrame =
+      boss.bossId === 'hyper_crystal' && (state.areaCode === '4-?' || state.biome === 'cursed_caves')
+        ? 9
+        : baseBossFrame;
+    const bossIntroSpr = this.sprites.getSprite('sprBossIntro');
+    const bossNameSpr = this.sprites.getSprite('sprBossName');
     const hasSteamBossSplash =
       steamBossFrame !== undefined &&
       this.sprites.hasSprite('sprBossIntro') &&
-      this.sprites.hasSprite('sprBossName');
+      this.sprites.hasSprite('sprBossName') &&
+      Boolean(bossIntroSpr && steamBossFrame < bossIntroSpr.frames.length) &&
+      Boolean(bossNameSpr && steamBossFrame < bossNameSpr.frames.length);
 
     if (hasSteamBossSplash) {
       const cx = Math.round(width * 0.5);
@@ -1391,7 +1544,12 @@ export class HudRenderer {
       ctx.fillStyle = '#09060d';
       ctx.fillRect(0, 0, width, height);
 
-      if (this.sprites.hasSprite('sprBossIntroBackLayer')) {
+      const backLayerSpr = this.sprites.getSprite('sprBossIntroBackLayer');
+      if (
+        this.sprites.hasSprite('sprBossIntroBackLayer') &&
+        backLayerSpr &&
+        steamBossFrame < backLayerSpr.frames.length
+      ) {
         this.sprites.draw(ctx, 'sprBossIntroBackLayer', cx + Math.round(slideOffsetX * 0.4), 0, {
           frame: steamBossFrame,
           alpha: 1,
@@ -1411,9 +1569,8 @@ export class HudRenderer {
       const nameCenterX = cx - slideOffsetX;
       const nameCenterY = Math.round(height * 0.44);
       if (this.sprites.hasSprite('sprBossNameSplat')) {
-        const splatFrame = Math.min(3, 1 + Math.floor((60 - Math.min(60, boss.introTicks)) * 0.25));
         this.sprites.draw(ctx, 'sprBossNameSplat', nameCenterX - 66, nameCenterY + 13, {
-          frame: splatFrame,
+          frame: anim.splatFrame,
           alpha: 1,
           pixelSnap: true,
         });

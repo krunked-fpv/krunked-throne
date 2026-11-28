@@ -515,9 +515,15 @@ function testVisualUiParityFixes(): void {
   assert.equal(computePortraitFrame(12, 'a', 64), 22); // Rogue A
   assert.equal(computePortraitFrame(12, 'b', 64), 23); // Rogue B
 
-  // RT-02: validateSaveData keeps bSkinUnlocked=true even on older saves with false
-  const oldSave = validateSaveData({ mutants: { fish: { unlocked: false, bSkinUnlocked: false } } });
-  assert.equal(oldSave.mutants.fish.bSkinUnlocked, true);
+  // RT-02: validateSaveData preserves authentic per-mutant B-skin lock state (false stays false; true stays true)
+  const oldSave = validateSaveData({
+    mutants: {
+      fish: { unlocked: false, bSkinUnlocked: false },
+      crystal: { unlocked: true, bSkinUnlocked: true },
+    },
+  });
+  assert.equal(oldSave.mutants.fish.bSkinUnlocked, false);
+  assert.equal(oldSave.mutants.crystal.bSkinUnlocked, true);
 
   // RT-03: sprHealthFill frame polarity (0 = white hurt flash, 1 = red normal fill)
   assert.equal(resolveHealthFillFrame(0), 1);

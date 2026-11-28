@@ -94,7 +94,10 @@ export function resolveRunProgressIndex(areaCode: string): number {
   if (areaCode === '4-?') return 7;
   if (areaCode === 'vault') return 7;
   if (areaCode === '5-?') return 10;
+  if (areaCode === '$$$') return 10;
   if (areaCode === 'hq-1') return 13;
+  if (areaCode === 'hq-2') return 14;
+  if (areaCode === 'hq-3') return 14;
   return 0;
 }
 
@@ -444,14 +447,31 @@ function drawPauseCornerInkSplats(
   ctx.fillStyle = '#000000';
 
   if (phase === 'top') {
-    // Sleek pure-black top HUD bar (28px tall) with hand-brushed jagged bottom teeth
+    // Pure-black top HUD bar (29px right) with extended top-left shelf (y = 40)
+    // so all 5 ammo icons sit cleanly inside solid black ink (Bug #12 fix).
     const topH = 29;
+    const leftHudH = 40;
+    const leftShelfW = 122;
+    const taperW = 26;
     ctx.fillRect(0, 0, iw, topH);
+    ctx.fillRect(0, topH, leftShelfW, leftHudH - topH);
+    for (let dx = 0; dx < taperW; dx++) {
+      const drop = Math.max(0, Math.round((leftHudH - topH) * (1 - dx / taperW)));
+      if (drop > 0) {
+        ctx.fillRect(leftShelfW + dx, topH, 1, drop);
+      }
+    }
     for (let x = 0; x < iw; x += 6) {
       const hv = (Math.imul((x + 19) ^ 0x3b71, 2654435761) >>> 0) % 100;
-      const tooth = (hv % 4) + (x < 92 || x > iw - 96 ? 2 : 0);
-      ctx.fillRect(x, topH, 6, tooth);
-      if (hv % 11 === 0) ctx.fillRect(x + 2, topH + tooth + 1, 2, 1);
+      const baseH =
+        x < leftShelfW
+          ? leftHudH
+          : x < leftShelfW + taperW
+            ? topH + Math.round((leftHudH - topH) * (1 - (x - leftShelfW) / taperW))
+            : topH;
+      const tooth = (hv % 3) + (x > iw - 96 ? 2 : 0);
+      ctx.fillRect(x, baseH, 6, tooth);
+      if (hv % 11 === 0) ctx.fillRect(x + 2, baseH + tooth + 1, 2, 1);
     }
     return;
   }
@@ -1465,7 +1485,13 @@ export function drawRunRoadMap(
     ctx.fillStyle = '#d82820';
     ctx.fillRect(x0, iy, reachX - x0, 1);
     // Secret area/loop subtle red detour drop line (matches 21_paused.png red angled detour!)
-    if (info.areaCode.includes('?') || info.areaCode === 'vault' || info.loop > 0) {
+    if (
+      info.areaCode.includes('?') ||
+      info.areaCode === 'vault' ||
+      info.areaCode === '$$$' ||
+      info.areaCode.startsWith('hq-') ||
+      info.loop > 0
+    ) {
       const dipX = Math.max(x0 + 8, Math.min(reachX - 6, x0 + Math.round(mapW * 0.25)));
       drawPixelLine(ctx, x0, iy, x0, iy + 8, 1);
       drawPixelLine(ctx, x0, iy + 8, dipX, iy, 1);
@@ -1542,13 +1568,22 @@ export type UiSfxName = 'sndHover' | 'sndClick' | 'sndClickBack' | 'sndMutHover'
 
 export type MenuAction =
   | { type: 'open_screen'; screen: GameScreen }
-  | { type: 'start_run'; mutant: MutantId; skin: 'a' | 'b'; crown: CrownId; useGoldenWeapon: boolean }
+  | {
+      type: 'start_run';
+      mutant: MutantId;
+      skin: 'a' | 'b';
+      crown: CrownId;
+      useGoldenWeapon: boolean;
+      hardMode?: boolean;
+    }
   | { type: 'resume' }
   | { type: 'restart' }
   | { type: 'select_mutant'; mutant: MutantId }
   | { type: 'toggle_bskin'; mutant: MutantId }
   | { type: 'cycle_crown'; crown: CrownId }
   | { type: 'toggle_golden'; enabled: boolean }
+  | { type: 'toggle_hard_mode'; enabled: boolean }
+  | { type: 'set_unlock_all'; enabled: boolean }
   | { type: 'pick_mutation'; index: number; mutationId: MutationId }
   | { type: 'pick_ultra'; index: number; ultraId: UltraId }
   | { type: 'update_audio'; partial: Partial<AudioSettings> }
@@ -1589,10 +1624,10 @@ export interface MenuRenderContext {
 export type OptionsTab = 'general' | 'controls' | 'keybinds';
 
 const OPTIONS_TABS: readonly OptionsTab[] = ['general', 'controls', 'keybinds'];
-const GENERAL_OPTION_COUNT = 10;
+const GENERAL_OPTION_COUNT = 11; // 10 video/audio settings + UNLOCK ALL
 const CONTROLS_OPTION_COUNT = 4;
 const KEYBINDS_OPTION_COUNT = 9; // 8 keybinds + reset defaults
-const CAMPFIRE_ACTION_COUNT = 5; // skin, crown, gold, go, back
+const BASE_CAMPFIRE_ACTION_COUNT = 5; // skin, crown, gold, go, back (+ optional 5=hard_mode)
 
 const KEYBIND_LABELS: ReadonlyArray<{ field: keyof KeyBindings; label: string }> = [
   { field: 'up', label: 'MOVE UP' },
@@ -1615,11 +1650,93 @@ const SELF_SOUNDING_ACTIONS = new Set<MenuAction['type']>([
   'toggle_bskin',
   'cycle_crown',
   'toggle_golden',
+  'toggle_hard_mode',
   'start_run',
   'restart',
   'pick_mutation',
   'pick_ultra',
 ]);
+
+export const MUTANT_UNLOCK_HINTS: Readonly<Record<MutantId, string>> = {
+  fish: 'UNLOCKED BY DEFAULT',
+  crystal: 'UNLOCKED BY DEFAULT',
+  eyes: 'REACH THE SEWERS (2-1)',
+  melting: 'DIE FOR THE FIRST TIME',
+  plant: 'REACH THE SCRAPYARD (3-1)',
+  yv: 'REACH Y.V. MANSION (3-?)',
+  steroids: 'REACH THE LABS (6-1)',
+  robot: 'REACH THE FROZEN CITY (5-1)',
+  chicken: 'REACH THE JUNGLE (5-?)',
+  rebel: 'LOOP THE GAME ONCE',
+  horror: 'DEFEAT HOSTILE HORROR AFTER SKIPPING 2 RAD CANISTERS',
+  rogue: 'REACH THE NUCLEAR THRONE (7-3)',
+  skeleton: 'DIE AS MELTING INSIDE A NECROMANCER CIRCLE',
+  frog: 'STORE GOLDEN FROG PISTOL IN THE PROTO CHEST',
+};
+
+export const BSKIN_UNLOCK_HINTS: Readonly<Record<MutantId, string>> = {
+  fish: 'LOOP WITH ALL 12 CORE MUTANTS',
+  crystal: 'REACH CURSED CRYSTAL CAVES (4-?)',
+  eyes: 'REACH THE PIZZA SEWERS (2-?)',
+  melting: 'REACH 7-3 WITHOUT RHINO SKIN OR STRONG SPIRIT',
+  plant: 'REACH THE NUCLEAR THRONE IN UNDER 10 MINUTES',
+  yv: 'UNLOCK A GOLDEN WEAPON FOR ALL 12 MUTANTS',
+  steroids: 'DEFEAT THE TECHNOMANCER (6-1 LOOP)',
+  robot: 'EAT ANY HYPER WEAPON',
+  chicken: 'REACH THE SEWERS (2-1) ON HARD MODE',
+  rebel: 'DEFEAT MOM (2-1 LOOP)',
+  horror: 'DEFEAT HYPER CRYSTAL (4-1 LOOP)',
+  rogue: 'DEFEAT THE I.D.P.D. CAPTAIN (HQ-3)',
+  skeleton: 'NO B-SKIN AVAILABLE',
+  frog: 'NO B-SKIN AVAILABLE',
+};
+
+export function isMutantUnlockedInSave(save: SaveData, mutant: MutantId): boolean {
+  if (save.unlockAll) return true;
+  if (mutant === 'frog') return Boolean(save.frogUnlocked || save.mutants.frog?.unlocked);
+  if (mutant === 'skeleton') return Boolean(save.skeletonUnlocked || save.mutants.skeleton?.unlocked);
+  return save.mutants[mutant]?.unlocked ?? true;
+}
+
+export function isBSkinUnlockedInSave(save: SaveData, mutant: MutantId): boolean {
+  if (mutant === 'skeleton' || mutant === 'frog') return false;
+  if (save.unlockAll) return true;
+  return Boolean(save.mutants[mutant]?.bSkinUnlocked);
+}
+
+export function isCrownUnlockedInSave(save: SaveData, mutant: MutantId, crown: CrownId): boolean {
+  if (crown === 'none' || save.unlockAll) return true;
+  return Boolean(save.mutants[mutant]?.crownsUnlocked?.includes(crown));
+}
+
+export function isHardModeUnlockedInSave(save: SaveData): boolean {
+  return Boolean(save.unlockAll || save.hardModeUnlocked);
+}
+
+function drawPixelPadlock(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  accent = '#d8bc52',
+): void {
+  const x = Math.round(cx) - 4;
+  const y = Math.round(cy) - 4;
+  // 9x9 crisp pixel-art padlock with pure-black 1px outline
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x + 1, y, 7, 4);
+  ctx.fillRect(x, y + 3, 9, 6);
+  // Silver shackle
+  ctx.fillStyle = '#c8ccd6';
+  ctx.fillRect(x + 2, y + 1, 5, 1);
+  ctx.fillRect(x + 2, y + 2, 1, 2);
+  ctx.fillRect(x + 6, y + 2, 1, 2);
+  // Gold / slate lock body
+  ctx.fillStyle = accent;
+  ctx.fillRect(x + 1, y + 4, 7, 4);
+  // 1px keyhole
+  ctx.fillStyle = '#14101a';
+  ctx.fillRect(x + 4, y + 5, 1, 2);
+}
 
 function formatKeyCode(code: string): string {
   if (code.startsWith('Key')) return code.slice(3);
@@ -1733,21 +1850,150 @@ function computeBalancedEllipseAngles(count: number, rx: number, ry: number, sta
 }
 
 /**
- * Pixel-verified sprBigPortrait frame index:
- * Steam portraits_0.png stores 2 frames per mutant (A-skin even, B-skin odd):
- * (raceIndex - 1) * 2 + (skin === 'b' ? 1 : 0) across all 12 mutants (frames 0..23).
- * Falls back to (raceIndex - 1) for compact 12-frame fallback atlases.
+ * Pixel-verified sprBigPortrait frame index across BOTH layouts:
+ * - Steam 64-frame atlas: (raceIndex - 1) * 2 + skinOff (0..23 Fish..Rogue, 24..25 Big Dog blank, 26..27 Skeleton, 28..29 Frog)
+ * - Built-In 28-frame atlas: 0..23 Fish..Rogue, 24..25 Skeleton (raceIndex 14), 26..27 Frog (raceIndex 15)
+ * - Compact 12-frame fallback: raceIndex - 1
  */
 export function computePortraitFrame(
   raceIndex: number,
   skin: 'a' | 'b',
-  totalFrames: number = 24,
+  totalFrames: number = 28,
 ): number {
-  const base = Math.max(0, raceIndex - 1);
-  if (totalFrames >= 24) {
-    return base * 2 + (skin === 'b' ? 1 : 0);
+  const skinOff = skin === 'b' ? 1 : 0;
+  if (totalFrames >= 30) {
+    return Math.max(0, raceIndex - 1) * 2 + skinOff;
   }
-  return base;
+  if (totalFrames >= 24) {
+    if (raceIndex === 14) return Math.min(totalFrames - 1, 24 + skinOff);
+    if (raceIndex === 15) return Math.min(totalFrames - 1, 26 + skinOff);
+    return Math.max(0, raceIndex - 1) * 2 + skinOff;
+  }
+  return Math.max(0, raceIndex - 1);
+}
+
+/**
+ * Resolves special mutant big portraits (Rebel B Hooded in Frozen City 5-1..5-3,
+ * Chicken Headless when headlessTicks > 0) with seamless fallback to sprBigPortrait.
+ */
+export function resolveBigPortraitSprite(
+  mutant: MutantDef,
+  skin: 'a' | 'b',
+  simState: SimState | null,
+  timeSec: number,
+  hasSprite: (name: string) => boolean,
+  getFrameCount: (name: string) => number,
+): { spriteName: string; frame: number } {
+  if (
+    mutant.id === 'chicken' &&
+    (simState?.player.headlessTicks ?? 0) > 0 &&
+    hasSprite('sprBigPortraitChickenHeadless')
+  ) {
+    const fc = Math.max(1, getFrameCount('sprBigPortraitChickenHeadless'));
+    return {
+      spriteName: 'sprBigPortraitChickenHeadless',
+      frame: Math.floor(Math.max(0, timeSec) * 6) % fc,
+    };
+  }
+  if (
+    mutant.id === 'rebel' &&
+    skin === 'b' &&
+    simState &&
+    (simState.biome === 'frozen_city' ||
+      simState.areaCode === '5-1' ||
+      simState.areaCode === '5-2' ||
+      simState.areaCode === '5-3') &&
+    hasSprite('sprBigPortraitRebelBHooded')
+  ) {
+    return {
+      spriteName: 'sprBigPortraitRebelBHooded',
+      frame: 0,
+    };
+  }
+  const spriteName =
+    skin === 'b' && mutant.sprites.bPortrait && hasSprite(mutant.sprites.bPortrait)
+      ? mutant.sprites.bPortrait
+      : mutant.sprites.portrait;
+  const totalFrames = getFrameCount(spriteName) || 28;
+  return {
+    spriteName,
+    frame: computePortraitFrame(mutant.raceIndex, skin, totalFrames),
+  };
+}
+
+export interface LevelUpTextLayout {
+  titleY: number;
+  descY: number;
+  titleHeight: number;
+  descHeight: number;
+  descBottomY: number;
+}
+
+/**
+ * Dynamic vertical layout for Level-Up focused mutation title + wrapped description
+ * so multi-line descriptions NEVER collide with the lifted selected card border (Bug #5).
+ */
+export function computeLevelUpTextLayout(
+  fonts: BitmapFontRenderer,
+  name: string,
+  description: string,
+  maxWidth: number,
+  baseCardY: number,
+): LevelUpTextLayout {
+  const titleFont = fonts.getFont('fntM1');
+  const descFont = fonts.getFont('fntSmall');
+  const titleLineH = Math.round((titleFont ? Math.max(1, titleFont.lineHeight) : 10) * (titleFont?.scaleY || 1));
+  const descLineH = Math.round((descFont ? Math.max(1, descFont.lineHeight) : 8) * (descFont?.scaleY || 1));
+  const titleLines = wrapMarkupText(titleFont, name, maxWidth, 1);
+  const descLines = wrapMarkupText(descFont, description, maxWidth, 1);
+  const titleHeight = titleLineH + Math.max(0, titleLines.length - 1) * (titleLineH + 1);
+  const descHeight = descLineH + Math.max(0, descLines.length - 1) * (descLineH + 1);
+  // Lifted focused card border top is baseCardY - 8; preserve >= 4px breathing gap above it
+  const maxDescBottom = baseCardY - 12;
+  const descY = Math.min(baseCardY - 22, maxDescBottom - descHeight);
+  const titleY = descY - 3 - titleHeight;
+  return {
+    titleY,
+    descY,
+    titleHeight,
+    descHeight,
+    descBottomY: descY + descHeight,
+  };
+}
+
+export interface PauseLayoutMetrics {
+  portZoneW: number;
+  portTopY: number;
+  centerAnchorX: number;
+  leftSplatX: number;
+  rightSplatX: number;
+  tipX: number;
+  tipW: number;
+}
+
+/**
+ * Computes non-overlapping Pause overlay zones across 4:3 (320px) and 16:9 (426px)
+ * so tooltip/area ink splats never overlap the left mutant portrait (Bug #14).
+ */
+export function computePauseLayout(width: number): PauseLayoutMetrics {
+  const isWide = width >= 380;
+  const cx = Math.round(width * 0.5);
+  const portZoneW = isWide ? 148 : 104;
+  const portTopY = 42;
+  const centerAnchorX = isWide ? cx + 44 : cx + 44;
+  const leftSplatX = centerAnchorX - (isWide ? 70 : 66);
+  const rightSplatX = centerAnchorX + (isWide ? 12 : 10);
+  const tipW = isWide ? 160 : 148;
+  const tipX = centerAnchorX - Math.floor(tipW * 0.5);
+  return {
+    portZoneW,
+    portTopY,
+    centerAnchorX,
+    leftSplatX,
+    rightSplatX,
+    tipX,
+    tipW,
+  };
 }
 
 /**
@@ -1908,6 +2154,8 @@ export class MenuSystem {
   private activeDragRegionId: string | null = null;
   private lastScreen: GameScreen | null = null;
   private renderTimeSec = 0;
+  private campfireLockHintText = '';
+  private campfireLockHintUntilSec = 0;
 
   constructor(bundle: AssetBundle, data: UiDataProvider = DEFAULT_UI_DATA_PROVIDER) {
     this.bundle = bundle;
@@ -2164,10 +2412,53 @@ export class MenuSystem {
       case 'campfire': {
         const curIdx = Math.max(0, mutants.findIndex((m) => m.id === ctx.save.selectedMutant));
         const selectedId = ctx.save.selectedMutant;
+        const selectedUnlocked = isMutantUnlockedInSave(ctx.save, selectedId);
+        const bSkinUnlocked = isBSkinUnlockedInSave(ctx.save, selectedId);
+        const crownUnlocked = isCrownUnlockedInSave(ctx.save, selectedId, ctx.save.selectedCrown);
+        const hardUnlocked = isHardModeUnlockedInSave(ctx.save);
+        const actionCount = hardUnlocked
+          ? BASE_CAMPFIRE_ACTION_COUNT + 1
+          : BASE_CAMPFIRE_ACTION_COUNT;
+        if (this.campfireActionIndex >= actionCount) {
+          this.campfireActionIndex = 3;
+        }
         const hasGold = Boolean(ctx.save.mutants[selectedId]?.goldenWeapon) || selectedId === 'yv';
+        const effectiveSkin: 'a' | 'b' = bSkinUnlocked
+          ? (ctx.save.selectedSkins[selectedId] ?? 'a')
+          : 'a';
+        const effectiveCrown: CrownId = crownUnlocked ? ctx.save.selectedCrown : 'none';
+        const effectiveHardMode = hardUnlocked && ctx.save.hardModeEnabled;
+
+        const tryStartSelectedRun = (): void => {
+          if (!selectedUnlocked) {
+            this.campfireLockHintText = `@yLOCKED: @w${MUTANT_UNLOCK_HINTS[selectedId]}`;
+            this.campfireLockHintUntilSec = this.renderTimeSec + 3.5;
+            actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
+            return;
+          }
+          actions.push({
+            type: 'start_run',
+            mutant: selectedId,
+            skin: effectiveSkin,
+            crown: effectiveCrown,
+            useGoldenWeapon: hasGold && ctx.save.useGoldenWeapon,
+            hardMode: effectiveHardMode,
+          });
+        };
+
+        const tryToggleSelectedBSkin = (): void => {
+          if (!bSkinUnlocked) {
+            this.campfireLockHintText =
+              selectedId === 'skeleton' || selectedId === 'frog'
+                ? `@dNO B-SKIN FOR ${selectedId.toUpperCase()}`
+                : `@yB-SKIN LOCKED: @w${BSKIN_UNLOCK_HINTS[selectedId]}`;
+            this.campfireLockHintUntilSec = this.renderTimeSec + 3.5;
+          }
+          actions.push({ type: 'toggle_bskin', mutant: selectedId });
+        };
 
         if (input.prevTab) {
-          actions.push({ type: 'toggle_bskin', mutant: selectedId });
+          tryToggleSelectedBSkin();
         }
         if (input.nextTab) {
           actions.push({ type: 'cycle_crown', crown: this.cycleCrownFrom(ctx.save.selectedCrown, 1) });
@@ -2192,11 +2483,10 @@ export class MenuSystem {
           }
         } else {
           if (input.navLeft) {
-            this.campfireActionIndex =
-              (this.campfireActionIndex - 1 + CAMPFIRE_ACTION_COUNT) % CAMPFIRE_ACTION_COUNT;
+            this.campfireActionIndex = (this.campfireActionIndex - 1 + actionCount) % actionCount;
             actions.push({ type: 'ui_sfx', sound: 'sndHover' });
           } else if (input.navRight) {
-            this.campfireActionIndex = (this.campfireActionIndex + 1) % CAMPFIRE_ACTION_COUNT;
+            this.campfireActionIndex = (this.campfireActionIndex + 1) % actionCount;
             actions.push({ type: 'ui_sfx', sound: 'sndHover' });
           }
         }
@@ -2205,7 +2495,7 @@ export class MenuSystem {
           if (this.campfireRow === 'actions') {
             switch (this.campfireActionIndex) {
               case 0:
-                actions.push({ type: 'toggle_bskin', mutant: selectedId });
+                tryToggleSelectedBSkin();
                 break;
               case 1:
                 actions.push({
@@ -2219,27 +2509,20 @@ export class MenuSystem {
                 }
                 break;
               case 3:
-                actions.push({
-                  type: 'start_run',
-                  mutant: selectedId,
-                  skin: ctx.save.selectedSkins[selectedId] ?? 'a',
-                  crown: ctx.save.selectedCrown,
-                  useGoldenWeapon: hasGold && ctx.save.useGoldenWeapon,
-                });
+                tryStartSelectedRun();
                 break;
               case 4:
                 actions.push({ type: 'open_screen', screen: 'title' });
                 actions.push({ type: 'ui_sfx', sound: 'sndClickBack' });
                 break;
+              case 5:
+                if (hardUnlocked) {
+                  actions.push({ type: 'toggle_hard_mode', enabled: !ctx.save.hardModeEnabled });
+                }
+                break;
             }
           } else {
-            actions.push({
-              type: 'start_run',
-              mutant: selectedId,
-              skin: ctx.save.selectedSkins[selectedId] ?? 'a',
-              crown: ctx.save.selectedCrown,
-              useGoldenWeapon: hasGold && ctx.save.useGoldenWeapon,
-            });
+            tryStartSelectedRun();
           }
         } else if (input.back) {
           actions.push({ type: 'open_screen', screen: 'title' });
@@ -2283,7 +2566,10 @@ export class MenuSystem {
           });
           break;
         }
-        if (input.navLeft || input.navRight) {
+        if (input.navLeft) {
+          this.focusedIndex = (this.focusedIndex - 1 + list.length) % list.length;
+          actions.push({ type: 'ui_sfx', sound: 'sndMutHover' });
+        } else if (input.navRight) {
           this.focusedIndex = (this.focusedIndex + 1) % list.length;
           actions.push({ type: 'ui_sfx', sound: 'sndMutHover' });
         } else if (input.confirm) {
@@ -2458,6 +2744,9 @@ export class MenuSystem {
             partial: { ambienceVolume: stepSlider(save.audio.ambienceVolume, dir * 0.05) },
           });
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 10) {
+          actions.push({ type: 'set_unlock_all', enabled: !save.unlockAll });
+          actions.push({ type: 'ui_sfx', sound: 'sndClick' });
         }
       }
 
@@ -2480,6 +2769,8 @@ export class MenuSystem {
           actions.push({ type: 'update_render', partial: { showFps: !save.render.showFps } });
         } else if (this.focusedIndex === 4) {
           actions.push({ type: 'update_audio', partial: { muted: !save.audio.muted } });
+        } else if (this.focusedIndex === 10) {
+          actions.push({ type: 'set_unlock_all', enabled: !save.unlockAll });
         }
         actions.push({ type: 'ui_sfx', sound: 'sndClick' });
       }
@@ -2777,7 +3068,7 @@ export class MenuSystem {
   ): void {
     const hovered = this.hoveredId === id || this.activeDragRegionId === id || Boolean(opts.focused);
     const clamped = Math.max(0, Math.min(1, value));
-    const barW = 78;
+    const barW = 72;
     const barH = 9;
     const barY = Math.round(y + 1);
 
@@ -2802,16 +3093,16 @@ export class MenuSystem {
       ctx.fillRect(barX, barY, fillW, 1);
     }
 
-    // Crisp white right-edge vertical slider handle bar (exact match to 22_settings_video.png!)
+    // Crisp white vertical slider handle bar
     const thumbX = Math.max(barX, Math.min(barX + barW - 3, barX + fillW - 2));
     ctx.fillStyle = '#000000';
     ctx.fillRect(thumbX - 1, barY - 1, 5, barH + 2);
     ctx.fillStyle = hovered ? '#ffffff' : '#d8d8de';
     ctx.fillRect(thumbX, barY, 3, barH);
 
-    // Crisp white-outlined percentage sitting cleanly over the bar!
+    // Bug #13 fix: render percentage readout cleanly to the right of the slider track (zero thumb collision at <= 25%!)
     const pct = opts.valueText ?? `${Math.round(clamped * 100)}%`;
-    this.fonts.draw(ctx, pct, barX + 3, barY + 1, 'fntM1', {
+    this.fonts.draw(ctx, pct, barX + barW + 6, barY + 1, 'fntM1', {
       color: '#ffffff',
       outline: true,
     });
@@ -2856,7 +3147,7 @@ export class MenuSystem {
       const uDef = this.data.getUltra(simState.player.ultra);
       const egHudDef = this.sprites.getSprite('sprEGIconHUD');
       const uFrame = uDef
-        ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 24)
+        ? computeUltraIconFrame(mutant.raceIndex, uDef.slot, egHudDef?.frames.length ?? 29)
         : 0;
       const x = cursorRight - iconSize;
       const rid = 'pause_ultra';
@@ -3538,13 +3829,21 @@ export class MenuSystem {
     const { width, height, timeSec, save } = mctx;
     const mutants = this.data.getMutants();
     const selected = this.data.getMutant(save.selectedMutant);
-    const skin = save.selectedSkins[selected.id] ?? 'a';
+    const selectedUnlocked = isMutantUnlockedInSave(save, selected.id);
+    const bSkinAvailable = selected.id !== 'skeleton' && selected.id !== 'frog';
+    const bSkinUnlocked = isBSkinUnlockedInSave(save, selected.id);
+    const skin: 'a' | 'b' = bSkinUnlocked ? (save.selectedSkins[selected.id] ?? 'a') : 'a';
     const crown = this.data.getCrown(save.selectedCrown);
+    const crownUnlocked = isCrownUnlockedInSave(save, selected.id, save.selectedCrown);
+    const hardUnlocked = isHardModeUnlockedInSave(save);
+    const hardActive = hardUnlocked && save.hardModeEnabled;
     const mProg = save.mutants[selected.id];
     const storedGoldId = mProg?.goldenWeapon ?? (selected.id === 'yv' ? 'golden_revolver' : null);
     const hasGold = Boolean(storedGoldId);
     const goldActive = hasGold && save.useGoldenWeapon;
     const storedGoldLabel = storedGoldId ? resolveWeaponLabel(storedGoldId, this.data) : '';
+    const protoWeaponId = save.protoChestWeaponId ?? null;
+    const protoWeaponLabel = protoWeaponId ? resolveWeaponLabel(protoWeaponId, this.data) : '';
 
     const isWide = width >= 380;
 
@@ -3567,7 +3866,7 @@ export class MenuSystem {
     this.renderCampfireGround(ctx, width, height, fireX, fireY, seatRx, seatRy, timeSec);
     drawEdgeInkSplats(ctx, width, height, 14, 48, 0);
 
-    // 2. Depth-sorted campfire + ALL 12 mutants at CRISP 1.0x INTEGER SCALE
+    // 2. Depth-sorted campfire + ALL 14 mutants at CRISP 1.0x INTEGER SCALE
     const sceneItems: Array<{ y: number; draw: () => void }> = [];
 
     sceneItems.push({
@@ -3603,7 +3902,10 @@ export class MenuSystem {
 
     for (let i = 0; i < totalMutants; i++) {
       const m = mutants[i]!;
-      const mSkin = save.selectedSkins[m.id] ?? 'a';
+      const mUnlocked = isMutantUnlockedInSave(save, m.id);
+      const mSkin: 'a' | 'b' = isBSkinUnlockedInSave(save, m.id)
+        ? (save.selectedSkins[m.id] ?? 'a')
+        : 'a';
       const isSel = m.id === selected.id;
       const angle = seatAngles[i]!;
       const pullIn = isSel ? 0.9 : 1;
@@ -3623,7 +3925,9 @@ export class MenuSystem {
       sceneItems.push({
         y: my,
         draw: () => {
-          ctx.fillStyle = isSel ? 'rgba(255, 224, 71, 0.34)' : 'rgba(0, 0, 0, 0.44)';
+          ctx.fillStyle = isSel
+            ? (mUnlocked ? 'rgba(255, 224, 71, 0.34)' : 'rgba(180, 140, 220, 0.28)')
+            : 'rgba(0, 0, 0, 0.44)';
           ctx.fillRect(mx - 6, my + 6, 12, 3);
           ctx.fillRect(mx - 4, my + 5, 8, 5);
 
@@ -3649,7 +3953,7 @@ export class MenuSystem {
 
           const standLift = isSel ? Math.round(Math.sin(timeSec * 5) * 1) - 3 : 0;
 
-          if (isSel && crown.id !== 'none') {
+          if (isSel && mUnlocked && crownUnlocked && crown.id !== 'none') {
             const crX = mx + (faceLeft ? 8 : -8);
             const crY = Math.round(my + standLift - 9 + Math.sin(timeSec * 4.2) * 1.5);
             this.sprites.draw(ctx, crown.spriteIdle, crX, crY, {
@@ -3665,11 +3969,14 @@ export class MenuSystem {
             flipX: faceLeft,
             scaleX: 1,
             scaleY: 1,
-            alpha: isSel ? 1 : 0.92,
+            alpha: mUnlocked ? (isSel ? 1 : 0.92) : (isSel ? 0.55 : 0.35),
+            tintColor: mUnlocked ? undefined : '#242030',
             pixelSnap: true,
           });
 
-          if (isSel) {
+          if (!mUnlocked) {
+            drawPixelPadlock(ctx, mx, my + standLift - 8, isSel ? '#ffe047' : '#8a8298');
+          } else if (isSel) {
             const startWepId = goldActive && storedGoldId ? storedGoldId : m.startingWeapon;
             const wepSpr = resolveWeaponSpriteName(startWepId, this.data);
             const dir = faceLeft ? -1 : 1;
@@ -3696,10 +4003,10 @@ export class MenuSystem {
         ? selected.sprites.bIdle
         : selected.sprites.idle;
 
-    // 3. Crisp Left Mutant Portrait (integer 1x for Built-In 96x80, clean integer fit for Steam!)
+    // 3. Crisp Left Mutant Portrait (integer 1x for Built-In 96x80, clean fit for Steam!)
     drawWastelandPlate(ctx, portX, portY, portW, portH, {
       fill: '#08060c',
-      border: skin === 'b' ? '#d4b84a' : '#2a2434',
+      border: !selectedUnlocked ? '#524a64' : skin === 'b' ? '#d4b84a' : '#2a2434',
     });
     const portSpriteName =
       skin === 'b' && selected.sprites.bPortrait && this.sprites.hasSprite(selected.sprites.bPortrait)
@@ -3709,7 +4016,7 @@ export class MenuSystem {
     const portraitFrame = computePortraitFrame(
       selected.raceIndex,
       skin,
-      portSprDef?.frames.length ?? 24,
+      portSprDef?.frames.length ?? 28,
     );
     let drewPort = false;
     if (portSprDef && portSprDef.frames.length > 0 && this.sprites.hasSprite(portSpriteName)) {
@@ -3717,11 +4024,10 @@ export class MenuSystem {
       const rect = portSprDef.frames[fIdx];
       if (rect && rect.srcW > 0 && rect.srcH > 0) {
         if (rect.targetW <= portW && rect.targetH <= portH) {
-          // Built-In 96x80 portrait fits natively at exact 1x integer scale!
-          drewPort = this.drawSpriteIntegerCentered(ctx, portSpriteName, fIdx, portX, portY, portW, portH);
+          drewPort = this.drawSpriteIntegerCentered(ctx, portSpriteName, fIdx, portX, portY, portW, portH, {
+            alpha: selectedUnlocked ? 1 : 0.35,
+          });
         } else {
-          // Oversized Steam sprBigPortrait (e.g. 240x200 with originX=80, originY=243 below sprite bounds!):
-          // Anchor the sprite's actual trimmed bounding box (rect.targetX/Y/W/H) cleanly inside the 96x80 frame!
           const innerX = portX + 1;
           const innerY = portY + 1;
           const innerW = portW - 2;
@@ -3743,6 +4049,7 @@ export class MenuSystem {
             frame: fIdx,
             scaleX: fitScale,
             scaleY: fitScale,
+            alpha: selectedUnlocked ? 1 : 0.35,
             pixelSnap: true,
           });
           ctx.restore();
@@ -3752,6 +4059,19 @@ export class MenuSystem {
     if (!drewPort) {
       this.drawSpriteIntegerCentered(ctx, idleSpr, Math.floor(timeSec * 4), portX + 8, portY + 8, portW - 16, portH - 16, {
         allow2x: true,
+        alpha: selectedUnlocked ? 1 : 0.35,
+      });
+    }
+    if (!selectedUnlocked) {
+      const badgeX = portX + 12;
+      const badgeY = portY + Math.floor(portH * 0.5) - 11;
+      ctx.fillStyle = 'rgba(8, 6, 12, 0.88)';
+      ctx.fillRect(badgeX, badgeY, portW - 24, 22);
+      drawPixelBorder(ctx, badgeX, badgeY, portW - 24, 22, '#ffe047', 1);
+      drawPixelPadlock(ctx, portX + Math.floor(portW * 0.5), badgeY + 6, '#ffe047');
+      this.fonts.draw(ctx, '@yLOCKED', portX + Math.floor(portW * 0.5), badgeY + 13, 'fntSmall', {
+        align: 'center',
+        outline: true,
       });
     }
 
@@ -3771,14 +4091,29 @@ export class MenuSystem {
         maxWidth: portW - 40,
         shadow: true,
       });
+      const goldLineY = protoWeaponLabel ? subY + 31 : subY + 34;
       if (hasGold) {
-        this.fonts.draw(ctx, `@yGOLD: @w${storedGoldLabel}`, portX + 4, subY + 34, 'fntSmall', {
+        this.fonts.draw(ctx, `@yGOLD: @w${storedGoldLabel}`, portX + 4, goldLineY, 'fntSmall', {
           maxWidth: portW - 8,
           shadow: true,
         });
       } else {
-        this.fonts.draw(ctx, '@dNO GOLDEN WEAPON', portX + 4, subY + 38, 'fntSmall');
+        this.fonts.draw(ctx, '@dNO GOLDEN WEAPON', portX + 4, goldLineY, 'fntSmall');
       }
+      if (protoWeaponLabel) {
+        this.fonts.draw(ctx, `@gPROTO: @w${protoWeaponLabel}`, portX + 4, subY + 42, 'fntSmall', {
+          maxWidth: portW - 8,
+          shadow: true,
+        });
+      }
+    } else if (protoWeaponLabel) {
+      // Compact 4:3 Proto Chest ribbon cleanly tucked inside portrait base (zero campfire overlap!)
+      ctx.fillStyle = 'rgba(8, 6, 12, 0.90)';
+      ctx.fillRect(portX + 1, portY + portH - 11, portW - 2, 10);
+      this.fonts.draw(ctx, `@gPROTO: @w${protoWeaponLabel}`, portX + 4, portY + portH - 9, 'fntSmall', {
+        maxWidth: portW - 8,
+        shadow: false,
+      });
     }
 
     // 4. Right-Side Mutant Details Ink-Splat Panel (borderless dark ink — ZERO yellow wireframe!)
@@ -3794,7 +4129,7 @@ export class MenuSystem {
     });
 
     this.fonts.draw(ctx, selected.name, infoX + 6, infoY + 5, 'fntM1', {
-      color: '#ffffff',
+      color: selectedUnlocked ? '#ffffff' : '#b8b2c4',
       outline: true,
     });
     this.fonts.draw(ctx, `@r${selected.maxHp} HP`, infoX + infoW - 6, infoY + 6, 'fntSmall', {
@@ -3813,7 +4148,7 @@ export class MenuSystem {
       detailsMaxW,
       infoY + 18,
       infoY + infoH - 4,
-      hasBestLine,
+      hasBestLine || !selectedUnlocked,
     );
 
     const pRes = this.fonts.draw(ctx, `@wPASSIVE: @s${selected.passiveDesc}`, infoX + 6, layout.passiveY, 'fntSmall', {
@@ -3834,7 +4169,16 @@ export class MenuSystem {
       shadow: true,
     });
 
-    if (hasBestLine && mProg) {
+    if (!selectedUnlocked) {
+      const unlockY = Math.max(layout.bestY, tbY + tRes.height + 3);
+      if (unlockY + 6 <= infoY + infoH - 1) {
+        this.fonts.draw(ctx, `@yUNLOCK: @w${MUTANT_UNLOCK_HINTS[selected.id]}`, infoX + 6, unlockY, 'fntSmall', {
+          maxWidth: detailsMaxW,
+          lineSpacing: 0,
+          shadow: true,
+        });
+      }
+    } else if (hasBestLine && mProg) {
       const bestY = Math.max(layout.bestY, tbY + tRes.height + 3);
       if (bestY + 6 <= infoY + infoH - 1) {
         this.fonts.draw(
@@ -3848,7 +4192,7 @@ export class MenuSystem {
       }
     }
 
-    // 5. Header & Top-Left Back button
+    // 5. Header, Top-Left Back button & Top-Right Hard Mode toggle (when unlocked or UNLOCK ALL)
     const inActions = this.campfireRow === 'actions';
     const inputMode = mctx.inputMode ?? 'kbm';
     const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
@@ -3874,17 +4218,43 @@ export class MenuSystem {
       outline: true,
     });
 
+    if (hardUnlocked) {
+      const hardW = isWide ? 94 : 88;
+      this.drawButton(
+        ctx,
+        'camp_hard_mode',
+        width - hardW - 4,
+        2,
+        hardW,
+        13,
+        hardActive ? '@rHARD MODE: ON' : 'HARD MODE: OFF',
+        () => ({ type: 'toggle_hard_mode', enabled: !save.hardModeEnabled }),
+        {
+          font: 'fntSmall',
+          accent: hardActive ? '#ff4a4a' : '#8a8298',
+          focused: inActions && this.campfireActionIndex === 5,
+        },
+      );
+    }
+
     // 6. Uniform-Height Loadout Action Row: SKIN | CROWN | GOLD | GO! (exact same y and h!)
     const rowY = 164;
     const btnH = 18;
     const gap = 4;
-    const skinW = isWide ? 58 : 48;
-    const crownW = isWide ? 124 : 106;
-    const goldW = isWide ? 116 : 70;
+    const skinW = isWide ? 62 : 52;
+    const crownW = isWide ? 124 : 104;
+    const goldW = isWide ? 112 : 68;
     const goW = isWide ? 86 : 76;
     const barTotalW = skinW + crownW + goldW + goW + gap * 3;
     const barStartX = Math.round((width - barTotalW) * 0.5);
 
+    const skinBtnLabel = !bSkinAvailable
+      ? '@dSKIN: A'
+      : skin === 'b'
+        ? '@ySKIN: B'
+        : bSkinUnlocked
+          ? 'SKIN: A'
+          : '@dSKIN: A';
     this.drawButton(
       ctx,
       'camp_skin',
@@ -3892,14 +4262,25 @@ export class MenuSystem {
       rowY,
       skinW,
       btnH,
-      skin === 'b' ? '@ySKIN: B' : 'SKIN: A',
-      () => ({ type: 'toggle_bskin', mutant: selected.id }),
+      skinBtnLabel,
+      () => {
+        if (!bSkinUnlocked) {
+          this.campfireLockHintText = bSkinAvailable
+            ? `@yB-SKIN: @w${BSKIN_UNLOCK_HINTS[selected.id]}`
+            : `@dNO B-SKIN FOR ${selected.name}`;
+          this.campfireLockHintUntilSec = this.renderTimeSec + 3.5;
+        }
+        return { type: 'toggle_bskin', mutant: selected.id };
+      },
       {
         font: 'fntSmall',
-        accent: '#ffffff',
+        accent: bSkinUnlocked ? '#ffffff' : '#5a5468',
         focused: inActions && this.campfireActionIndex === 0,
       },
     );
+    if (bSkinAvailable && !bSkinUnlocked) {
+      drawPixelPadlock(ctx, barStartX + skinW - 6, rowY + 9, '#b8a24a');
+    }
 
     const crownX = barStartX + skinW + gap;
     this.drawButton(
@@ -3909,18 +4290,30 @@ export class MenuSystem {
       rowY,
       crownW,
       btnH,
-      crown.id === 'none' ? 'NO CROWN' : `@p${crown.name}`,
+      crown.id === 'none'
+        ? 'NO CROWN'
+        : crownUnlocked
+          ? `@p${crown.name}`
+          : `@d${crown.name}`,
       () => {
         const idx = ALL_CROWN_IDS.indexOf(save.selectedCrown);
         const nextCrown = ALL_CROWN_IDS[(idx + 1) % ALL_CROWN_IDS.length]!;
+        if (!isCrownUnlockedInSave(save, selected.id, nextCrown)) {
+          const nextDef = this.data.getCrown(nextCrown);
+          this.campfireLockHintText = `@yCROWN LOCKED: @wLOOP WITH ${nextDef.name}`;
+          this.campfireLockHintUntilSec = this.renderTimeSec + 3.5;
+        }
         return { type: 'cycle_crown', crown: nextCrown };
       },
       {
         font: 'fntSmall',
-        accent: '#c96bff',
+        accent: crownUnlocked ? '#c96bff' : '#5a5468',
         focused: inActions && this.campfireActionIndex === 1,
       },
     );
+    if (!crownUnlocked) {
+      drawPixelPadlock(ctx, crownX + crownW - 6, rowY + 9, '#9e7ab8');
+    }
 
     const goldX = crownX + crownW + gap;
     const goldBtnLabel = hasGold
@@ -3945,8 +4338,9 @@ export class MenuSystem {
     );
 
     const goX = goldX + goldW + gap;
-    const goLabel =
-      inputMode === 'gamepad'
+    const goLabel = !selectedUnlocked
+      ? '@dLOCKED'
+      : inputMode === 'gamepad'
         ? `@gGO! [${g.confirm}]`
         : inputMode === 'touch'
           ? '@gGO!'
@@ -3959,26 +4353,67 @@ export class MenuSystem {
       goW,
       btnH,
       goLabel,
-      () => ({
-        type: 'start_run',
-        mutant: selected.id,
-        skin,
-        crown: save.selectedCrown,
-        useGoldenWeapon: goldActive,
-      }),
+      () => {
+        if (!selectedUnlocked) {
+          this.campfireLockHintText = `@yLOCKED: @w${MUTANT_UNLOCK_HINTS[selected.id]}`;
+          this.campfireLockHintUntilSec = this.renderTimeSec + 3.5;
+          return { type: 'ui_sfx', sound: 'sndClickBack' };
+        }
+        return {
+          type: 'start_run',
+          mutant: selected.id,
+          skin,
+          crown: crownUnlocked ? save.selectedCrown : 'none',
+          useGoldenWeapon: goldActive,
+          hardMode: hardActive,
+        };
+      },
       {
         font: 'fntSmall',
-        accent: '#48e048',
+        accent: selectedUnlocked ? '#48e048' : '#5a5468',
         focused: !inActions || this.campfireActionIndex === 3,
       },
     );
 
-    // 7. Crown / Gold effect description strip (borderless dark ink — strictly 1 line so it never wraps into roster!)
+    // 7. Crown / Gold / Unlock-Hint description strip (strictly 1 line so it never wraps into roster!)
     const effectY = rowY + btnH + 2;
     const crownEffectText = crown.description.replace(/#/g, ' - ');
     const maxStatusW = width - 16;
+    const skinHovered =
+      this.hoveredId === 'camp_skin' || (inActions && this.campfireActionIndex === 0);
+    const crownHovered =
+      this.hoveredId === 'camp_crown' || (inActions && this.campfireActionIndex === 1);
+    const hasActiveLockToast =
+      Boolean(this.campfireLockHintText) && timeSec < this.campfireLockHintUntilSec;
+
+    const fitOneLine = (text: string): string => {
+      if (this.fonts.measure(text, 'fntSmall').width <= maxStatusW) return text;
+      const plain = text.replace(/@[a-z]/gi, '');
+      const budget = Math.max(12, Math.floor((maxStatusW / Math.max(1, this.fonts.measure('M', 'fntSmall').width)) - 2));
+      return `@y${plain.slice(0, budget)}..`;
+    };
+
     const buildStatusInfo = (): string => {
+      if (hasActiveLockToast) {
+        return fitOneLine(this.campfireLockHintText);
+      }
+      if (!selectedUnlocked) {
+        return fitOneLine(`@yLOCKED MUTANT: @w${MUTANT_UNLOCK_HINTS[selected.id]}`);
+      }
+      if (skinHovered && !bSkinUnlocked) {
+        return fitOneLine(
+          bSkinAvailable
+            ? `@yB-SKIN: @w${BSKIN_UNLOCK_HINTS[selected.id]}`
+            : `@d${selected.name} HAS NO B-SKIN`,
+        );
+      }
+      if (crownHovered && !crownUnlocked) {
+        return fitOneLine(`@yLOCKED CROWN: @wREACH VAULT AND LOOP WITH ${crown.name}`);
+      }
       if (crown.id !== 'none') {
+        if (!crownUnlocked) {
+          return fitOneLine(`@yCROWN LOCKED: @wLOOP WITH ${crown.name} (OR ENABLE UNLOCK ALL)`);
+        }
         const goldTag = hasGold && !isWide ? `  @y[${storedGoldLabel}]` : '';
         const full = `@p${crown.name}: @s${crownEffectText}${goldTag}`;
         if (this.fonts.measure(full, 'fntSmall').width <= maxStatusW) return full;
@@ -4002,9 +4437,9 @@ export class MenuSystem {
       outline: true,
     });
 
-    // 8. Bottom 12-Mutant Roster Strip over pure black ink-splat bottom bar
+    // 8. Bottom 14-Mutant Roster Strip over pure black ink-splat bottom bar (fits 320x240 and 426x240 cleanly!)
     const count = mutants.length;
-    const slotGap = isWide ? 4 : 3;
+    const slotGap = isWide ? 4 : 2;
     const slotW = Math.min(24, Math.floor((width - 12 - (count - 1) * slotGap) / count));
     const slotH = 28;
     const stripW = count * slotW + (count - 1) * slotGap;
@@ -4012,15 +4447,21 @@ export class MenuSystem {
     const stripY = height - slotH - 14;
 
     const charSelectSpr = this.sprites.getSprite('sprCharSelect');
+    const charSelectLockedSpr = this.sprites.getSprite('sprCharSelectLocked');
 
     for (let i = 0; i < count; i++) {
       const m = mutants[i]!;
+      const mUnlocked = isMutantUnlockedInSave(save, m.id);
       const sx = stripX + i * (slotW + slotGap);
       const isSelected = m.id === selected.id;
       const rid = `camp_mutant_${m.id}`;
       const hovered = this.hoveredId === rid;
 
-      ctx.fillStyle = isSelected ? '#28202e' : hovered ? '#1e1a26' : '#0c0a10';
+      ctx.fillStyle = isSelected
+        ? (mUnlocked ? '#28202e' : '#1e1828')
+        : hovered
+          ? '#1e1a26'
+          : '#0c0a10';
       ctx.fillRect(sx, stripY, slotW, slotH);
       drawPixelBorder(
         ctx,
@@ -4028,21 +4469,52 @@ export class MenuSystem {
         stripY,
         slotW,
         slotH,
-        isSelected ? '#ffffff' : hovered ? '#b8b8c4' : '#302c38',
+        isSelected ? (mUnlocked ? '#ffffff' : '#ffe047') : hovered ? '#b8b8c4' : '#302c38',
         isSelected ? 2 : 1,
       );
 
-      const useCharSelect =
-        charSelectSpr &&
-        charSelectSpr.frames.length >= 12 &&
-        this.sprites.hasSprite('sprCharSelect');
       let drewCard = false;
-      if (useCharSelect) {
-        const frame = charSelectSpr.frames.length >= 13 ? m.raceIndex : i;
-        drewCard = this.drawSpriteIntegerCentered(ctx, 'sprCharSelect', frame, sx + 2, stripY + 2, slotW - 4, slotH - 4);
+      if (!mUnlocked && charSelectLockedSpr && this.sprites.hasSprite('sprCharSelectLocked')) {
+        const lockFrame = Math.min(charSelectLockedSpr.frames.length - 1, m.raceIndex);
+        drewCard = this.drawSpriteIntegerCentered(
+          ctx,
+          'sprCharSelectLocked',
+          lockFrame,
+          sx + 2,
+          stripY + 2,
+          slotW - 4,
+          slotH - 4,
+        );
       }
       if (!drewCard) {
-        this.drawSpriteIntegerCentered(ctx, m.sprites.idle, 0, sx + 2, stripY + 2, slotW - 4, slotH - 4);
+        const useCharSelect =
+          charSelectSpr &&
+          charSelectSpr.frames.length >= 12 &&
+          this.sprites.hasSprite('sprCharSelect');
+        if (useCharSelect) {
+          const frame = Math.min(
+            charSelectSpr.frames.length - 1,
+            charSelectSpr.frames.length >= 13 ? m.raceIndex : i,
+          );
+          drewCard = this.drawSpriteIntegerCentered(
+            ctx,
+            'sprCharSelect',
+            frame,
+            sx + 2,
+            stripY + 2,
+            slotW - 4,
+            slotH - 4,
+            { alpha: mUnlocked ? 1 : 0.4 },
+          );
+        }
+      }
+      if (!drewCard) {
+        this.drawSpriteIntegerCentered(ctx, m.sprites.idle, 0, sx + 2, stripY + 2, slotW - 4, slotH - 4, {
+          alpha: mUnlocked ? 1 : 0.4,
+        });
+      }
+      if (!mUnlocked) {
+        drawPixelPadlock(ctx, sx + slotW - 5, stripY + 5, isSelected ? '#ffe047' : '#9c92ac');
       }
 
       this.regions.push({
@@ -4060,7 +4532,7 @@ export class MenuSystem {
         ? `@y[${g.confirm}] @w${selected.name}  @d[${g.prevTab}]SKIN [${g.nextTab}]CRN [${g.swap}]GOLD [UP]BAR`
         : inputMode === 'touch'
           ? `@w${selected.name}  @dTAP MUTANT OR GO TO PLAY`
-          : `@y< A / D > @w${selected.name}  @d(UP/DOWN LOADOUT - ENTER PLAY)`;
+          : `@y< A / D > @w${selected.name}  @d[B]SKIN${hardUnlocked ? ' [H]HARD' : ''} - ENTER PLAY`;
     this.fonts.draw(ctx, campHint, width * 0.5, height - 10, 'fntSmall', {
       align: 'center',
       outline: true,
@@ -4098,31 +4570,33 @@ export class MenuSystem {
       });
     }
 
-    // 3. Sleek jagged Top-Right black ink-splat + owned mutation/ultra/crown icons (exact match to 11a_levelup.png!)
+    // 3. Sleek jagged Top-Right black ink-splat + owned mutation/ultra/crown icons (Bug #16: only when iconCount > 0!)
     if (simState) {
       const iconCount =
         simState.player.mutations.length +
         (simState.player.ultra ? 1 : 0) +
         (simState.crown !== 'none' ? 1 : 0);
-      const topRightSpan = Math.max(82, iconCount * 18 + 38);
-      drawCornerEdgeInkSplat(ctx, width, 'right', 0, topRightSpan, 24, 31);
-      this.drawTopRightHudIcons(ctx, simState, width);
+      if (iconCount > 0) {
+        const topRightSpan = Math.max(82, iconCount * 18 + 38);
+        drawCornerEdgeInkSplat(ctx, width, 'right', 0, topRightSpan, 24, 31);
+        this.drawTopRightHudIcons(ctx, simState, width);
+      }
     }
 
-    // 4. HUGE jagged radioactive slime-green outlined `LEVEL UP` header (scale 1.45, exact match to 11a_levelup.png!)
-    drawChunkyMenuText(ctx, 'LEVEL UP', cx, 50, false, '#5ce828', {
+    // 4. HUGE jagged radioactive slime-green outlined `LEVEL UP` header (Bug #5: raised to y=42, subtitle lowered to y=82!)
+    drawChunkyMenuText(ctx, 'LEVEL UP', cx, 42, false, '#5ce828', {
       slimeDrips: true,
       timeSec,
       scale: 1.45,
     });
 
     if (list.length >= 5) {
-      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', cx, 78, 'fntSmall', {
+      this.fonts.draw(ctx, '@gHORROR +1 CHOICE', cx, 82, 'fntSmall', {
         align: 'center',
         outline: true,
       });
     } else if (rawList.length === 1 && simState?.crown === 'destiny') {
-      this.fonts.draw(ctx, '@pCROWN OF DESTINY', cx, 78, 'fntSmall', {
+      this.fonts.draw(ctx, '@pCROWN OF DESTINY', cx, 82, 'fntSmall', {
         align: 'center',
         outline: true,
       });
@@ -4167,17 +4641,27 @@ export class MenuSystem {
       }
     }
 
-    // Selected mutation name & clean description text directly ABOVE the cards!
+    // Bug #5 fix: dynamically measure wrapped description height so 2-line descriptions NEVER collide with lifted card border!
     const focusedDef = this.data.getMutation(list[activeIdx]!);
     if (focusedDef) {
-      this.fonts.draw(ctx, focusedDef.name, cx, baseCardY - 34, 'fntM1', {
+      const descMaxW = width - 24;
+      const textLayout = computeLevelUpTextLayout(
+        this.fonts,
+        focusedDef.name,
+        focusedDef.description,
+        descMaxW,
+        baseCardY,
+      );
+      this.fonts.draw(ctx, focusedDef.name, cx, textLayout.titleY, 'fntM1', {
         align: 'center',
+        maxWidth: descMaxW,
         color: '#ffe047',
         outline: true,
       });
-      this.fonts.draw(ctx, focusedDef.description, cx, baseCardY - 22, 'fntSmall', {
+      this.fonts.draw(ctx, focusedDef.description, cx, textLayout.descY, 'fntSmall', {
         align: 'center',
-        maxWidth: width - 24,
+        maxWidth: descMaxW,
+        lineSpacing: 1,
         outline: true,
       });
     }
@@ -4263,12 +4747,16 @@ export class MenuSystem {
 
     if (list.length === 0) return;
 
-    const cardW = 138;
-    const cardH = 114;
-    const gap = 16;
+    const isWide = width >= 380;
+    const gap = list.length >= 3 ? (isWide ? 10 : 6) : 16;
+    const cardW =
+      list.length >= 3
+        ? Math.min(126, Math.floor((width - 16 - (list.length - 1) * gap) / list.length))
+        : 138;
+    const cardH = list.length >= 3 ? 120 : 114;
     const totalW = list.length * cardW + (list.length - 1) * gap;
     const startX = Math.round((width - totalW) * 0.5);
-    const cardY = Math.round((height - cardH) * 0.5) + 6;
+    const cardY = Math.round((height - cardH) * 0.5) + (list.length >= 3 ? 8 : 6);
 
     let activeIdx = Math.max(0, Math.min(list.length - 1, this.focusedIndex));
 
@@ -4292,7 +4780,8 @@ export class MenuSystem {
         borderThickness: isFocused ? 2 : 1,
       });
 
-      this.fonts.draw(ctx, `@y[${i + 1}] ULTRA ${i === 0 ? 'A' : 'B'}`, x + cardW * 0.5, y + 7, 'fntSmall', {
+      const slotLetter = (def?.slot ?? (i === 0 ? 'a' : i === 1 ? 'b' : 'c')).toUpperCase();
+      this.fonts.draw(ctx, `@y[${i + 1}] ULTRA ${slotLetter}`, x + cardW * 0.5, y + 7, 'fntSmall', {
         align: 'center',
         outline: true,
       });
@@ -4300,7 +4789,7 @@ export class MenuSystem {
       const iconSprName = def?.sprite || 'sprEGSkillIcon';
       const iconSprDef = this.sprites.getSprite(iconSprName);
       const ultraFrame = def
-        ? computeUltraIconFrame(mutant.raceIndex, def.slot, iconSprDef?.frames.length ?? 24)
+        ? computeUltraIconFrame(mutant.raceIndex, def.slot, iconSprDef?.frames.length ?? 29)
         : 0;
       const drewIcon = def
         ? this.drawSpriteIntegerCentered(ctx, iconSprName, ultraFrame, x + Math.floor((cardW - 24) / 2), y + 18, 24, 32)
@@ -4313,14 +4802,14 @@ export class MenuSystem {
       const title = def ? def.name : ultraId.toUpperCase();
       const titleRes = this.fonts.draw(ctx, title, x + cardW * 0.5, y + 54, 'fntM1', {
         align: 'center',
-        maxWidth: cardW - 10,
+        maxWidth: cardW - 8,
         color: '#ffe047',
         outline: true,
       });
       if (def) {
         this.fonts.draw(ctx, def.description, x + cardW * 0.5, y + 54 + titleRes.height + 5, 'fntSmall', {
           align: 'center',
-          maxWidth: cardW - 12,
+          maxWidth: cardW - 10,
           outline: true,
         });
       }
@@ -4337,12 +4826,13 @@ export class MenuSystem {
 
     const uInput = mctx.inputMode ?? 'kbm';
     const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
+    const keyRange = list.length >= 3 ? `1-${list.length}` : '1-2';
     const uPrompt =
       uInput === 'gamepad'
         ? `@d[L/R] BROWSE  [${g.confirm}] CONFIRM ULTRA`
         : uInput === 'touch'
           ? '@dTAP AN ULTRA CARD TO EVOLVE'
-          : '@dCLICK OR KEYS 1-2 / ENTER TO EVOLVE';
+          : `@dCLICK OR KEYS ${keyRange} / ENTER TO EVOLVE`;
     this.fonts.draw(ctx, uPrompt, cx, height - 14, 'fntSmall', {
       align: 'center',
       outline: true,
@@ -4357,36 +4847,38 @@ export class MenuSystem {
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, simState, save } = mctx;
+    const { width, height, simState, save, timeSec } = mctx;
     const isWide = width >= 380;
-    const cx = Math.round(width * 0.5);
+    const pauseLayout = computePauseLayout(width);
 
     // 1. Uniformly dimmed frozen gameplay directly visible underneath (exact match to 21_paused.png!)
     ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Sleek ragged top HUD ink bar (matches 21_paused.png top bar!)
+    // 2. Sleek ragged top HUD ink bar with extended top-left ammo backing (Bug #12 fix!)
     drawPauseCornerInkSplats(ctx, width, height, 'top');
 
-    // 3. HUGE Mutant Portrait rising cleanly on the LEFT side (unclipped revolver & arm, exact match to 21_paused.png!)
+    // 3. Mutant Portrait on LEFT side (supports Rebel B Hooded in Frozen City & Chicken Headless!)
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
     const skin: 'a' | 'b' = simState?.player.skin ?? save.selectedSkins[mutant.id] ?? 'a';
-    const portSpriteName =
-      skin === 'b' && mutant.sprites.bPortrait && this.sprites.hasSprite(mutant.sprites.bPortrait)
-        ? mutant.sprites.bPortrait
-        : mutant.sprites.portrait;
-    const portDef = this.sprites.getSprite(portSpriteName);
-    const portraitFrame = computePortraitFrame(
-      mutant.raceIndex,
+    const resolvedPort = resolveBigPortraitSprite(
+      mutant,
       skin,
-      portDef?.frames.length ?? 24,
+      simState,
+      timeSec,
+      (name) => this.sprites.hasSprite(name),
+      (name) => this.sprites.getSprite(name)?.frames.length ?? 0,
     );
-    const portZoneW = isWide ? 186 : 122;
-    const portTopY = 34;
+    const portSpriteName = resolvedPort.spriteName;
+    const portDef = this.sprites.getSprite(portSpriteName);
+    const portraitFrame = resolvedPort.frame;
+    const portZoneW = pauseLayout.portZoneW;
+    const portTopY = pauseLayout.portTopY;
     const portBotY = height - 22;
+    const portAvailH = Math.max(16, portBotY - portTopY);
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, portTopY, portZoneW, portBotY - portTopY);
+    ctx.rect(0, portTopY, portZoneW, portAvailH);
     ctx.clip();
     let drewBigPort = false;
     if (portDef && this.sprites.hasSprite(portSpriteName)) {
@@ -4394,11 +4886,14 @@ export class MenuSystem {
       const fRect = portDef.frames[fIdx];
       const srcH = fRect?.targetH ?? portDef.height;
       const srcW = fRect?.targetW ?? portDef.width;
-      const scale = srcH <= 92 ? (isWide ? 2 : 1) : 1;
+      const scale =
+        srcH <= 92
+          ? Math.max(1, Math.min(isWide ? 2 : 1, Math.floor(portZoneW / Math.max(1, srcW))))
+          : Math.min(1, portZoneW / Math.max(1, srcW), portAvailH / Math.max(1, srcH));
       const drawW = srcW * scale;
       const drawH = srcH * scale;
-      const left = Math.max(-10, Math.round(Math.min(0, (portZoneW - drawW) * 0.25)));
-      const top = Math.max(portTopY, Math.round(portBotY - drawH + 8));
+      const left = Math.max(0, Math.round((portZoneW - drawW) * 0.25));
+      const top = Math.max(portTopY, Math.round(portBotY - drawH + 4));
       const drawX = Math.round(left - Math.round((fRect?.targetX ?? 0) - portDef.originX) * scale);
       const drawY = Math.round(top - Math.round((fRect?.targetY ?? 0) - portDef.originY) * scale);
       drewBigPort = this.sprites.draw(ctx, portSpriteName, drawX, drawY, {
@@ -4436,7 +4931,8 @@ export class MenuSystem {
     }
 
     // 6. Larger bold chunky white-outlined `PAUSED` (1.25x!) + Area/Kills ink-splats + Road Map!
-    const centerAnchorX = isWide ? cx + 16 : cx + 22;
+    // Bug #14 fix: shift center-right info & tooltip strictly clear of portZoneW across 4:3 & 16:9!
+    const centerAnchorX = pauseLayout.centerAnchorX;
     drawChunkyMenuText(ctx, 'PAUSED', centerAnchorX, 56, false, '#ffffff', { scale: 1.25 });
 
     const areaText = simState
@@ -4447,12 +4943,12 @@ export class MenuSystem {
     const kills = simState?.stats.kills ?? 0;
 
     const badgeY = 88;
-    const leftSplatX = centerAnchorX - 74;
-    const rightSplatX = centerAnchorX + 12;
-    drawInkSplatBanner(ctx, leftSplatX, badgeY, 50, 12, 17);
-    drawInkSplatBanner(ctx, rightSplatX, badgeY, 58, 12, 53);
+    const leftSplatX = pauseLayout.leftSplatX;
+    const rightSplatX = pauseLayout.rightSplatX;
+    drawInkSplatBanner(ctx, leftSplatX, badgeY, 48, 12, 17);
+    drawInkSplatBanner(ctx, rightSplatX, badgeY, 56, 12, 53);
 
-    this.fonts.draw(ctx, areaText, leftSplatX + 25, badgeY + 2, 'fntM1', {
+    this.fonts.draw(ctx, areaText, leftSplatX + 24, badgeY + 2, 'fntM1', {
       align: 'center',
       color: '#ffffff',
       outline: true,
@@ -4484,7 +4980,7 @@ export class MenuSystem {
       118,
     );
 
-    // Inspected Mutation / Ultra clean ink-splat tooltip (only when hovered or L/R inspected!)
+    // Inspected Mutation / Ultra clean ink-splat tooltip (strictly clear of left portrait zone!)
     if (simState && this.pauseInspectIdx >= 0) {
       const muts = simState.player.mutations;
       let tipTitle = '';
@@ -4503,11 +4999,11 @@ export class MenuSystem {
         }
       }
       if (tipTitle) {
-        drawInkSplatBanner(ctx, centerAnchorX - 88, 138, 176, 22, 89);
+        drawInkSplatBanner(ctx, pauseLayout.tipX, 138, pauseLayout.tipW, 22, 89);
         this.fonts.draw(ctx, tipTitle, centerAnchorX, 140, 'fntSmall', { align: 'center', outline: true });
         this.fonts.draw(ctx, tipDesc, centerAnchorX, 149, 'fntSmall', {
           align: 'center',
-          maxWidth: 168,
+          maxWidth: pauseLayout.tipW - 8,
           outline: true,
         });
       }
@@ -4731,7 +5227,8 @@ export class MenuSystem {
     let y = 44;
 
     if (this.optionsTab === 'general') {
-      const rowStep = 17;
+      y = 42;
+      const rowStep = 15;
 
       // 0: ASPECT RATIO
       this.drawSettingsToggleRow(
@@ -4896,6 +5393,21 @@ export class MenuSystem {
         save.audio.ambienceVolume,
         (v) => ({ type: 'update_audio', partial: { ambienceVolume: v } }),
         { focused: this.focusedIndex === 9 },
+      );
+      y += rowStep;
+
+      // 10: UNLOCK ALL (instant sandbox access to all 14 mutants, 12 B-skins, 13 crowns & Hard Mode!)
+      this.drawSettingsToggleRow(
+        ctx,
+        'opt_unlock_all',
+        colLeft,
+        colVal,
+        y,
+        colSpan,
+        'UNLOCK ALL',
+        save.unlockAll ? '@gON' : 'OFF',
+        () => ({ type: 'set_unlock_all', enabled: !save.unlockAll }),
+        { focused: this.focusedIndex === 10 },
       );
 
       const genFooter =
@@ -5113,8 +5625,10 @@ export class MenuSystem {
           : formatKeyCode(save.keybinds[entry.field]);
 
         if (hovered) {
+          // Bug #4 fix: measure actual bitmap font width so PRESS KEY... never overflows highlight box!
+          const keyBoxW = Math.max(24, this.fonts.measure(keyText, 'fntM1').width + 6);
           ctx.fillStyle = isListening ? '#ffe047' : '#ffffff';
-          ctx.fillRect(colVal - 3, ry - 1, Math.max(24, keyText.length * 6 + 6), 11);
+          ctx.fillRect(colVal - 3, ry - 1, keyBoxW, 11);
           this.fonts.draw(ctx, keyText, colVal, ry + 1, 'fntM1', {
             color: '#0c0a10',
             shadow: false,
@@ -5191,21 +5705,31 @@ export class MenuSystem {
     // 3. Top-right owned mutations + ultra + crown on the top black bar (matches 23_victory.png!)
     this.drawTopRightHudIcons(ctx, simState, width);
 
-    // 4. Bold centered white-outlined headline (matches 02_gameover.png & 23_victory.png!)
+    // 4. Bold centered white-outlined headline (supports Ending 1 Throne & Ending 2 I.D.P.D. Captain!)
     const areaCode: AreaCode | string = simState?.areaCode ?? save.bestArea;
     const loopNum = simState?.loop ?? 0;
-    const headline = victory
-      ? 'YOU REACHED THE KRUNKED THRONE'
-      : loopNum > 0
-        ? 'THE STRUGGLE CONTINUES'
-        : areaCode.startsWith('7-')
-          ? 'YOU ALMOST REACHED THE KRUNKED THRONE'
-          : 'YOU DID NOT REACH THE KRUNKED THRONE';
+    const isCaptainEnding =
+      victory && (simState?.endingType === 'captain' || areaCode === 'hq-3');
+    const headline = isCaptainEnding
+      ? 'YOU DEFEATED THE I.D.P.D. CAPTAIN'
+      : victory
+        ? 'YOU REACHED THE KRUNKED THRONE'
+        : loopNum > 0
+          ? 'THE STRUGGLE CONTINUES'
+          : areaCode.startsWith('7-')
+            ? 'YOU ALMOST REACHED THE KRUNKED THRONE'
+            : 'YOU DID NOT REACH THE KRUNKED THRONE';
     this.fonts.draw(ctx, headline, cx, 54, 'fntM1', {
       align: 'center',
       color: '#ffffff',
       outline: true,
     });
+    if (isCaptainEnding) {
+      this.fonts.draw(ctx, '@bENDING 2 - HEADQUARTERS CONQUERED', cx, 66, 'fntSmall', {
+        align: 'center',
+        outline: true,
+      });
+    }
 
     // 5. Middle jagged pure-black ink-splat badges!
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
@@ -5219,12 +5743,14 @@ export class MenuSystem {
     const killsBadgeX = leftBlockCx + 8;
     const rightBadgeX = cx + 52;
 
-    // Left ink-splat: Area code (`1-3` / `7-3`) or `END1` on Victory!
-    const areaBadgeText = victory
-      ? `END${loopNum + 1}`
-      : loopNum > 0
-        ? `L${loopNum} ${areaCode}`
-        : areaCode;
+    // Left ink-splat: Area code (`1-3` / `7-3`), `END1` (Throne), or `END2` (Captain)!
+    const areaBadgeText = isCaptainEnding
+      ? 'END2'
+      : victory
+        ? 'END1'
+        : loopNum > 0
+          ? `L${loopNum} ${areaCode}`
+          : areaCode;
     drawInkSplatBanner(ctx, areaBadgeX, badgeY, 48, 12, 19);
     this.fonts.draw(ctx, areaBadgeText, areaBadgeX + 24, badgeY + 2, 'fntM1', {
       align: 'center',
@@ -5296,8 +5822,9 @@ export class MenuSystem {
         rawKiller !== 'sprMutant10Idle' &&
         this.sprites.hasSprite(rawKiller);
 
+      // Bug #22a fix: shift killer box down 2px (badgeY + 17) so tall Throne killer sprite clears KILLED BY spikes!
       const sprBoxX = rightBadgeX + 18;
-      const sprBoxY = badgeY + 15;
+      const sprBoxY = badgeY + 17;
       let drewKiller = false;
       if (hasValidKiller) {
         const killerDef = this.sprites.getSprite(rawKiller);
@@ -5314,7 +5841,7 @@ export class MenuSystem {
       }
 
       // Lower-right ink splat: exact `MM:SS.cc` run timer!
-      const timeBadgeY = badgeY + 42;
+      const timeBadgeY = badgeY + 44;
       drawInkSplatBanner(ctx, rightBadgeX, timeBadgeY, 72, 14, 97);
       this.fonts.draw(ctx, timeStr, rightBadgeX + 36, timeBadgeY + 3, 'fntM1', {
         align: 'center',
