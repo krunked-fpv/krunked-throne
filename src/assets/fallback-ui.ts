@@ -472,19 +472,21 @@ function drawFullBleedMutationCard1x(p: PxCanvas, idx: number, pal: IconPalette)
 
   switch (idx) {
     case 1: {
-      // RHINO SKIN: Huge charging armored gray-olive rhino head + curved ivory horn filling card!
-      paintFullBleedBackdrop(p, pal, 'diag');
-      fg.poly([[0, 12], [16, 9], [20, 22], [14, 31], [0, 31]], '#7c8a86');
-      fg.poly([[0, 13], [14, 10], [16, 17], [0, 20]], '#b4c4be');
-      fg.poly([[0, 21], [15, 20], [14, 31], [0, 31]], '#4a5652');
-      // Armored neck plates & fierce squinting eye
-      fg.line(4, 12, 4, 30, INK, 1);
-      fg.rect(7, 16, 4, 3, INK);
-      fg.rect(8, 17, 2, 1, '#ffe848');
+      // RHINO SKIN: Rich saturated dark-emerald backdrop + huge armored slate-blue rhino head & golden ivory horn!
+      p.rect(0, 0, p.w, p.h, '#1a2c24');
+      p.poly([[0, 0], [p.w, 0], [p.w, 18], [0, 26]], '#2d4c3b');
+      p.line(0, 24, 23, 6, '#58c848', 2);
+      fg.poly([[0, 10], [17, 7], [22, 21], [16, 31], [0, 31]], '#586c74');
+      fg.poly([[0, 11], [15, 8], [17, 16], [0, 19]], '#96acb6');
+      fg.poly([[0, 20], [16, 19], [15, 31], [0, 31]], '#324046');
+      // Armored neck plates & fierce glowing eye
+      fg.line(5, 10, 5, 30, INK, 1);
+      fg.rect(7, 15, 4, 3, INK);
+      fg.rect(8, 16, 2, 1, '#ffe848');
       // Towering curved ivory rhino horn!
-      fg.poly([[12, 19], [22, 2], [23, 16], [16, 25]], '#f2ead4');
-      fg.poly([[14, 17], [21, 4], [21, 12], [16, 20]], '#ffffff');
-      fg.poly([[16, 22], [23, 14], [21, 25]], '#c4b89c');
+      fg.poly([[12, 18], [22, 2], [23, 16], [16, 25]], '#f2dca0');
+      fg.poly([[14, 16], [21, 4], [21, 12], [16, 20]], '#fff8d8');
+      fg.poly([[16, 22], [23, 14], [21, 25]], '#b89a64');
       break;
     }
     case 2: {

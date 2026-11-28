@@ -370,19 +370,19 @@ export function drawMutantBigPortraitHiBit(
         p.ellipse(scx - 2, 16, 13, 8, skinMid);
         p.ellipse(scx - 6, 13, 8, 4, skinHi);
         p.set(scx - 8, 12, WHITE);
-        // Heavy stern comic brow ridge overhanging compact spectacles!
+        // Heavy stern comic brow ridge overhanging compact shaded spectacles!
         p.bezier(scx - 12, 18, scx - 1, 21, scx + 10, 18, skinDeep, 3);
         p.bezier(scx - 12, 18, scx - 1, 21, scx + 10, 18, INK, 2);
-        // Compact dark-rimmed round glasses (radius 4.5 — NOT giant cartoon white saucers!)
-        p.ellipse(scx - 6, 22, 4.8, 4.2, INK);
-        p.ellipse(scx + 5, 22, 4.8, 4.2, INK);
-        p.rect(scx - 2, 21, 3, 2, INK); // sturdy glasses bridge
-        p.ellipse(scx - 6, 22, 3.2, 2.8, '#cdeaf6');
-        p.ellipse(scx + 5, 22, 3.2, 2.8, '#cdeaf6');
-        p.rect(scx - 6, 22, 2, 2, INK); // intense focused eyes behind glass
+        // Compact dark-rimmed round tinted glasses with brow overhang shadow
+        p.ellipse(scx - 6, 22, 4.2, 3.6, INK);
+        p.ellipse(scx + 5, 22, 4.2, 3.6, INK);
+        p.rect(scx - 2, 21, 3, 2, INK);
+        p.ellipse(scx - 6, 22, 2.7, 2.2, '#9ab8cc');
+        p.ellipse(scx + 5, 22, 2.7, 2.2, '#9ab8cc');
+        p.rect(scx - 6, 22, 2, 2, INK);
         p.rect(scx + 5, 22, 2, 2, INK);
-        p.set(scx - 8, 20, WHITE); // subtle specular glint
-        p.set(scx + 3, 20, WHITE);
+        p.set(scx - 8, 21, '#e8f8ff');
+        p.set(scx + 3, 21, '#e8f8ff');
       }
       break;
     }

@@ -455,11 +455,11 @@ export class FloorBuffer {
           drewBase = this.sprites.drawSubRect(ctx, floorSprite, slabVariant, subX, subY, ts, ts, px, py, ts, ts);
 
           // Subtle intact-floor variety using sprFloor*B slabs (~14% of intact 2x2 floor blocks).
-          // Skip on 7-3 Throne Hall so the Palace floor stays 100% uniform dark charcoal diamond tiles (17_throne_hall.png)!
+          // Skip on Palace biome (7-1, 7-2, 7-3) so Palace floors stay 100% uniform dark charcoal diamond tiles!
           if (
             drewBase &&
             map.biome !== 'frozen_city' &&
-            map.areaCode !== '7-3' &&
+            map.biome !== 'palace' &&
             tile === TileType.Floor &&
             this.sprites.hasSprite(floorAltSprite) &&
             isIntactSlab2x2(map, slabTx, slabTy)

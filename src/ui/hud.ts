@@ -887,7 +887,7 @@ export class HudRenderer {
     // Portal Transition / Generating Screen (matches video 00:04, 00:17, 00:33)
     if (state.portal.active && state.portal.entered) {
       const ticksIn = Math.max(state.portal.enterTicks || 0, state.portalTransitionTicks || 0);
-      if (ticksIn >= 7) {
+      if (ticksIn >= 4) {
         this.renderPortalTransition(ctx, state, width, height, inputMode, gamepadFamily);
         return;
       }

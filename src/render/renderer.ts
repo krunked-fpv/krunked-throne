@@ -838,21 +838,20 @@ export class GameRenderer {
           break;
 
         case 'damage_number': {
-          // Suppress absurd overkill / debug clearEnemies() numbers (> 999)
+          // Authentic Nuclear Throne never renders floating RPG damage numbers over enemies
+          // (feedback is crisp pure-white hurt flashes, sparks, hitstop, and blood); keep +HP heals only!
           const roundedAmt = Math.round(ev.amount);
-          if (!ev.heal && (roundedAmt <= 0 || roundedAmt > 999)) {
-            break;
-          }
-          this.pushFloatingText(
-            ev.x,
-            ev.y - 6,
-            ev.heal ? `+${roundedAmt}` : `${roundedAmt}`,
-            ev.heal ? '#52e864' : ev.crit ? '#ffe047' : '#ffffff',
-            ev.crit ? 24 : 18,
-            ev.crit ? 'fntM1' : 'fntSmall',
-            ev.crit ? -0.62 : -0.5,
-          );
-          if (!ev.heal) {
+          if (ev.heal) {
+            this.pushFloatingText(
+              ev.x,
+              ev.y - 6,
+              `+${roundedAmt}`,
+              '#52e864',
+              20,
+              'fntSmall',
+              -0.5,
+            );
+          } else if (roundedAmt > 0 && roundedAmt <= 999) {
             this.crosshairHitTicks = Math.max(this.crosshairHitTicks, ev.crit ? 5.5 : 3.5);
             if (ev.crit) this.crosshairHitCrit = true;
             this.spawnSparkBurst(
@@ -3143,30 +3142,8 @@ export class GameRenderer {
       });
     }
 
-    // Crisp bouncing enemy alert '!' indicator when spotting player or waking up!
-    if (fx && fx.alertTicks > 0 && !enemy.friendly) {
-      const frac = fx.alertTicks / Math.max(1, fx.alertMaxTicks);
-      const pop = frac > 0.75 ? 1 + (1 - frac) * 1.4 : 1;
-      const bounceY = Math.sin(frac * Math.PI) * 3.5;
-      const ax = Math.round(ex);
-      const ay = Math.round(drawY - Math.max(10, enemy.radius + 5) - bounceY);
-      ctx.save();
-      ctx.globalAlpha = Math.min(1, frac * 2.2);
-      ctx.translate(ax, ay);
-      ctx.scale(pop, pop);
-      // Dark 1px ink halo
-      ctx.fillStyle = '#0c0812';
-      ctx.fillRect(-2, -7, 5, 7);
-      ctx.fillRect(-2, 1, 5, 4);
-      // Vivid gold/crimson exclamation mark
-      ctx.fillStyle = frac > 0.55 ? '#ffe852' : '#ff5947';
-      ctx.fillRect(-1, -6, 3, 5);
-      ctx.fillRect(-1, 2, 3, 2);
-      // Hot white top specular pixel
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, -6, 1, 2);
-      ctx.restore();
-    }
+    // Authentic Nuclear Throne does not draw floating '!' RPG alert popups over enemies.
+    void fx;
 
     // Plant Snare crisp pixel-stepped vine wrap when rooted
     if (enemy.snaredTicks > 0) {
@@ -3312,39 +3289,25 @@ export class GameRenderer {
 
       ctx.save();
       if (boss.aiState === 'tell') {
-        // Pulsing emerald danger corridor across the 7-3 carpet
-        ctx.fillStyle = `rgba(56, 255, 118, ${(0.10 + 0.12 * pulse).toFixed(3)})`;
-        ctx.fillRect(Math.round(bx - halfW), Math.round(startY), halfW * 2, Math.round(maxH));
-
-        // Inner center lane warning band
-        ctx.fillStyle = `rgba(140, 255, 175, ${(0.08 + 0.10 * pulse).toFixed(3)})`;
-        ctx.fillRect(Math.round(bx - 10), Math.round(startY), 20, Math.round(maxH));
-
-        // Twin glowing boundary rails with crisp dark contrast edge
-        ctx.fillStyle = 'rgba(8, 28, 16, 0.72)';
-        ctx.fillRect(Math.round(bx - halfW - 1), Math.round(startY), 1, Math.round(maxH));
-        ctx.fillRect(Math.round(bx + halfW), Math.round(startY), 1, Math.round(maxH));
-        ctx.fillStyle = `rgba(92, 255, 145, ${(0.55 + 0.35 * pulse).toFixed(3)})`;
-        ctx.fillRect(Math.round(bx - halfW), Math.round(startY), 2, Math.round(maxH));
-        ctx.fillRect(Math.round(bx + halfW - 2), Math.round(startY), 2, Math.round(maxH));
-
-        // Crisp pixel-stepped scrolling emerald danger chevrons marching down the carpet
-        const scrollOffset = Math.floor(wrapMod(this.renderTimeSec * 120, 24));
-        for (let dy = scrollOffset; dy < maxH - 12; dy += 24) {
-          const cy = Math.round(startY + dy);
-          ctx.fillStyle = 'rgba(8, 32, 16, 0.65)';
-          drawPixelLine(ctx, bx - halfW + 5, cy + 1, bx, cy + 9, 2);
-          drawPixelLine(ctx, bx, cy + 9, bx + halfW - 5, cy + 1, 2);
-          ctx.fillStyle = `rgba(175, 255, 195, ${(0.55 + 0.35 * pulse).toFixed(3)})`;
-          drawPixelLine(ctx, bx - halfW + 5, cy, bx, cy + 8, 1);
-          drawPixelLine(ctx, bx, cy + 8, bx + halfW - 5, cy, 1);
+        // Authentic Nuclear Throne 7-3 charge-up (part_4 00:10-00:11): keep crimson carpet clean!
+        // Draw ONLY the bright spinning neon-green & white star flare right at the Throne's cannon mouth!
+        const cx = Math.round(bx);
+        const cy = Math.round(startY);
+        const starR = Math.round(8 + pulse * 6);
+        const rot = this.renderTimeSec * 9;
+        for (let k = 0; k < 4; k++) {
+          const ang = rot + (k * Math.PI) / 4;
+          const dx = Math.cos(ang) * starR;
+          const dy = Math.sin(ang) * starR;
+          ctx.fillStyle = '#38e838';
+          drawPixelLine(ctx, cx - dx, cy - dy, cx + dx, cy + dy, 3);
+          ctx.fillStyle = '#e8ff90';
+          drawPixelLine(ctx, cx - dx * 0.7, cy - dy * 0.7, cx + dx * 0.7, cy + dy * 0.7, 1);
         }
-
-        // Crisp pixel-hard emerald charging emitter core at Throne cannon (zero blurry glow!)
-        ctx.fillStyle = '#38d848';
-        drawPixelDisc(ctx, bx, startY, Math.round(5 + pulse * 3));
+        ctx.fillStyle = '#38e838';
+        drawPixelDisc(ctx, cx, cy, Math.round(5 + pulse * 3));
         ctx.fillStyle = '#ffffff';
-        drawPixelDisc(ctx, bx, startY, Math.round(2 + pulse * 2));
+        drawPixelDisc(ctx, cx, cy, Math.round(2 + pulse * 2));
       } else {
         // Firing phase: tight subtle emerald wash strictly inside the red carpet beneath the 22px beam column
         ctx.fillStyle = `rgba(28, 195, 72, ${(0.16 + 0.06 * pulse).toFixed(3)})`;
@@ -3679,8 +3642,8 @@ export class GameRenderer {
       } else {
         // Thick crisp bright neon-green outer beam (#38d848) + solid pure-white inner core (#ffffff)
         const outerColor = '#38d848';
-        const baseOuter = isHeavyLaser ? 7 : 5;
-        const outerW = Math.max(2, Math.round(baseOuter * (0.4 + 0.6 * lifeFrac)));
+        const baseOuter = isHeavyLaser ? 8 : 6;
+        const outerW = Math.max(2, Math.round(baseOuter * (0.45 + 0.55 * lifeFrac)));
         const coreW = outerW >= 5 ? Math.max(2, outerW - 2) : Math.max(1, outerW - 2);
 
         ctx.fillStyle = outerColor;
@@ -4088,42 +4051,74 @@ export class GameRenderer {
       const iy = Math.round(sw.y);
 
       if (sw.isExplosion) {
-        // Authentic Nuclear Throne opaque pixel-stepped blast discs:
-        // pure-white flash -> vibrant orange/yellow fireball -> opaque charcoal smoke shrinking cleanly!
+        // Authentic Nuclear Throne clustered multi-circle pixel fireballs & dark billowing charcoal smoke!
+        // (part_0 00:36, part_1 00:33, part_4 00:20 — ZERO flat concentric bullseye circles!)
         ctx.globalAlpha = 1;
         const lowerCol = sw.color.toLowerCase();
         const isPlasma = lowerCol === '#55ff66';
         const isIdpd = lowerCol === '#4ca6ff';
         const isBlood = lowerCol === '#cc2222';
-        if (t < 0.22) {
-          const flashR = Math.max(4, Math.round(sw.endR * (0.42 + t * 1.4)));
+        const seed = (ix * 31 + iy * 17) & 255;
+        const lobeCount = 5;
+        const spread = Math.round(sw.endR * (0.28 + t * 0.34));
+        if (t < 0.24) {
+          // Crisp solid pure-white multi-lobe impact flash
           ctx.fillStyle = '#ffffff';
+          const flashR = Math.max(4, Math.round(sw.endR * (0.36 + t * 1.1)));
           drawPixelDisc(ctx, ix, iy, flashR);
-        } else if (t < 0.54) {
-          const subT = (t - 0.22) / 0.32;
-          const fireR = Math.max(3, Math.round(sw.endR * (0.78 - subT * 0.22)));
-          ctx.fillStyle = isPlasma ? '#28b848' : isIdpd ? '#2c78e8' : isBlood ? '#a81c28' : '#ff6818';
-          drawPixelDisc(ctx, ix, iy, fireR);
-          ctx.fillStyle = isPlasma ? '#78ff68' : isIdpd ? '#80d8ff' : isBlood ? '#ff4248' : '#ffd838';
-          drawPixelDisc(ctx, ix, iy, Math.max(2, Math.round(fireR * 0.68)));
-          if (subT < 0.5) {
+          for (let k = 0; k < lobeCount; k++) {
+            const ang = (k / lobeCount) * Math.PI * 2 + (seed % 7) * 0.4;
+            const lx = Math.round(ix + Math.cos(ang) * spread * 0.72);
+            const ly = Math.round(iy + Math.sin(ang) * spread * 0.72);
+            drawPixelDisc(ctx, lx, ly, Math.max(3, Math.round(flashR * 0.62)));
+          }
+        } else if (t < 0.56) {
+          // Clustered overlapping vibrant orange/yellow pixel fireballs + flanking charcoal smoke clouds
+          const subT = (t - 0.24) / 0.32;
+          const fireR = Math.max(3, Math.round(sw.endR * (0.56 - subT * 0.16)));
+          const outerCol = isPlasma ? '#28b848' : isIdpd ? '#2c78e8' : isBlood ? '#a81c28' : '#e85814';
+          const midCol = isPlasma ? '#78ff68' : isIdpd ? '#80d8ff' : isBlood ? '#ff4248' : '#ffb828';
+          // Outer billowing dark charcoal smoke puffs behind fireball lobes
+          for (let k = 0; k < lobeCount; k++) {
+            const ang = (k / lobeCount) * Math.PI * 2 + (seed % 11) * 0.35 + 0.3;
+            const sx = Math.round(ix + Math.cos(ang) * spread * 1.05);
+            const sy = Math.round(iy + Math.sin(ang) * spread * 1.05);
+            ctx.fillStyle = '#28252c';
+            drawPixelDisc(ctx, sx, sy, Math.max(3, Math.round(fireR * 0.66)));
+          }
+          // Overlapping hot fireball lobes
+          for (let k = 0; k < lobeCount; k++) {
+            const ang = (k / lobeCount) * Math.PI * 2 + (seed % 7) * 0.4;
+            const fx = Math.round(ix + Math.cos(ang) * spread * 0.62);
+            const fy = Math.round(iy + Math.sin(ang) * spread * 0.62);
+            const lr = Math.max(3, Math.round(fireR * (0.64 + ((k + seed) % 3) * 0.12)));
+            ctx.fillStyle = outerCol;
+            drawPixelDisc(ctx, fx, fy, lr);
+            ctx.fillStyle = midCol;
+            drawPixelDisc(ctx, fx, fy - 1, Math.max(2, Math.round(lr * 0.62)));
+          }
+          ctx.fillStyle = midCol;
+          drawPixelDisc(ctx, ix, iy, Math.max(3, Math.round(fireR * 0.72)));
+          if (subT < 0.45) {
             ctx.fillStyle = '#ffffff';
-            drawPixelDisc(ctx, ix, iy, Math.max(2, Math.round(fireR * 0.36)));
+            drawPixelDisc(ctx, ix, iy, Math.max(2, Math.round(fireR * 0.38)));
           }
         } else {
-          const subT = (t - 0.54) / 0.46;
-          const smokeR = Math.round(Math.max(0, sw.endR * 0.52 * (1 - subT)));
+          // Shrinking opaque dark charcoal smoke cloud cluster
+          const subT = (t - 0.56) / 0.44;
+          const smokeR = Math.round(Math.max(0, sw.endR * 0.44 * (1 - subT)));
           if (smokeR >= 2) {
-            ctx.fillStyle = '#28252c';
-            drawPixelDisc(ctx, ix, iy, smokeR);
-            ctx.fillStyle = '#3a363c';
-            drawPixelDisc(ctx, ix, iy, Math.max(1, smokeR - 2));
+            for (let k = 0; k < lobeCount; k++) {
+              const ang = (k / lobeCount) * Math.PI * 2 + (seed % 11) * 0.35;
+              const sx = Math.round(ix + Math.cos(ang) * spread * 0.85);
+              const sy = Math.round(iy + Math.sin(ang) * spread * 0.85);
+              const lr = Math.max(2, Math.round(smokeR * (0.72 + (k % 2) * 0.25)));
+              ctx.fillStyle = '#28252c';
+              drawPixelDisc(ctx, sx, sy, lr);
+              ctx.fillStyle = '#3a363c';
+              drawPixelDisc(ctx, sx, sy - 1, Math.max(1, lr - 2));
+            }
           }
-        }
-        // Crisp 1px pixel-stepped blast perimeter ring
-        if (t < 0.65) {
-          ctx.fillStyle = t < 0.25 ? '#ffffff' : sw.color;
-          drawPixelRing(ctx, ix, iy, r, 1, 6, Math.floor(t * 12));
         }
       } else {
         // Non-explosion utility shockwave (level-up, melee deflect, corpse impact): crisp 1px pixel ring!

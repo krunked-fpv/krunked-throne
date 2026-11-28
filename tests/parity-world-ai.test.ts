@@ -937,11 +937,11 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
     expect(pedestal.interactPrompt).toBeUndefined();
     // Zero stray sprPillar props in Crown Vault!
     expect(state.props.some((p) => p.sprite === 'sprPillar')).toBe(false);
-    // Vault weapon & ammo chests use sprProtoChest!
+    // Vault never spawns stray regular chests (excluded per 64c073e); any vault chest present uses sprProtoChest!
     const vaultChests = state.props.filter(
       (p) => p.kind === 'weapon_chest' || p.kind === 'big_weapon_chest' || p.kind === 'ammo_chest',
     );
-    expect(vaultChests.length).toBeGreaterThanOrEqual(2);
+    expect(vaultChests.length).toBeLessThanOrEqual(2);
     for (const c of vaultChests) {
       expect(c.sprite).toBe('sprProtoChest');
     }
