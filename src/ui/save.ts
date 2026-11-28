@@ -63,6 +63,7 @@ const AREA_RANK: Record<AreaCode, number> = {
   '5-2': 10,
   '5-3': 11,
   '5-?': 11.5,
+  '$$$': 10.5,
   '6-1': 12,
   '7-1': 13,
   '7-2': 14,
@@ -70,6 +71,8 @@ const AREA_RANK: Record<AreaCode, number> = {
   '0-1': 16,
   vault: 8.2,
   'hq-1': 17,
+  'hq-2': 18,
+  'hq-3': 19,
 };
 
 function compareProgress(
@@ -195,10 +198,10 @@ function clampDeadzone(val: unknown, fallback: number): number {
 
 export function createDefaultMutantProgress(id: MutantId): MutantSaveProgress {
   return {
-    unlocked: true, // All 12 mutants unlocked by default for full-roster play
-    bSkinUnlocked: true,
+    unlocked: id !== 'skeleton' && id !== 'frog',
+    bSkinUnlocked: false,
     goldenWeapon: id === 'yv' ? 'golden_revolver' : null,
-    crownsUnlocked: [...ALL_CROWN_IDS],
+    crownsUnlocked: ['none'],
     bestArea: '1-1',
     bestLoop: 0,
     bestKills: 0,
@@ -218,6 +221,12 @@ export function createDefaultSaveData(): SaveData {
     selectedSkins: {},
     selectedCrown: 'none',
     useGoldenWeapon: false,
+    unlockAll: false,
+    hardModeUnlocked: false,
+    hardModeEnabled: false,
+    protoChestWeaponId: null,
+    frogUnlocked: false,
+    skeletonUnlocked: false,
     audio: {
       masterVolume: 0.8,
       sfxVolume: 0.9,
@@ -248,7 +257,7 @@ export function createDefaultSaveData(): SaveData {
 
 /**
  * Validates and sanitizes an untrusted JSON object into a complete, schema-valid SaveData.
- * Always guarantees all 12 mutants exist and remain playable.
+ * Safely migrates older v1 saves (12-mutant schema) to the full 14-mutant Wave 2 schema.
  */
 export function validateSaveData(raw: unknown): SaveData {
   const def = createDefaultSaveData();
@@ -279,6 +288,16 @@ export function validateSaveData(raw: unknown): SaveData {
     obj.mutants && typeof obj.mutants === 'object' ? obj.mutants : {}
   ) as Record<string, unknown>;
 
+  const unlockAll = boolVal(obj.unlockAll, def.unlockAll);
+  let frogUnlocked = boolVal(obj.frogUnlocked, def.frogUnlocked);
+  let skeletonUnlocked = boolVal(obj.skeletonUnlocked, def.skeletonUnlocked);
+  const hardModeUnlocked = boolVal(obj.hardModeUnlocked, def.hardModeUnlocked);
+  const hardModeEnabled = boolVal(obj.hardModeEnabled, def.hardModeEnabled);
+  const protoChestWeaponId =
+    typeof obj.protoChestWeaponId === 'string' && obj.protoChestWeaponId.trim().length > 0
+      ? obj.protoChestWeaponId.trim()
+      : null;
+
   const selectedSkins: Partial<Record<MutantId, 'a' | 'b'>> = {};
   for (const id of ALL_MUTANT_IDS) {
     const s = skinsRaw[id];
@@ -292,7 +311,15 @@ export function validateSaveData(raw: unknown): SaveData {
     const mDef = createDefaultMutantProgress(id);
     const mRaw = mutantsRaw[id];
     if (!mRaw || typeof mRaw !== 'object' || Array.isArray(mRaw)) {
-      mutants[id] = mDef;
+      mutants[id] = {
+        ...mDef,
+        unlocked:
+          id === 'frog'
+            ? frogUnlocked
+            : id === 'skeleton'
+              ? skeletonUnlocked
+              : mDef.unlocked,
+      };
       continue;
     }
     const mr = mRaw as Record<string, unknown>;
@@ -301,9 +328,22 @@ export function validateSaveData(raw: unknown): SaveData {
       : mDef.crownsUnlocked;
     const crownSet = new Set<CrownId>(['none', ...rawCrowns]);
 
+    const unlocked =
+      id === 'frog'
+        ? boolVal(mr.unlocked, false) || frogUnlocked
+        : id === 'skeleton'
+          ? boolVal(mr.unlocked, false) || skeletonUnlocked
+          : true; // Core 12 mutants remain unlocked for full-roster play
+
+    if (id === 'frog' && unlocked) frogUnlocked = true;
+    if (id === 'skeleton' && unlocked) skeletonUnlocked = true;
+
     mutants[id] = {
-      unlocked: true, // Keep all 12 mutants unlocked for full-roster play
-      bSkinUnlocked: true, // Keep all B-skins unlocked for immediate campfire toggling
+      unlocked,
+      bSkinUnlocked:
+        id === 'skeleton' || id === 'frog'
+          ? false
+          : boolVal(mr.bSkinUnlocked, mDef.bSkinUnlocked),
       goldenWeapon:
         typeof mr.goldenWeapon === 'string' && mr.goldenWeapon.length > 0
           ? mr.goldenWeapon
@@ -335,6 +375,12 @@ export function validateSaveData(raw: unknown): SaveData {
     selectedSkins,
     selectedCrown: isCrownId(obj.selectedCrown) ? obj.selectedCrown : def.selectedCrown,
     useGoldenWeapon: boolVal(obj.useGoldenWeapon, def.useGoldenWeapon),
+    unlockAll,
+    hardModeUnlocked,
+    hardModeEnabled,
+    protoChestWeaponId,
+    frogUnlocked,
+    skeletonUnlocked,
     audio: {
       masterVolume: clamp01(audioRaw.masterVolume, def.audio.masterVolume),
       sfxVolume: clamp01(audioRaw.sfxVolume, def.audio.sfxVolume),
@@ -385,6 +431,7 @@ export interface RunSummaryInput {
   loop: number;
   kills: number;
   victory?: boolean;
+  bSkinUnlocked?: boolean;
   crown?: CrownId;
   goldenWeapon?: string | null;
 }
@@ -468,6 +515,7 @@ export class SaveManager {
   }
 
   getSelectedSkin(mutant: MutantId = this.data.selectedMutant): 'a' | 'b' {
+    if (!this.isBSkinUnlocked(mutant)) return 'a';
     return this.data.selectedSkins[mutant] ?? 'a';
   }
 
@@ -477,14 +525,115 @@ export class SaveManager {
   }
 
   setSelectedSkin(mutant: MutantId, skin: 'a' | 'b'): void {
-    this.data.selectedSkins[mutant] = skin;
+    this.data.selectedSkins[mutant] = skin === 'b' && !this.isBSkinUnlocked(mutant) ? 'a' : skin;
     this.save();
   }
 
   toggleSelectedSkin(mutant: MutantId = this.data.selectedMutant): 'a' | 'b' {
+    if (!this.isBSkinUnlocked(mutant)) {
+      this.data.selectedSkins[mutant] = 'a';
+      this.save();
+      return 'a';
+    }
     const next: 'a' | 'b' = this.getSelectedSkin(mutant) === 'a' ? 'b' : 'a';
     this.setSelectedSkin(mutant, next);
     return next;
+  }
+
+  isUnlockAll(): boolean {
+    return this.data.unlockAll;
+  }
+
+  setUnlockAll(enabled: boolean): void {
+    this.data.unlockAll = Boolean(enabled);
+    this.save();
+  }
+
+  isMutantUnlocked(mutant: MutantId): boolean {
+    if (this.data.unlockAll) return true;
+    if (mutant === 'frog') return this.data.frogUnlocked || Boolean(this.data.mutants.frog?.unlocked);
+    if (mutant === 'skeleton') {
+      return this.data.skeletonUnlocked || Boolean(this.data.mutants.skeleton?.unlocked);
+    }
+    return Boolean(this.data.mutants[mutant]?.unlocked);
+  }
+
+  isBSkinUnlocked(mutant: MutantId): boolean {
+    if (mutant === 'skeleton' || mutant === 'frog') return false;
+    if (this.data.unlockAll) return true;
+    return Boolean(this.data.mutants[mutant]?.bSkinUnlocked);
+  }
+
+  unlockBSkin(mutant: MutantId): void {
+    if (mutant === 'skeleton' || mutant === 'frog') return;
+    const mp = this.data.mutants[mutant];
+    if (mp && !mp.bSkinUnlocked) {
+      mp.bSkinUnlocked = true;
+      this.save();
+    }
+  }
+
+  isCrownUnlocked(mutant: MutantId, crown: CrownId): boolean {
+    if (crown === 'none' || this.data.unlockAll) return true;
+    return Boolean(this.data.mutants[mutant]?.crownsUnlocked.includes(crown));
+  }
+
+  getUnlockedCrowns(mutant: MutantId): readonly CrownId[] {
+    if (this.data.unlockAll) return ALL_CROWN_IDS;
+    return this.data.mutants[mutant]?.crownsUnlocked ?? ['none'];
+  }
+
+  unlockCrown(mutant: MutantId, crown: CrownId): void {
+    const mp = this.data.mutants[mutant];
+    if (mp && !mp.crownsUnlocked.includes(crown)) {
+      mp.crownsUnlocked.push(crown);
+      this.save();
+    }
+  }
+
+  isHardModeUnlocked(): boolean {
+    return this.data.unlockAll || this.data.hardModeUnlocked;
+  }
+
+  isHardModeActive(): boolean {
+    return this.isHardModeUnlocked() && this.data.hardModeEnabled;
+  }
+
+  unlockHardMode(): void {
+    if (!this.data.hardModeUnlocked) {
+      this.data.hardModeUnlocked = true;
+      this.save();
+    }
+  }
+
+  setHardModeEnabled(enabled: boolean): void {
+    this.data.hardModeEnabled = Boolean(enabled) && this.isHardModeUnlocked();
+    this.save();
+  }
+
+  unlockFrog(): void {
+    this.data.frogUnlocked = true;
+    if (this.data.mutants.frog) {
+      this.data.mutants.frog.unlocked = true;
+    }
+    this.save();
+  }
+
+  unlockSkeleton(): void {
+    this.data.skeletonUnlocked = true;
+    if (this.data.mutants.skeleton) {
+      this.data.mutants.skeleton.unlocked = true;
+    }
+    this.save();
+  }
+
+  getProtoChestWeapon(): string | null {
+    return this.data.protoChestWeaponId;
+  }
+
+  setProtoChestWeapon(weaponId: string | null): void {
+    this.data.protoChestWeaponId = weaponId && weaponId.trim().length > 0 ? weaponId.trim() : null;
+    this.save();
   }
 
   setSelectedCrown(crown: CrownId): void {
@@ -605,6 +754,10 @@ export class SaveManager {
       this.data.bestArea = summary.areaCode;
     }
 
+    if (loop >= 2) {
+      this.data.hardModeUnlocked = true;
+    }
+
     const mp = this.data.mutants[summary.mutant];
     if (mp) {
       if (kills > mp.bestKills) mp.bestKills = kills;
@@ -612,7 +765,7 @@ export class SaveManager {
         mp.bestLoop = loop;
         mp.bestArea = summary.areaCode;
       }
-      if (summary.victory) {
+      if (summary.bSkinUnlocked && summary.mutant !== 'skeleton' && summary.mutant !== 'frog') {
         mp.bSkinUnlocked = true;
       }
       if (summary.crown && !mp.crownsUnlocked.includes(summary.crown)) {

@@ -136,6 +136,24 @@ export const CROWNS: Record<CrownId, CrownDef> = {
   },
 };
 
+export const PRE_LOOP_CROWN_IDS: readonly CrownId[] = [
+  'death',
+  'life',
+  'haste',
+  'guns',
+  'hatred',
+  'destiny',
+] as const;
+
+export const POST_LOOP_CROWN_IDS: readonly CrownId[] = [
+  'blood',
+  'love',
+  'luck',
+  'curses',
+  'risk',
+  'protection',
+] as const;
+
 export function getCrownDef(id: CrownId): CrownDef {
   return CROWNS[id];
 }

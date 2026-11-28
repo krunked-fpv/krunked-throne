@@ -169,7 +169,9 @@ export type MutantId =
   | 'chicken'
   | 'rebel'
   | 'horror'
-  | 'rogue';
+  | 'rogue'
+  | 'skeleton'
+  | 'frog';
 
 export type AmmoType = 'melee' | 'bullet' | 'shell' | 'bolt' | 'explosive' | 'energy';
 
@@ -204,7 +206,7 @@ export type MutationId =
   | 'open_mind'
   | 'heavy_heart';
 
-export type UltraId = `${MutantId}_a` | `${MutantId}_b`;
+export type UltraId = `${MutantId}_a` | `${MutantId}_b` | 'horror_c';
 
 export type CrownId =
   | 'none'
@@ -236,7 +238,8 @@ export type BiomeId =
   | 'mansion'
   | 'cursed_caves'
   | 'jungle'
-  | 'hq';
+  | 'hq'
+  | 'crib';
 
 export type AreaCode =
   | '1-1'
@@ -261,9 +264,87 @@ export type AreaCode =
   | '4-?'
   | '5-?'
   | 'vault'
-  | 'hq-1';
+  | 'hq-1'
+  | 'hq-2'
+  | 'hq-3'
+  | '$$$';
 
-export type BossId = 'big_bandit' | 'big_dog' | 'lil_hunter' | 'nuclear_throne' | 'throne_ii';
+export type BossId =
+  | 'big_bandit'
+  | 'big_dog'
+  | 'lil_hunter'
+  | 'nuclear_throne'
+  | 'throne_ii'
+  | 'mom'
+  | 'hyper_crystal'
+  | 'technomancer'
+  | 'captain';
+
+export type EnemyId =
+  | 'bandit'
+  | 'maggot'
+  | 'maggot_nest'
+  | 'big_maggot'
+  | 'scorpion'
+  | 'gold_scorpion'
+  | 'rat'
+  | 'big_rat'
+  | 'green_rat'
+  | 'gator'
+  | 'buff_gator'
+  | 'ballguy'
+  | 'toxic_ballguy'
+  | 'raven'
+  | 'sniper'
+  | 'salamander'
+  | 'assassin'
+  | 'fireballer'
+  | 'super_fireballer'
+  | 'spider'
+  | 'cursed_spider'
+  | 'laser_crystal'
+  | 'cursed_laser_crystal'
+  | 'lightning_crystal'
+  | 'snowbot'
+  | 'snow_bandit'
+  | 'wolf'
+  | 'snow_tank'
+  | 'gold_snow_tank'
+  | 'freak'
+  | 'rhino_freak'
+  | 'explo_freak'
+  | 'necromancer'
+  | 'turret'
+  | 'guardian'
+  | 'explo_guardian'
+  | 'guardian_dog'
+  | 'crown_guardian'
+  | 'molefish'
+  | 'molesarge'
+  | 'jock'
+  | 'bonefish'
+  | 'crab'
+  | 'turtle'
+  | 'jungle_bandit'
+  | 'jungle_assassin'
+  | 'jungle_fly'
+  | 'idpd_grunt'
+  | 'idpd_inspector'
+  | 'idpd_shielder'
+  | 'idpd_van'
+  | 'elite_grunt'
+  | 'elite_inspector'
+  | 'elite_shielder'
+  | 'idpd_freak'
+  | 'mimic'
+  | 'weapon_mimic'
+  | 'health_mimic'
+  | 'rad_maggot'
+  | 'fire_trap'
+  | 'enemy_horror'
+  | 'rebel_ally'
+  | 'plant_sapling'
+  | BossId;
 
 export type ProjectileKind =
   | 'bullet'
@@ -326,6 +407,8 @@ export interface WeaponDef {
   golden?: boolean;
   cursed?: boolean;
   ultra?: boolean;
+  specialOnly?: boolean;
+  hardModeOnly?: boolean;
   radCost?: number;
   sprite: string;
   projectileSprite?: string;
@@ -336,7 +419,7 @@ export interface WeaponDef {
 export interface UltraDef {
   id: UltraId;
   mutant: MutantId;
-  slot: 'a' | 'b';
+  slot: 'a' | 'b' | 'c';
   name: string;
   description: string;
   iconIndex: number;
@@ -356,7 +439,7 @@ export interface MutantDef {
   activeName: string;
   activeDesc: string;
   throneButtDesc: string;
-  ultras: [UltraDef, UltraDef];
+  ultras: [UltraDef, UltraDef] | [UltraDef, UltraDef, UltraDef];
   sprites: {
     idle: string;
     walk: string;
@@ -403,7 +486,7 @@ export interface CrownDef {
 }
 
 export interface EnemyDef {
-  id: string;
+  id: EnemyId;
   name: string;
   biomes: BiomeId[];
   maxHp: number;
@@ -441,6 +524,13 @@ export interface EnemyDef {
     | 'idpd_inspector'
     | 'idpd_shielder'
     | 'idpd_van'
+    | 'idpd_freak'
+    | 'bonefish'
+    | 'crab'
+    | 'jungle_fly'
+    | 'jock'
+    | 'enemy_horror'
+    | 'fire_trap'
     | 'mimic'
     | 'boss';
   sprites: {
@@ -540,6 +630,8 @@ export interface WeaponSlotState {
   meleeSwingSide?: 1 | -1;
 }
 
+export type WeaponInstance = WeaponSlotState;
+
 export interface PlayerState {
   id: number;
   mutant: MutantId;
@@ -590,6 +682,8 @@ export interface PlayerState {
   alive: boolean;
   lastDamageCause: string;
   lastKillerSprite: string;
+  frogRooted?: boolean;
+  skeletonTransformed?: boolean;
 }
 
 export interface EnemyEntity {
@@ -658,7 +752,7 @@ export interface ProjectileEntity {
   beamOriginY?: number;
 }
 
-export type PickupKind = 'rad' | 'big_rad' | 'ammo' | 'hp' | 'weapon' | 'portal_strike';
+export type PickupKind = 'rad' | 'big_rad' | 'ammo' | 'cursed_ammo' | 'hp' | 'weapon' | 'portal_strike';
 
 export interface PickupEntity {
   id: number;
@@ -691,7 +785,40 @@ export type PropKind =
   | 'cactus'
   | 'bone_pile'
   | 'pillar'
-  | 'snare_trap';
+  | 'snare_trap'
+  | 'venuz_tv'
+  | 'venuz_couch'
+  | 'yung_cuz'
+  | 'giant_weapon_chest'
+  | 'giant_ammo_chest'
+  | 'venuz_car_exit'
+  | 'captain_desk'
+  | 'big_tv'
+  | 'last_chair'
+  | 'messenger'
+  | 'office_table'
+  | 'terminal'
+  | 'small_generator'
+  | 'server'
+  | 'frog_egg'
+  | 'fire_trap'
+  | 'water_mine'
+  | 'water_plant'
+  | 'gold_barrel'
+  | 'chandelier'
+  | 'snowman'
+  | 'cocoon'
+  | 'jungle_bush'
+  | 'sewer_pipe'
+  | 'torch'
+  | 'tires'
+  | 'throne_statue'
+  | 'vault_statue'
+  | 'rad_maggot_canister'
+  | 'pizza_chest'
+  | 'necro_revive_area'
+  | 'proto_chest'
+  | 'health_chest';
 
 export interface PropEntity {
   id: number;
@@ -872,6 +999,16 @@ export interface SimState {
   nextEntityId: number;
   portalTransitionTicks: number;
   floorClearTrigger: boolean;
+  visitedCrib?: boolean;
+  cribReturnArea?: AreaCode | null;
+  radCanisterSkipStreak?: number;
+  weaponChestSkipStreak?: number;
+  difficulty?: number;
+  hardMode?: boolean;
+  vaultAmbushPending?: boolean;
+  pendingPatiencePick?: boolean;
+  chickenDroppedSwordOn1_1?: boolean;
+  endingType?: 'throne' | 'captain';
 }
 
 // ============================================================================
@@ -950,6 +1087,12 @@ export interface SaveData {
   bestKills: number;
   bestArea: AreaCode;
   bestLoop: number;
+  unlockAll: boolean;
+  hardModeUnlocked: boolean;
+  hardModeEnabled: boolean;
+  protoChestWeaponId: string | null;
+  frogUnlocked: boolean;
+  skeletonUnlocked: boolean;
 }
 
 export type GameScreen =

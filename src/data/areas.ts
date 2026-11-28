@@ -24,6 +24,9 @@ export const AREA_CODES: readonly AreaCode[] = [
   '5-?',
   'vault',
   'hq-1',
+  'hq-2',
+  'hq-3',
+  '$$$',
 ] as const;
 
 export const AREAS: Record<AreaCode, AreaDef> = {
@@ -345,9 +348,9 @@ export const AREAS: Record<AreaCode, AreaDef> = {
     wallBotSprite: 'sprWall0Bot',
     wallOutSprite: 'sprWall0Out',
     wallTransSprite: 'sprWall0Trans',
-    musicTrack: 'mus/Boss5',
+    musicTrack: 'mus/Boss4B',
     ambienceTrack: 'amb/0',
-    bossMusicTrack: 'mus/Boss5',
+    bossMusicTrack: 'mus/Boss4B',
     targetFloors: 420,
     walkerCount: 3,
     enemyBudgetBase: 0,
@@ -471,8 +474,8 @@ export const AREAS: Record<AreaCode, AreaDef> = {
   'hq-1': {
     code: 'hq-1',
     biome: 'hq',
-    name: 'IDPD HQ',
-    nextArea: '1-1',
+    name: 'IDPD HQ 1',
+    nextArea: 'hq-2',
     darkness: 0.1,
     floorSprite: 'sprFloor106',
     floorExploSprite: 'sprFloor106Explo',
@@ -488,6 +491,67 @@ export const AREAS: Record<AreaCode, AreaDef> = {
     enemyBudgetBase: 54,
     weaponTierBase: 11,
   },
+  'hq-2': {
+    code: 'hq-2',
+    biome: 'hq',
+    name: 'IDPD HQ 2',
+    nextArea: 'hq-3',
+    darkness: 0.1,
+    floorSprite: 'sprFloor106',
+    floorExploSprite: 'sprFloor106Explo',
+    wallTopSprite: 'sprWall106Top',
+    wallBotSprite: 'sprWall106Bot',
+    wallOutSprite: 'sprWall106Out',
+    wallTransSprite: 'sprWall106Trans',
+    musicTrack: 'mus/106',
+    musicTrackB: 'mus/106b',
+    ambienceTrack: 'amb/106',
+    targetFloors: 260,
+    walkerCount: 3,
+    enemyBudgetBase: 60,
+    weaponTierBase: 11,
+  },
+  'hq-3': {
+    code: 'hq-3',
+    biome: 'hq',
+    name: 'IDPD HQ 3',
+    nextArea: '1-1',
+    bossId: 'captain',
+    darkness: 0.08,
+    floorSprite: 'sprFloor106',
+    floorExploSprite: 'sprFloor106Explo',
+    wallTopSprite: 'sprWall106Top',
+    wallBotSprite: 'sprWall106Bot',
+    wallOutSprite: 'sprWall106Out',
+    wallTransSprite: 'sprWall106Trans',
+    musicTrack: 'mus/106',
+    musicTrackB: 'mus/106b',
+    ambienceTrack: 'amb/106',
+    bossMusicTrack: 'mus/Boss8',
+    targetFloors: 420,
+    walkerCount: 1,
+    enemyBudgetBase: 0,
+    weaponTierBase: 12,
+  },
+  '$$$': {
+    code: '$$$',
+    biome: 'crib',
+    name: "Y.V.'S CRIB $$$",
+    nextArea: '1-1',
+    darkness: 0,
+    floorSprite: 'sprFloor107',
+    floorExploSprite: 'sprFloor107Explo',
+    wallTopSprite: 'sprWall107Top',
+    wallBotSprite: 'sprWall107Bot',
+    wallOutSprite: 'sprWall107Out',
+    wallTransSprite: 'sprWall107Trans',
+    musicTrack: 'mus/107',
+    ambienceTrack: 'amb/0',
+    targetFloors: 260,
+    walkerCount: 1,
+    enemyBudgetBase: 0,
+    weaponTierBase: 10,
+  },
 };
 
 export function getAreaDef(code: AreaCode): AreaDef {
@@ -499,7 +563,7 @@ export function getNextAreaTransition(
   currentLoop: number,
 ): { areaCode: AreaCode; loop: number } {
   const def = AREAS[current];
-  if (current === '0-1' || current === 'hq-1') {
+  if (current === '0-1' || current === 'hq-3') {
     return { areaCode: '1-1', loop: currentLoop + 1 };
   }
   return { areaCode: def.nextArea, loop: currentLoop };

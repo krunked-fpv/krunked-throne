@@ -51,6 +51,10 @@ function makeSteamLikeManifest(): AssetManifest {
       'mus/Boss4B': 'audio/mus/Boss4B.ogg',
       'mus/Boss4Silence': 'audio/mus/Boss4Silence.ogg',
       'mus/Boss5': 'audio/mus/Boss5.ogg',
+      'mus/Boss6': 'audio/mus/Boss6.ogg',
+      'mus/Boss6B': 'audio/mus/Boss6B.ogg',
+      'mus/Boss7': 'audio/mus/Boss7.ogg',
+      'mus/Boss8': 'audio/mus/Boss8.ogg',
       'mus/1': 'audio/mus/1.ogg',
       'mus/1b': 'audio/mus/1b.ogg',
       'mus/2': 'audio/mus/2.ogg',
@@ -71,6 +75,7 @@ function makeSteamLikeManifest(): AssetManifest {
       'mus/105': 'audio/mus/105.ogg',
       'mus/106': 'audio/mus/106.ogg',
       'mus/106b': 'audio/mus/106b.ogg',
+      'mus/107': 'audio/mus/107.ogg',
     },
     ambience: {
       'amb/0': 'audio/amb/0.ogg',
@@ -432,7 +437,7 @@ describe('parity-app-audio: Music & Ambience Routing (Steam + Synth + Loop B-Tra
       ambienceTrack: 'amb/106',
     });
 
-    // 7-3 before waking The Throne -> mus/Boss4Silence; awake -> mus/Boss4A; Loop 1 -> mus/Boss4B; defeated -> mus/BossDead
+    // 7-3 before waking The Throne -> mus/Boss4Silence; awake -> mus/Boss4A; Throne II -> mus/Boss4B; defeated -> mus/BossDead
     expect(resolveMusicRoute({ areaCode: '7-3', biome: 'palace', bossId: null }, steam).musicTrack).toBe(
       'mus/Boss4Silence',
     );
@@ -440,19 +445,39 @@ describe('parity-app-audio: Music & Ambience Routing (Steam + Synth + Loop B-Tra
       resolveMusicRoute({ areaCode: '7-3', biome: 'palace', bossId: 'nuclear_throne', loop: 0 }, steam).musicTrack,
     ).toBe('mus/Boss4A');
     expect(
-      resolveMusicRoute({ areaCode: '7-3', biome: 'palace', bossId: 'nuclear_throne', loop: 1 }, steam).musicTrack,
+      resolveMusicRoute({ areaCode: '0-1', biome: 'campfire', bossId: 'throne_ii', loop: 0 }, steam).musicTrack,
     ).toBe('mus/Boss4B');
+    expect(resolveMusicRoute({ areaCode: '2-1', biome: 'sewers', bossId: 'mom', loop: 1 }, steam).musicTrack).toBe(
+      'mus/Boss5',
+    );
+    expect(
+      resolveMusicRoute({ areaCode: '4-1', biome: 'caves', bossId: 'hyper_crystal', loop: 1 }, steam).musicTrack,
+    ).toBe('mus/Boss6');
+    expect(
+      resolveMusicRoute({ areaCode: '4-?', biome: 'cursed_caves', bossId: 'hyper_crystal', loop: 1 }, steam).musicTrack,
+    ).toBe('mus/Boss6B');
+    expect(
+      resolveMusicRoute({ areaCode: '6-1', biome: 'labs', bossId: 'technomancer', loop: 1 }, steam).musicTrack,
+    ).toBe('mus/Boss7');
+    expect(
+      resolveMusicRoute({ areaCode: 'hq-3', biome: 'hq', bossId: 'captain', loop: 1 }, steam).musicTrack,
+    ).toBe('mus/Boss8');
+    expect(resolveMusicRoute({ areaCode: '$$$', biome: 'crib' }, steam)).toMatchObject({
+      musicTrack: 'mus/107',
+      ambienceTrack: 'amb/0',
+    });
     expect(
       resolveMusicRoute({ areaCode: '7-3', biome: 'palace', bossId: null, bossDefeated: true }, steam).musicTrack,
     ).toBe('mus/BossDead');
 
-    // Loop 1 B-side biome tracks
+    // Loop 1 B-side biome tracks (HQ mus/106b plays ONLY for Rogue!)
     expect(resolveMusicRoute({ areaCode: '1-1', biome: 'desert', loop: 1 }, steam).musicTrack).toBe('mus/1b');
     expect(resolveMusicRoute({ areaCode: '3-1', biome: 'scrapyard', loop: 1 }, steam).musicTrack).toBe('mus/3b');
     expect(resolveMusicRoute({ areaCode: '5-1', biome: 'frozen_city', loop: 1 }, steam).musicTrack).toBe('mus/5b');
     expect(resolveMusicRoute({ areaCode: '7-1', biome: 'palace', loop: 1 }, steam).musicTrack).toBe('mus/7b');
     expect(resolveMusicRoute({ areaCode: 'vault', biome: 'vault', loop: 1 }, steam).musicTrack).toBe('mus/100b');
-    expect(resolveMusicRoute({ areaCode: 'hq-1', biome: 'hq', loop: 1 }, steam).musicTrack).toBe('mus/106b');
+    expect(resolveMusicRoute({ areaCode: 'hq-1', biome: 'hq', loop: 1, mutant: 'fish' }, steam).musicTrack).toBe('mus/106');
+    expect(resolveMusicRoute({ areaCode: 'hq-1', biome: 'hq', loop: 1, mutant: 'rogue' }, steam).musicTrack).toBe('mus/106b');
   });
 
   it('maps numeric NT 100..106 & boss silence/dead keys accurately in SynthMusicSequencer', () => {
@@ -805,7 +830,7 @@ describe('parity-app-audio: GameApp Loop Integration, Sleeping Boss Music, Curso
         // Wake Throne -> boss combat track
         throneEnt.aiState = 'idle';
         internal.syncMusicRouting();
-        expect(internal.audio.getStats().currentMusic).toBe('mus/Boss4');
+        expect(internal.audio.getStats().currentMusic).toBe('mus/Boss4A');
 
         // Defeat Throne -> BossDead wind-down
         st.boss.defeated = true;

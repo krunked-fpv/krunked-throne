@@ -73,8 +73,36 @@ export const BOSS_META: Record<BossId, BossMeta> = {
     id: 'throne_ii',
     name: 'THRONE II',
     subtitle: 'REBORN IN RADIATION',
-    musicTrack: 'mus/Boss5',
+    musicTrack: 'mus/Boss4B',
     introSound: 'sndNothing2Appear',
+  },
+  mom: { // Wave 2B
+    id: 'mom',
+    name: 'MOM',
+    subtitle: 'MATRIARCH OF THE SEWERS',
+    musicTrack: 'mus/Boss5',
+    introSound: 'sndBallMamaAppear',
+  },
+  hyper_crystal: { // Wave 2B
+    id: 'hyper_crystal',
+    name: 'HYPER CRYSTAL',
+    subtitle: 'HEART OF THE CAVES',
+    musicTrack: 'mus/Boss6',
+    introSound: 'sndHyperCrystalAppear',
+  },
+  technomancer: { // Wave 2B
+    id: 'technomancer',
+    name: 'TECHNOMANCER',
+    subtitle: 'ARCHITECT OF THE LABS',
+    musicTrack: 'mus/Boss7',
+    introSound: 'sndTechnomancerActivate',
+  },
+  captain: { // Wave 2B
+    id: 'captain',
+    name: 'CAPTAIN',
+    subtitle: 'COMMANDER OF THE I.D.P.D.',
+    musicTrack: 'mus/Boss8',
+    introSound: 'sndLastIntro',
   },
 };
 
@@ -1581,7 +1609,7 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
   } else if (budget > 0 && pool.length > 0) {
     const maxEnemiesCap = Math.min(76, 26 + state.loop * 14 + (state.crown === 'blood' ? 12 : 0));
     const templates = pickBiomeSquadTemplates(state);
-    const allowedIds = new Set(pool.map((p) => p.def.id));
+    const allowedIds = new Set<string>(pool.map((p) => p.def.id)); // Wave 2B
     let remaining = budget;
 
     // First pass: stamp 1 cohesive biome squad at each encounter anchor

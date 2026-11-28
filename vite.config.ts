@@ -1,6 +1,9 @@
 import { defineConfig, type Plugin } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const MIME_TYPES: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',

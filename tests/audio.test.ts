@@ -131,8 +131,16 @@ describe('audio: Music Routing, Pause Ducking & Headless Fallback', () => {
     expect(resolveMusicRoute({ bossId: 'big_bandit' }).musicTrack).toBe('mus/Boss1');
     expect(resolveMusicRoute({ bossId: 'big_dog' }).musicTrack).toBe('mus/Boss2');
     expect(resolveMusicRoute({ bossId: 'lil_hunter' }).musicTrack).toBe('mus/Boss3');
-    expect(resolveMusicRoute({ bossId: 'nuclear_throne' }).musicTrack).toBe('mus/Boss4');
-    expect(resolveMusicRoute({ bossId: 'throne_ii' }).musicTrack).toBe('mus/Boss5');
+    expect(resolveMusicRoute({ bossId: 'nuclear_throne' }).musicTrack).toBe('mus/Boss4A');
+    expect(resolveMusicRoute({ bossId: 'throne_ii' }).musicTrack).toBe('mus/Boss4B');
+    expect(resolveMusicRoute({ bossId: 'mom' }).musicTrack).toBe('mus/Boss5');
+    expect(resolveMusicRoute({ bossId: 'hyper_crystal' }).musicTrack).toBe('mus/Boss6');
+    expect(resolveMusicRoute({ areaCode: '4-?', biome: 'cursed_caves', bossId: 'hyper_crystal' }).musicTrack).toBe('mus/Boss6B');
+    expect(resolveMusicRoute({ bossId: 'technomancer' }).musicTrack).toBe('mus/Boss7');
+    expect(resolveMusicRoute({ bossId: 'captain' }).musicTrack).toBe('mus/Boss8');
+    expect(resolveMusicRoute({ areaCode: '$$$', biome: 'crib' }).musicTrack).toBe('mus/107');
+    expect(resolveMusicRoute({ areaCode: 'hq-1', biome: 'hq', loop: 1, mutant: 'fish' }).musicTrack).toBe('mus/106');
+    expect(resolveMusicRoute({ areaCode: 'hq-1', biome: 'hq', loop: 1, mutant: 'rogue' }).musicTrack).toBe('mus/106b');
 
     const paused = resolveMusicRoute({ areaCode: '1-1', paused: true });
     expect(paused.duckingFactor).toBe(PAUSE_DUCKING_FACTOR);

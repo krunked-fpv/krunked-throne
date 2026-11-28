@@ -40,6 +40,7 @@ export const BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   campfire: '#8c7a5c',
   vault: '#3d4d58',
   hq: '#b8c2cc',
+  crib: '#6e2844', // Wave 2B
 };
 
 /**
@@ -62,6 +63,7 @@ export const STEAM_BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   campfire: '#9a8262',
   vault: '#485864',
   hq: '#b8c2cc',
+  crib: '#6e2844', // Wave 2B
 };
 
 export function getBiomeRoofColor(biome: BiomeId, isSteam: boolean = false): string {

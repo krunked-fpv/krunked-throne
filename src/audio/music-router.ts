@@ -3,13 +3,14 @@
  * Maps screen, area, biome, boss, loop, and pause state to canonical audio asset keys.
  */
 
-import type { AreaCode, AssetManifest, BiomeId, BossId, GameScreen } from '@/contracts';
+import type { AreaCode, AssetManifest, BiomeId, BossId, GameScreen, MutantId } from '@/contracts';
 
 export interface MusicRouteContext {
   screen?: GameScreen;
   areaCode?: AreaCode;
   biome?: BiomeId;
   loop?: number;
+  mutant?: MutantId;
   bossId?: BossId | null;
   bossDefeated?: boolean;
   paused?: boolean;
@@ -29,18 +30,21 @@ export const BOSS_MUSIC_MAP: Record<BossId, readonly string[]> = {
   big_bandit: ['mus/Boss1', 'musBoss1', 'mus/boss1', 'mus/Boss1A', 'musBoss1A'],
   big_dog: ['mus/Boss2', 'musBoss2', 'mus/boss2', 'mus/Boss2A', 'musBoss2A'],
   lil_hunter: ['mus/Boss3', 'musBoss3', 'mus/boss3', 'mus/Boss3A', 'musBoss3A'],
-  nuclear_throne: ['mus/Boss4', 'mus/Boss4A', 'musBoss4A', 'musBoss4', 'mus/boss4'],
-  throne_ii: ['mus/Boss5', 'musBoss5', 'mus/boss5', 'mus/Boss5A', 'musBoss5A'],
+  nuclear_throne: ['mus/Boss4A', 'mus/Boss4', 'musBoss4A', 'musBoss4', 'mus/boss4'],
+  throne_ii: ['mus/Boss4B', 'musBoss4B', 'mus/boss4b'],
+  mom: ['mus/Boss5', 'musBoss5', 'mus/boss5'],
+  hyper_crystal: ['mus/Boss6', 'musBoss6', 'mus/boss6'],
+  technomancer: ['mus/Boss7', 'musBoss7', 'mus/boss7'],
+  captain: ['mus/Boss8', 'musBoss8', 'mus/boss8'],
 };
 
-/** Alternate Loop B-tracks for biomes that have B-side themes in Nuclear Throne */
+/** Alternate Loop B-tracks for biomes that have Loop 1+ B-side themes in Nuclear Throne */
 export const BIOME_MUSIC_B_MAP: Partial<Record<BiomeId, readonly string[]>> = {
   desert: ['mus/1b', 'mus1b', 'mus/1', 'mus1'],
   scrapyard: ['mus/3b', 'mus3b', 'mus/3', 'mus3'],
   frozen_city: ['mus/5b', 'mus5b', 'mus/5', 'mus5'],
   palace: ['mus/7b', 'mus7b', 'mus/7', 'mus7'],
   vault: ['mus/100b', 'mus100b', 'mus/100', 'mus100'],
-  hq: ['mus/106b', 'mus106b', 'mus/106', 'mus106'],
 };
 
 /** Candidate priority list for Biome / Area music */
@@ -60,6 +64,7 @@ export const BIOME_MUSIC_MAP: Record<BiomeId, readonly string[]> = {
   cursed_caves: ['mus/104', 'mus104', 'mus/4', 'musCursedCaves'],
   jungle: ['mus/105', 'mus105', 'mus/5b', 'mus/5', 'musJungle'],
   hq: ['mus/106', 'mus106', 'mus/7', 'musHQ', 'mus/hq'],
+  crib: ['mus/107', 'mus107', 'mus/103', 'musMansion'],
 };
 
 /** Candidate priority list for Biome / Area ambience */
@@ -79,6 +84,7 @@ export const BIOME_AMBIENCE_MAP: Record<BiomeId, readonly string[]> = {
   cursed_caves: ['amb/104', 'amb104', 'amb/4', 'amb4'],
   jungle: ['amb/105', 'amb105', 'amb/5', 'amb5'],
   hq: ['amb/106', 'amb106', 'amb/7', 'amb7'],
+  crib: ['amb/0', 'amb0', 'amb/103'],
 };
 
 /** Candidate priority list for Area Codes */
@@ -106,6 +112,9 @@ export const AREA_CODE_TO_BIOME: Record<AreaCode, BiomeId> = {
   '5-?': 'jungle',
   vault: 'vault',
   'hq-1': 'hq',
+  'hq-2': 'hq',
+  'hq-3': 'hq',
+  '$$$': 'crib',
 };
 
 /**
@@ -152,7 +161,7 @@ export function getMusicTrack(
   ctx: MusicRouteContext,
   manifest?: AssetManifest
 ): string | null {
-  const { screen, areaCode, biome, loop, bossId, bossDefeated } = ctx;
+  const { screen, areaCode, biome, loop, mutant, bossId, bossDefeated } = ctx;
 
   // 1. Screen overrides
   if (screen === 'title' || screen === 'campfire') {
@@ -196,13 +205,13 @@ export function getMusicTrack(
     );
   }
 
-  // 3. Active Boss overrides (with B-side Throne track on odd loops)
+  // 3. Active Boss overrides (Cursed Hyper Crystal on 4-? uses mus/Boss6B)
   if (bossId && BOSS_MUSIC_MAP[bossId]) {
-    const useLoopB = Boolean(loop && loop > 0 && loop % 2 === 1);
-    const candidates =
-      bossId === 'nuclear_throne' && useLoopB
-        ? ['mus/Boss4B', 'musBoss4B', ...BOSS_MUSIC_MAP[bossId]]
-        : BOSS_MUSIC_MAP[bossId];
+    const isCursedHyper =
+      bossId === 'hyper_crystal' && (areaCode === '4-?' || biome === 'cursed_caves');
+    const candidates = isCursedHyper
+      ? ['mus/Boss6B', 'musBoss6B', ...BOSS_MUSIC_MAP[bossId]]
+      : BOSS_MUSIC_MAP[bossId];
     return resolveCandidateKey(candidates, manifest?.music);
   }
 
@@ -220,13 +229,20 @@ export function getMusicTrack(
     );
   }
 
-  // 5. Biome / Area resolution (with Loop B-side soundtrack variants on odd loops)
+  // 5. Biome / Area resolution (Loop 1+ B-tracks; HQ mus/106b plays ONLY for Rogue!)
   let effectiveBiome = biome;
   if (!effectiveBiome && areaCode && AREA_CODE_TO_BIOME[areaCode]) {
     effectiveBiome = AREA_CODE_TO_BIOME[areaCode];
   }
 
   if (effectiveBiome && BIOME_MUSIC_MAP[effectiveBiome]) {
+    if (effectiveBiome === 'hq') {
+      const hqCandidates =
+        mutant === 'rogue'
+          ? ['mus/106b', 'mus106b', 'mus/106', 'mus106']
+          : BIOME_MUSIC_MAP.hq;
+      return resolveCandidateKey(hqCandidates, manifest?.music);
+    }
     const useLoopB = Boolean(loop && loop > 0 && loop % 2 === 1);
     const bCandidates = useLoopB ? BIOME_MUSIC_B_MAP[effectiveBiome] : undefined;
     const candidates = bCandidates ?? BIOME_MUSIC_MAP[effectiveBiome];

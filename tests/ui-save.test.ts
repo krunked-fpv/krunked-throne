@@ -44,17 +44,31 @@ class MockStorage implements StorageLike {
 describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
   it('persists full save round-trip, tracks runs/bests, recovers corrupted JSON, and sanitizes invalid fields', () => {
     const def = createDefaultSaveData();
-    expect(Object.keys(def.mutants)).toHaveLength(12);
+    expect(Object.keys(def.mutants)).toHaveLength(14);
+    expect(def.unlockAll).toBe(false);
+    expect(def.hardModeUnlocked).toBe(false);
+    expect(def.hardModeEnabled).toBe(false);
+    expect(def.protoChestWeaponId).toBeNull();
+    expect(def.frogUnlocked).toBe(false);
+    expect(def.skeletonUnlocked).toBe(false);
     for (const id of ALL_MUTANT_IDS) {
-      expect(def.mutants[id].unlocked).toBe(true);
+      expect(def.mutants[id].unlocked).toBe(id !== 'skeleton' && id !== 'frog');
+      expect(def.mutants[id].bSkinUnlocked).toBe(false);
+      expect(def.mutants[id].crownsUnlocked).toEqual(['none']);
     }
 
     const storage = new MockStorage();
     const sm1 = new SaveManager(storage);
     sm1.setSelectedMutant('melting');
+    // B-skin starts locked until unlocked (or unlockAll === true)
+    expect(sm1.isBSkinUnlocked('melting')).toBe(false);
+    expect(sm1.toggleSelectedSkin('melting')).toBe('a');
+    sm1.unlockBSkin('melting');
+    expect(sm1.isBSkinUnlocked('melting')).toBe(true);
     sm1.setSelectedSkin('melting', 'b');
     sm1.setSelectedCrown('blood');
     sm1.setUseGoldenWeapon(true);
+    sm1.setProtoChestWeapon('super_plasma_cannon');
     sm1.updateAudio({ masterVolume: 0.55, musicVolume: 0.25, muted: true });
     sm1.updateRender({
       widescreen: true,
@@ -77,6 +91,7 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
       loop: 1,
       kills: 412,
       victory: true,
+      bSkinUnlocked: true,
       crown: 'blood',
       goldenWeapon: 'golden_wrench',
     });
@@ -89,6 +104,9 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     const loaded = sm2.getData();
     expect(loaded.selectedMutant).toBe('melting');
     expect(sm2.getSelectedSkin('melting')).toBe('b');
+    expect(sm2.isCrownUnlocked('melting', 'blood')).toBe(true);
+    expect(sm2.isCrownUnlocked('fish', 'blood')).toBe(false);
+    expect(sm2.getProtoChestWeapon()).toBe('super_plasma_cannon');
     expect(loaded.selectedCrown).toBe('blood');
     expect(loaded.useGoldenWeapon).toBe(true);
     expect(loaded.audio.masterVolume).toBe(0.55);
@@ -109,12 +127,32 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     expect(loaded.bestLoop).toBe(1);
     expect(loaded.mutants.melting.goldenWeapon).toBe('golden_wrench');
 
+    // unlockAll helper overrides mutant/B-skin/crown/hardMode gates cleanly without mutating earned progress
+    expect(sm2.isMutantUnlocked('frog')).toBe(false);
+    expect(sm2.isMutantUnlocked('skeleton')).toBe(false);
+    expect(sm2.isHardModeUnlocked()).toBe(false);
+    sm2.setUnlockAll(true);
+    expect(sm2.isMutantUnlocked('frog')).toBe(true);
+    expect(sm2.isMutantUnlocked('skeleton')).toBe(true);
+    expect(sm2.isBSkinUnlocked('fish')).toBe(true);
+    expect(sm2.isCrownUnlocked('fish', 'blood')).toBe(true);
+    expect(sm2.isHardModeUnlocked()).toBe(true);
+    sm2.setUnlockAll(false);
+    sm2.unlockFrog();
+    sm2.unlockSkeleton();
+    sm2.recordRunEnd({ mutant: 'fish', areaCode: '1-1', loop: 2, kills: 10 });
+    expect(sm2.isMutantUnlocked('frog')).toBe(true);
+    expect(sm2.isMutantUnlocked('skeleton')).toBe(true);
+    expect(sm2.isHardModeUnlocked()).toBe(true);
+    sm2.setHardModeEnabled(true);
+    expect(sm2.isHardModeActive()).toBe(true);
+
     // Corrupted JSON recovery
     storage.setItem(SAVE_STORAGE_KEY, '{not_valid_json!!!');
     const smCorrupt = new SaveManager(storage);
     expect(smCorrupt.wasRecoveredFromCorruption()).toBe(true);
     expect(smCorrupt.getData().selectedMutant).toBe('fish');
-    expect(Object.keys(smCorrupt.getData().mutants)).toHaveLength(12);
+    expect(Object.keys(smCorrupt.getData().mutants)).toHaveLength(14);
 
     // Schema sanitization
     const sanitized = validateSaveData({
@@ -279,6 +317,29 @@ describe('ui-save: SaveManager Persistence & Corruption Recovery', () => {
     expect(sm120.wasRecoveredFromCorruption()).toBe(false);
     expect(sm120.getData().render.targetFps).toBe(120);
     expect(sm120.getData().render.classic30Fps).toBe(false);
+
+    // Older 12-mutant save migrates cleanly to 14-mutant schema without losing earned progress
+    const migratedV1 = validateSaveData({
+      version: 1,
+      selectedMutant: 'yv',
+      mutants: {
+        yv: {
+          unlocked: true,
+          bSkinUnlocked: true,
+          crownsUnlocked: ['none', 'destiny'],
+          bestKills: 300,
+        },
+      },
+    });
+    expect(Object.keys(migratedV1.mutants)).toHaveLength(14);
+    expect(migratedV1.mutants.yv.bSkinUnlocked).toBe(true);
+    expect(migratedV1.mutants.yv.crownsUnlocked).toEqual(['none', 'destiny']);
+    expect(migratedV1.mutants.fish.bSkinUnlocked).toBe(false);
+    expect(migratedV1.mutants.skeleton.unlocked).toBe(false);
+    expect(migratedV1.mutants.frog.unlocked).toBe(false);
+    expect(migratedV1.unlockAll).toBe(false);
+    expect(migratedV1.hardModeUnlocked).toBe(false);
+    expect(migratedV1.protoChestWeaponId).toBeNull();
   });
 
   it('swaps conflicting keybinds cleanly in SaveManager and deduplicates loaded saves', () => {

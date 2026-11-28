@@ -104,8 +104,8 @@ describe('worldgen, darkness & collision parity', () => {
   });
 
   it('preserves authentic biome darkness and locked area/enemy registry counts', () => {
-    expect(AREA_CODES.length).toBe(23);
-    expect(Object.keys(ENEMIES).length).toBe(50);
+    expect(AREA_CODES.length).toBe(26);
+    expect(Object.keys(ENEMIES).length).toBe(72);
 
     expect(AREAS['4-?'].darkness).toBeGreaterThanOrEqual(0.5);
     expect(AREAS['2-?'].darkness).toBeGreaterThanOrEqual(0.4);
@@ -427,14 +427,14 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
 
 describe('enemy AI & roster 1:1 NT parity', () => {
   it('matches canonical NT HP stats and applies Scarier Face to mid-level spawns without double-scaling initial loads', () => {
-    expect(ENEMIES.bandit!.maxHp).toBe(7);
-    expect(ENEMIES.big_maggot!.maxHp).toBe(15);
-    expect(ENEMIES.scorpion!.maxHp).toBe(25);
-    expect(ENEMIES.sniper!.maxHp).toBe(20);
-    expect(ENEMIES.salamander!.maxHp).toBe(35);
-    expect(ENEMIES.assassin!.maxHp).toBe(15);
+    expect(ENEMIES.bandit!.maxHp).toBe(4);
+    expect(ENEMIES.big_maggot!.maxHp).toBe(22);
+    expect(ENEMIES.scorpion!.maxHp).toBe(15);
+    expect(ENEMIES.sniper!.maxHp).toBe(6);
+    expect(ENEMIES.salamander!.maxHp).toBe(25);
+    expect(ENEMIES.assassin!.maxHp).toBe(7);
     expect(ENEMIES.rhino_freak!.maxHp).toBe(80);
-    expect(ENEMIES.guardian_dog!.maxHp).toBe(140);
+    expect(ENEMIES.guardian_dog!.maxHp).toBe(160);
     expect(ENEMIES.guardian_dog!.contactDamage).toBe(6);
     expect(ENEMIES.big_bandit!.maxHp).toBe(100);
     expect(ENEMIES.big_dog!.maxHp).toBe(300);
@@ -445,10 +445,10 @@ describe('enemy AI & roster 1:1 NT parity', () => {
     state.player.mutations.push('scarier_face');
     warpToArea(state, '1-1', 0);
 
-    // Initial area-loaded bandit gets single -20% HP (Math.round(7 * 0.8) = 6, NOT 5)
+    // Initial area-loaded bandit gets single -20% HP (Math.round(4 * 0.8) = 3)
     const initialBandit = state.enemies.find((e) => e.defId === 'bandit');
     expect(initialBandit).toBeDefined();
-    expect(initialBandit!.maxHp).toBe(Math.max(1, Math.round(7 * 0.8)));
+    expect(initialBandit!.maxHp).toBe(Math.max(1, Math.round(4 * 0.8)));
 
     // Mid-level dynamically spawned enemy ALSO gets single -20% HP
     const rng = SeededRng.fromState(state.rngState);
@@ -498,6 +498,7 @@ describe('enemy AI & roster 1:1 NT parity', () => {
     state.player.godMode = true;
     state.player.hp = 4;
     carveOpenRoom(state, 8);
+    getAreaRuntime(state).trackedSpecials.clear();
     state.enemies = [];
     state.pickups = [];
 

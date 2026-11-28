@@ -1213,15 +1213,15 @@ describe('parity-combat: Iconic Weapons & Projectile Physics', () => {
     clearBox(state);
     const rng = SeededRng.fromState(state.rngState);
 
-    // 1. Gun Gun spawns weapon pickup
+    // 1. Gun Gun spawns weapon pickup (40 energy cost per wiki)
     givePlayerWeapon(state, 'gun_gun', 0, false);
-    state.player.ammo.bullet = 100;
+    state.player.ammo.energy = 100;
     stepPlayerAndCombat(
       state,
       makeInput({ aimWorldX: state.player.x + 40, aimWorldY: state.player.y, firePressed: true, fireHeld: true }),
       rng,
     );
-    expect(state.player.ammo.bullet).toBe(60); // 40 bullet cost
+    expect(state.player.ammo.energy).toBe(60); // 40 energy cost
     expect(state.pickups.some((p) => p.kind === 'weapon' && p.value === 1)).toBe(true);
 
     // 2. Shovel spawns 3 melee arcs

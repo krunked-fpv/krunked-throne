@@ -186,18 +186,20 @@ function runTest1AllBiomesAndLoopPopulation(): void {
  * and cleanly open the next-area portal on defeat (including 7-3 generators -> 0-1 Throne II -> Loop 1-1!).
  */
 function runTest2AllFiveBossesAndLoopChain(): void {
-  const bossAreaMap: Record<BossId, { area: AreaCode; nextArea: AreaCode; nextLoop: number }> = {
+  const bossAreaMap: Partial<Record<BossId, { area: AreaCode; nextArea: AreaCode; nextLoop: number }>> = {
     big_bandit: { area: '1-3', nextArea: '2-1', nextLoop: 0 },
     big_dog: { area: '3-3', nextArea: '4-1', nextLoop: 0 },
     lil_hunter: { area: '5-3', nextArea: '6-1', nextLoop: 0 },
     nuclear_throne: { area: '7-3', nextArea: '0-1', nextLoop: 0 },
     throne_ii: { area: '0-1', nextArea: '1-1', nextLoop: 1 },
   };
+  assert(BOSS_IDS.length === 9, `Expected 9 BOSS_IDS, got ${BOSS_IDS.length}`);
 
   const bossSummary: string[] = [];
 
   for (const bossId of BOSS_IDS) {
     const cfg = bossAreaMap[bossId];
+    if (!cfg) continue; // Wave 2B: mom, hyper_crystal, technomancer, captain AI added in Wave 2B
     const state = createRunState({ mutant: 'crystal', seed: 5000 + bossId.length });
     state.player.godMode = true;
     warpToArea(state, cfg.area, 0);

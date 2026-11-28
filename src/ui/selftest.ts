@@ -54,13 +54,13 @@ class MockStorage implements StorageLike {
 }
 
 function testSaveManager(): void {
-  // 1. Default SaveData integrity across all 12 mutants
+  // 1. Default SaveData integrity across all 14 mutants
   const def = createDefaultSaveData();
-  assert.equal(Object.keys(def.mutants).length, 12, 'Expected 12 mutants in default SaveData');
+  assert.equal(Object.keys(def.mutants).length, 14, 'Expected 14 mutants in default SaveData');
   for (const id of ALL_MUTANT_IDS) {
     const m = def.mutants[id];
     assert.ok(m, `Missing mutant progress for ${id}`);
-    assert.equal(m.unlocked, true, `Mutant ${id} should be unlocked by default`);
+    assert.equal(m.unlocked, id !== 'skeleton' && id !== 'frog', `Unexpected default unlock for ${id}`);
     assert.equal(m.bestArea, '1-1');
     assert.equal(m.bestLoop, 0);
   }
@@ -69,6 +69,7 @@ function testSaveManager(): void {
   const storage = new MockStorage();
   const sm1 = new SaveManager(storage);
   sm1.setSelectedMutant('melting');
+  sm1.unlockBSkin('melting');
   sm1.setSelectedSkin('melting', 'b');
   sm1.setSelectedCrown('blood');
   sm1.setUseGoldenWeapon(true);
@@ -146,9 +147,9 @@ function testSaveManager(): void {
   const smCorrupt = new SaveManager(storage);
   assert.equal(smCorrupt.wasRecoveredFromCorruption(), true, 'Corrupted JSON should flag recovery');
   assert.equal(smCorrupt.getData().selectedMutant, 'fish');
-  assert.equal(Object.keys(smCorrupt.getData().mutants).length, 12);
+  assert.equal(Object.keys(smCorrupt.getData().mutants).length, 14);
   for (const id of ALL_MUTANT_IDS) {
-    assert.equal(smCorrupt.getData().mutants[id].unlocked, true);
+    assert.equal(smCorrupt.getData().mutants[id].unlocked, id !== 'skeleton' && id !== 'frog');
   }
 
   // 4. Schema sanitization on partial/invalid object

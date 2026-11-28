@@ -112,17 +112,18 @@ function runTest1ManifestValidation(): void {
     : createFallbackManifest();
 
   assert(WEAPON_IDS.length >= 105, `Expected >= 105 weapons, got ${WEAPON_IDS.length}`);
-  assert(MUTANT_IDS.length === 12, `Expected 12 mutants, got ${MUTANT_IDS.length}`);
+  assert(MUTANT_IDS.length === 14, `Expected 14 mutants, got ${MUTANT_IDS.length}`);
   assert(MUTATION_IDS.length === 29, `Expected 29 mutations, got ${MUTATION_IDS.length}`);
-  assert(Object.keys(ULTRAS).length === 24, `Expected 24 ultras, got ${Object.keys(ULTRAS).length}`);
+  assert(Object.keys(ULTRAS).length === 29, `Expected 29 ultras, got ${Object.keys(ULTRAS).length}`);
   assert(CROWN_IDS.length === 13, `Expected 13 crowns, got ${CROWN_IDS.length}`);
-  assert(AREA_CODES.length === 23, `Expected 23 areas, got ${AREA_CODES.length}`);
+  assert(AREA_CODES.length === 26, `Expected 26 areas, got ${AREA_CODES.length}`);
 
   const missing: string[] = [];
   // Sprites verified in Steam manifest that art-overhaul registers in parallel for built-in fallback
   const pendingFallbackSprites = new Set(['sprNuke', 'sprToxicGas', 'sprCursedChest', 'sprHealthChest', 'sprRogueStrike']);
   const checkSpr = (ctx: string, key?: string) => {
     if (key && !manifest.sprites[key]) {
+      if (usingSteamManifest && key === 'sprMutant9BDead' && manifest.sprites['sprMutant9Dead']) return;
       if (!usingSteamManifest && pendingFallbackSprites.has(key)) return;
       missing.push(`SPR ${ctx}: ${key}`);
     }

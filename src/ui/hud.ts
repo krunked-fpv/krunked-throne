@@ -65,17 +65,27 @@ export function resolveHealthFillFrame(hurtFlashTicks: number): number {
  */
 export function computeUltraIconFrame(
   raceIndex: number,
-  slot: 'a' | 'b',
+  slot: 'a' | 'b' | 'c', // Wave 2B
   totalFrames: number = 24,
 ): number {
-  const offset = slot === 'b' ? 1 : 0;
+  const offset = slot === 'c' ? 2 : slot === 'b' ? 1 : 0;
   if (totalFrames >= 51) {
     return Math.max(0, raceIndex) * 3 + offset;
   }
   if (totalFrames >= 36) {
     return Math.max(0, raceIndex - 1) * 3 + offset;
   }
-  return Math.max(0, raceIndex - 1) * 2 + offset;
+  // Built-In Art compact sheet: 0..23 = races 1..12 A/B, 24 = Horror C, 25..26 = Skeleton A/B, 27..28 = Frog A/B (Wave 2B)
+  if (raceIndex === 11 && slot === 'c') {
+    return Math.min(Math.max(0, totalFrames - 1), 24);
+  }
+  if (raceIndex === 14) {
+    return Math.min(Math.max(0, totalFrames - 1), 25 + (slot === 'b' ? 1 : 0));
+  }
+  if (raceIndex === 15) {
+    return Math.min(Math.max(0, totalFrames - 1), 27 + (slot === 'b' ? 1 : 0));
+  }
+  return Math.max(0, raceIndex - 1) * 2 + (slot === 'b' ? 1 : 0);
 }
 
 /**
@@ -139,6 +149,10 @@ const BOSS_INTRO_FRAME_MAP: Readonly<Record<string, number>> = {
   lil_hunter: 2,
   nuclear_throne: 3,
   throne_ii: 4,
+  mom: 5, // Wave 2B
+  hyper_crystal: 6, // Wave 2B
+  technomancer: 7, // Wave 2B
+  captain: 8, // Wave 2B
 };
 
 interface BuiltinBossBannerTheme {
@@ -190,6 +204,38 @@ const BUILTIN_BOSS_THEMES: Readonly<Record<string, BuiltinBossBannerTheme>> = {
     bandB: '#48225e',
     accent: '#d16bff',
     silhouette: '#150821',
+  },
+  mom: { // Wave 2B
+    sprite: 'sprFrogQueenIdle',
+    scale: 2,
+    bandA: '#1d3618',
+    bandB: '#335c28',
+    accent: '#7cff52',
+    silhouette: '#0d1a0b',
+  },
+  hyper_crystal: { // Wave 2B
+    sprite: 'sprHyperCrystalIdle',
+    scale: 2,
+    bandA: '#2b1342',
+    bandB: '#4f2275',
+    accent: '#e085ff',
+    silhouette: '#150821',
+  },
+  technomancer: { // Wave 2B
+    sprite: 'sprTechnoMancer',
+    scale: 2,
+    bandA: '#0f2b33',
+    bandB: '#1c4d59',
+    accent: '#54e8ff',
+    silhouette: '#07161a',
+  },
+  captain: { // Wave 2B
+    sprite: 'sprLastIdle',
+    scale: 2,
+    bandA: '#122245',
+    bandB: '#223d7a',
+    accent: '#7ab8ff',
+    silhouette: '#091224',
   },
 };
 

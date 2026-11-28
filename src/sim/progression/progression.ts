@@ -111,8 +111,13 @@ const ULTRA_SOUNDS: Record<UltraId, string> = {
   rebel_b: 'snd/RebelUltraB',
   horror_a: 'snd/HorrorUltraA',
   horror_b: 'snd/HorrorUltraB',
+  horror_c: 'sndHorrorUltraC', // Wave 2B
   rogue_a: 'snd/RogueUltraA',
   rogue_b: 'snd/RogueUltraB',
+  skeleton_a: 'snd/SkeletonUltraA', // Wave 2B
+  skeleton_b: 'snd/SkeletonUltraB', // Wave 2B
+  frog_a: 'snd/FrogUltraA', // Wave 2B
+  frog_b: 'snd/FrogUltraB', // Wave 2B
 };
 
 function spawnYvCribChests(state: SimState, rng: SeededRng): void {
@@ -813,8 +818,9 @@ export function drawMutationChoices(state: SimState, rng: SeededRng): MutationId
 }
 
 export function drawUltraChoices(state: SimState): UltraId[] {
+  // Wave 2B: supports 2-choice mutants and 3-choice Horror (horror_c Meltdown)
   const ultras = MUTANTS[state.player.mutant].ultras;
-  state.pendingUltras = [ultras[0].id, ultras[1].id];
+  state.pendingUltras = ultras.map((u) => u.id);
   return state.pendingUltras;
 }
 
@@ -1308,6 +1314,8 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
       alive: true,
       lastDamageCause: '',
       lastKillerSprite: '',
+      frogRooted: false, // Wave 2B
+      skeletonTransformed: false, // Wave 2B
     },
     enemies: [],
     projectiles: [],
@@ -1356,6 +1364,15 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
     nextEntityId: 10,
     portalTransitionTicks: 0,
     floorClearTrigger: true,
+    visitedCrib: false, // Wave 2B
+    cribReturnArea: null, // Wave 2B
+    radCanisterSkipStreak: 0, // Wave 2B
+    weaponChestSkipStreak: 0, // Wave 2B
+    difficulty: 1, // Wave 2B
+    hardMode: false, // Wave 2B
+    vaultAmbushPending: false, // Wave 2B
+    pendingPatiencePick: false, // Wave 2B
+    chickenDroppedSwordOn1_1: false, // Wave 2B
   };
 
   loadAreaIntoState(state, '1-1', 0, opts.populateFn);

@@ -642,6 +642,8 @@ export function getDefaultAreaGenParams(
       };
       break;
     case 'hq-1': // IDPD HQ
+    case 'hq-2': // Wave 2B
+    case 'hq-3': // Wave 2B
       base = {
         width: 66,
         height: 66,
@@ -665,6 +667,32 @@ export function getDefaultAreaGenParams(
         roomMaxSize: 6,
         alcoveChance: 0.22,
         pillarChance: 0.72,
+      };
+      break;
+    case '$$$': // Wave 2B: Y.V.'s Crib safe treasure room
+      base = {
+        width: 44,
+        height: 44,
+        targetFloors: 140,
+        walkerCount: 2,
+        darkness: 0,
+        turnChance: 0.25,
+        reverseChance: 0.04,
+        stamp2Chance: 0.6,
+        stamp3Chance: 0.3,
+        stamp4Chance: 0.1,
+        spawnChance: 0.04,
+        despawnChance: 0.02,
+        carpetChance: 0.35,
+        rectilinear: true,
+        minRunLen: 3,
+        maxRunLen: 5,
+        corridorWidth: 3,
+        roomChance: 0.65,
+        roomMinSize: 5,
+        roomMaxSize: 7,
+        alcoveChance: 0.2,
+        pillarChance: 0.15,
       };
       break;
   }

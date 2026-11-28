@@ -368,7 +368,7 @@ describe('parity-render-ui: Ultra & Ammo Icon Frame Resolvers + Fallback Atlas P
 
     // Chicken B dead sprite & NT weapon sprite names
     const chicken = DEFAULT_MUTANTS.find((m) => m.id === 'chicken')!;
-    expect(chicken.sprites.bDead).toBe('sprMutant9Dead');
+    expect(chicken.sprites.bDead).toBe('sprMutant9BDead');
     expect(DEFAULT_UI_DATA_PROVIDER.getWeapon('golden_revolver')?.sprite).toBe('sprGoldRevolver');
     expect(DEFAULT_UI_DATA_PROVIDER.getWeapon('chicken_sword')?.sprite).toBe('sprSword');
     expect(DEFAULT_UI_DATA_PROVIDER.getWeapon('chicken_sword')?.fireSound).toBe('sndChickenSword');

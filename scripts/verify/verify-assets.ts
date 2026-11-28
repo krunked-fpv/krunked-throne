@@ -114,16 +114,43 @@ async function resolveManifestAndAssetsDir(
     return { manifest: createFallbackManifest(), assetsDir: null };
   }
 
-  const localRoot = process.cwd();
-  const localAssetsDir = path.join(localRoot, '.nt-assets');
-  if (fs.existsSync(path.join(localAssetsDir, 'manifest.json'))) {
-    const manifest = await loadManifestNode(localRoot);
-    return {
-      manifest,
-      assetsDir: manifest.sourceMode === 'steam' ? localAssetsDir : null,
-    };
+  const candidateRoots: string[] = [process.cwd()];
+  if (process.env.NT_ASSETS_DIR) {
+    candidateRoots.unshift(path.resolve(process.env.NT_ASSETS_DIR));
+  }
+  try {
+    const commonDir = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (commonDir) {
+      const repoRoot = path.dirname(path.resolve(process.cwd(), commonDir));
+      if (!candidateRoots.includes(repoRoot)) {
+        candidateRoots.push(repoRoot);
+      }
+    }
+  } catch {
+    // Ignore when not inside a git worktree
   }
 
+  for (const root of candidateRoots) {
+    const asDirect = fs.existsSync(path.join(root, 'manifest.json')) ? root : null;
+    const asChild = fs.existsSync(path.join(root, '.nt-assets', 'manifest.json'))
+      ? path.join(root, '.nt-assets')
+      : null;
+    const assetsDir = asDirect ?? asChild;
+    if (assetsDir) {
+      const manifest = await loadManifestNode(assetsDir);
+      return {
+        manifest,
+        assetsDir: manifest.sourceMode === 'steam' ? assetsDir : null,
+      };
+    }
+  }
+
+  const localRoot = process.cwd();
+  const localAssetsDir = path.join(localRoot, '.nt-assets');
   const manifest = await loadManifestNode(localRoot);
   return {
     manifest,
@@ -145,23 +172,23 @@ function verifyDataRegistryIntegrity(errors: string[]): GateReport['registryCoun
   if (counts.weapons !== 142 || Object.keys(WEAPONS).length !== 142) {
     errors.push(`Expected 142 WEAPONS, got WEAPON_IDS=${counts.weapons}, Object.keys=${Object.keys(WEAPONS).length}`);
   }
-  if (counts.mutants !== 12) {
-    errors.push(`Expected 12 MUTANTS, got ${counts.mutants}`);
+  if (counts.mutants !== 14) {
+    errors.push(`Expected 14 MUTANTS, got ${counts.mutants}`);
   }
   if (counts.mutations !== 29) {
     errors.push(`Expected 29 MUTATIONS, got ${counts.mutations}`);
   }
-  if (counts.ultras !== 24) {
-    errors.push(`Expected 24 ULTRAS, got ${counts.ultras}`);
+  if (counts.ultras !== 29) {
+    errors.push(`Expected 29 ULTRAS, got ${counts.ultras}`);
   }
   if (counts.crowns !== 13) {
     errors.push(`Expected 13 CROWNS, got ${counts.crowns}`);
   }
-  if (counts.areas !== 23) {
-    errors.push(`Expected 23 AREAS, got ${counts.areas}`);
+  if (counts.areas !== 26) {
+    errors.push(`Expected 26 AREAS, got ${counts.areas}`);
   }
-  if (counts.enemies !== 50) {
-    errors.push(`Expected 50 ENEMIES, got ${counts.enemies}`);
+  if (counts.enemies !== 72) {
+    errors.push(`Expected 72 ENEMIES, got ${counts.enemies}`);
   }
 
   for (const mutant of Object.values(MUTANTS)) {
@@ -348,9 +375,15 @@ function verifySteamMode(
   const uniqueAmbience = new Set<string>();
 
   // 1. Verify every referenced sprite + TPAG bounds + backing texture PNG
+  // Steam Update 100 omits sprMutant9BDead (Chicken B-skin shares sprMutant9Dead; renderer falls back cleanly)
+  const STEAM_SPRITE_ALIASES: Readonly<Record<string, string>> = {
+    sprMutant9BDead: 'sprMutant9Dead',
+  };
   for (const ref of refs.sprites) {
-    uniqueSprites.add(ref.key);
-    const spr = manifest.sprites[ref.key];
+    const resolvedKey =
+      manifest.sprites[ref.key] ? ref.key : (STEAM_SPRITE_ALIASES[ref.key] ?? ref.key);
+    uniqueSprites.add(resolvedKey);
+    const spr = manifest.sprites[resolvedKey];
     if (!spr) {
       errors.push(`Missing sprite "${ref.key}" referenced by ${ref.ctx}`);
       continue;

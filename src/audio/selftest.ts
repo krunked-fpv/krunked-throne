@@ -211,10 +211,10 @@ console.log('\n[Test 4] Verifying music/ambience state transitions & pause ducki
   assert(boss3.musicTrack === 'mus/Boss3', 'Lil Hunter should route to mus/Boss3');
 
   const boss4 = resolveMusicRoute({ bossId: 'nuclear_throne' });
-  assert(boss4.musicTrack === 'mus/Boss4', 'Nuclear Throne should route to mus/Boss4');
+  assert(boss4.musicTrack === 'mus/Boss4A', 'Nuclear Throne should route to mus/Boss4A');
 
   const boss5 = resolveMusicRoute({ bossId: 'throne_ii' });
-  assert(boss5.musicTrack === 'mus/Boss5', 'Throne II should route to mus/Boss5');
+  assert(boss5.musicTrack === 'mus/Boss4B', 'Throne II should route to mus/Boss4B');
 
   // 4. Pause ducking
   const pausedRoute = resolveMusicRoute({ areaCode: '1-1', paused: true });

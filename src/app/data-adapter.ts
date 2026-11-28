@@ -28,8 +28,8 @@ import {
 import type { UiDataProvider } from '@/ui/data-provider';
 
 /**
- * Wires the complete verified `src/data/**` static registries (12 mutants,
- * 29 mutations, 24 ultras, 142 weapons, 50 enemies, 13 crowns, 23 areas)
+ * Wires the complete verified `src/data/**` static registries (14 mutants,
+ * 29 mutations, 29 ultras, 142 weapons, 72 enemies, 13 crowns, 26 areas)
  * into the decoupled `UiDataProvider` interface consumed by Renderer and UI.
  */
 export function createGameDataProvider(): UiDataProvider {

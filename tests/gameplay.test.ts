@@ -80,10 +80,10 @@ function clearChamber(state: SimState): void {
   }
 }
 
-describe('gameplay: All 12 Mutants', () => {
-  it('instantiates all 12 mutants, executes RMB actives, Throne Butt, and Ultras cleanly', () => {
-    expect(MUTANT_IDS).toHaveLength(12);
-    expect(Object.keys(ULTRAS)).toHaveLength(24);
+describe('gameplay: All 14 Mutants', () => {
+  it('instantiates all 14 mutants, executes RMB actives, Throne Butt, and Ultras cleanly', () => {
+    expect(MUTANT_IDS).toHaveLength(14);
+    expect(Object.keys(ULTRAS)).toHaveLength(29);
 
     for (const mutantId of MUTANT_IDS) {
       const def = MUTANTS[mutantId];
@@ -322,9 +322,9 @@ describe('gameplay: All 142 Weapons & Melee Deflection', () => {
   });
 });
 
-describe('gameplay: All 5 Bosses & Full Progression Determinism', () => {
-  it('exercises all 5 bosses (including 7-3 generators -> 0-1 Throne II -> Loop 1-1)', () => {
-    const bossAreas: Record<BossId, { area: AreaCode; nextArea: AreaCode; nextLoop: number }> = {
+describe('gameplay: All 9 Bosses & Full Progression Determinism', () => {
+  it('registers all 9 bosses and exercises core boss fights (including 7-3 generators -> 0-1 Throne II -> Loop 1-1)', () => {
+    const bossAreas: Partial<Record<BossId, { area: AreaCode; nextArea: AreaCode; nextLoop: number }>> = {
       big_bandit: { area: '1-3', nextArea: '2-1', nextLoop: 0 },
       big_dog: { area: '3-3', nextArea: '4-1', nextLoop: 0 },
       lil_hunter: { area: '5-3', nextArea: '6-1', nextLoop: 0 },
@@ -332,10 +332,13 @@ describe('gameplay: All 5 Bosses & Full Progression Determinism', () => {
       throne_ii: { area: '0-1', nextArea: '1-1', nextLoop: 1 },
     };
 
-    expect(Object.keys(ENEMIES)).toHaveLength(50);
+    expect(Object.keys(ENEMIES)).toHaveLength(72);
+    expect(BOSS_IDS).toHaveLength(9);
 
     for (const bossId of BOSS_IDS) {
+      expect(ENEMIES[bossId]?.isBoss).toBe(true);
       const cfg = bossAreas[bossId];
+      if (!cfg) continue; // Wave 2B adds combat AI for mom, hyper_crystal, technomancer, captain
       const state = createRunState({ mutant: 'crystal', seed: 5100 + bossId.length });
       state.player.godMode = true;
       warpToArea(state, cfg.area, 0);
