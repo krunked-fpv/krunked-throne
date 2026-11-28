@@ -128,10 +128,10 @@ export class SpriteRenderer {
     const alpha = options.alpha ?? 1;
     const tintColor = options.flashWhite ? '#ffffff' : options.tintColor;
 
-    const localX = rect.targetX - sprite.originX;
-    const localY = rect.targetY - sprite.originY;
-    const drawW = rect.targetW;
-    const drawH = rect.targetH;
+    const localX = pixelSnap ? Math.round(rect.targetX - sprite.originX) : rect.targetX - sprite.originX;
+    const localY = pixelSnap ? Math.round(rect.targetY - sprite.originY) : rect.targetY - sprite.originY;
+    const drawW = Math.round(rect.targetW);
+    const drawH = Math.round(rect.targetH);
 
     let srcImage: TextureImageSource = tex;
     let srcX = rect.srcX;
