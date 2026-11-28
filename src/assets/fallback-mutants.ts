@@ -1,73 +1,81 @@
 import type { DrawCtx, FallbackAtlasBuilder } from './fallback-fonts';
-import { PxCanvas, makeRamp } from './pixel-art';
+import { PxCanvas } from './pixel-art';
 
 export interface MutantPalette {
   body: string;
+  bodyHi: string;
+  bodyDark: string;
   accent: string;
+  accentHi: string;
   eye: string;
   pupil: string;
   detail: string;
+  shorts: string;
 }
 
+const INK = '#0d0a10';
+
 export const MUTANT_A_PALETTES: readonly MutantPalette[] = [
-  // 1. Fish: teal-green amphibian, dorsal fin, golden eyes, leather belt
-  { body: '#42ab6b', accent: '#247852', eye: '#fff066', pupil: '#14101a', detail: '#9c6238' },
-  // 2. Crystal: faceted violet/magenta prismatic crystal titan
-  { body: '#ad4ce0', accent: '#de80ff', eye: '#ffffff', pupil: '#4a1273', detail: '#8a2ebd' },
-  // 3. Eyes: deep cobalt multi-eyed psychic
-  { body: '#3c6bcc', accent: '#284a99', eye: '#ffffff', pupil: '#120e16', detail: '#7c52e0' },
-  // 4. Melting: bone-ivory cracked skull & exposed crimson ribcage
-  { body: '#dfd4be', accent: '#b82c38', eye: '#18111c', pupil: '#18111c', detail: '#736555' },
-  // 5. Plant: emerald stalk + snapping crimson flytrap maw
-  { body: '#3aba45', accent: '#e02b3a', eye: '#ffe847', pupil: '#ffffff', detail: '#fff4cf' },
-  // 6. Y.V.: sharp ivory 3D pyramid + gold chain + cyclops eye
-  { body: '#f0edf5', accent: '#f7c636', eye: '#ffffff', pupil: '#120e16', detail: '#d49a1e' },
-  // 7. Steroids: hulking tan scientist in shredded white lab coat + glasses
-  { body: '#d98e62', accent: '#eeeaf5', eye: '#9ce8ff', pupil: '#18141a', detail: '#6b3b24' },
-  // 8. Robot: brushed steel CRT automaton + glowing green visor
-  { body: '#8aa0ad', accent: '#364350', eye: '#59ff7a', pupil: '#e6ffe8', detail: '#eb3d34' },
-  // 9. Chicken: feathered white martial artist + red comb & fluttering headband
-  { body: '#f5f0e6', accent: '#e62e26', eye: '#18141a', pupil: '#ffffff', detail: '#f7a923' },
-  // 10. Rebel: desert nomad in weathered olive hood & layered tan scarf
-  { body: '#799175', accent: '#c9af83', eye: '#ffe859', pupil: '#1a1410', detail: '#344232' },
-  // 11. Horror: translucent bubbling neon-green radioactive slime beast
-  { body: '#40ed52', accent: '#85ff70', eye: '#122616', pupil: '#e0ffc4', detail: '#24b83d' },
-  // 12. Rogue: armored cobalt ex-IDPD trooper with white pauldrons & cyan visor
-  { body: '#3b73cf', accent: '#edf3fc', eye: '#7df4ff', pupil: '#ffffff', detail: '#224994' },
+  // 1. Fish: bright sea-green amphibian, yellow eyes, brown belt, dark shorts
+  { body: '#4eb870', bodyHi: '#80e29c', bodyDark: '#2c7e4a', accent: '#2a6e46', accentHi: '#62cf84', eye: '#fff266', pupil: INK, detail: '#a86a38', shorts: '#363a48' },
+  // 2. Crystal: faceted vibrant magenta/pink crystal
+  { body: '#e058c8', bodyHi: '#ff98ec', bodyDark: '#9a2888', accent: '#f484e4', accentHi: '#ffd6fa', eye: '#ffffff', pupil: '#541264', detail: '#c03ca8', shorts: '#6c2068' },
+  // 3. Eyes: pale blue-slate head covered in blinking white/black eyes
+  { body: '#7888a8', bodyHi: '#a6b6d4', bodyDark: '#4c5a78', accent: '#445070', accentHi: '#94a6c8', eye: '#ffffff', pupil: INK, detail: '#343c54', shorts: '#2e344a' },
+  // 4. Melting: pale gaunt bone/flesh dripping mutant with dark hollow eyes & crimson ribs
+  { body: '#d8c4b0', bodyHi: '#f4eadc', bodyDark: '#9c8672', accent: '#c8343c', accentHi: '#f0646c', eye: '#140e16', pupil: '#140e16', detail: '#7a6658', shorts: '#4e3c3c' },
+  // 5. Plant: bright lime-green snapping flytrap head with crimson maw & teeth
+  { body: '#58c838', bodyHi: '#8ef064', bodyDark: '#328620', accent: '#dc2c3a', accentHi: '#ff6470', eye: '#ffe848', pupil: INK, detail: '#ffffff', shorts: '#2a6220' },
+  // 6. Y.V.: crisp pure-white triangle with huge central eye & gold chain
+  { body: '#f4f4f8', bodyHi: '#ffffff', bodyDark: '#b8bcc8', accent: '#f5c838', accentHi: '#fff494', eye: '#ffffff', pupil: INK, detail: '#d49a1e', shorts: '#282430' },
+  // 7. Steroids: buff warm-tan shirtless bodybuilder, bald head + round glasses, blue-gray shorts!
+  { body: '#e0a470', bodyHi: '#f8cfa2', bodyDark: '#b87648', accent: '#ffffff', accentHi: '#c8f0ff', eye: '#ffffff', pupil: INK, detail: '#8a4e2c', shorts: '#3a4c6e' },
+  // 8. Robot: boxy gunmetal steel robot with bright glowing cyan visor
+  { body: '#7c8894', bodyHi: '#b4c2ce', bodyDark: '#4c5662', accent: '#424c58', accentHi: '#98a6b4', eye: '#48e8ff', pupil: '#e8feff', detail: '#e83c34', shorts: '#323a44' },
+  // 9. Chicken: bright white feathered chicken with crimson comb, yellow beak, red headband
+  { body: '#f2f2f2', bodyHi: '#ffffff', bodyDark: '#bcbcc4', accent: '#e42c28', accentHi: '#ff645c', eye: INK, pupil: '#ffffff', detail: '#f8bc28', shorts: '#c42424' },
+  // 10. Rebel: hooded slate-blue wasteland nomad with warm scarf & glowing white eyes
+  { body: '#4a5a7a', bodyHi: '#7286aa', bodyDark: '#2e3a54', accent: '#d6b682', accentHi: '#f4dec0', eye: '#ffffff', pupil: '#fff4a8', detail: '#8c6e48', shorts: '#2a3244' },
+  // 11. Horror: glowing radioactive lime-green hound/blob beast
+  { body: '#58f050', bodyHi: '#a8ff88', bodyDark: '#26a024', accent: '#98ff68', accentHi: '#ecffe0', eye: '#102412', pupil: '#ffffff', detail: '#1c7a1c', shorts: '#249424' },
+  // 12. Rogue: cobalt-blue IDPD armor with dark visor & yellow stripe
+  { body: '#3c74c8', bodyHi: '#6ca2f2', bodyDark: '#22488c', accent: '#f5d038', accentHi: '#fff498', eye: '#68ecff', pupil: '#ffffff', detail: '#e6eef8', shorts: '#1e386c' },
 ];
 
 export const MUTANT_B_PALETTES: readonly MutantPalette[] = [
-  // 1B. Fish B: swamp-green pirate + crimson bandana & eyepatch + gold strap
-  { body: '#2c8552', accent: '#d92638', eye: '#ffe859', pupil: '#141118', detail: '#f5c742' },
-  // 2B. Crystal B: imperial golden-amber crystal golem + icy cyan eyes
-  { body: '#eba828', accent: '#ffe066', eye: '#80f7ff', pupil: '#266b85', detail: '#c97812' },
-  // 3B. Eyes B: dark plum/crimson mystic with glowing golden eyes
-  { body: '#5c2a78', accent: '#a8214a', eye: '#ffe84d', pupil: '#1a0c14', detail: '#bd335a' },
+  // 1B. Fish B: dark swamp-green pirate with crimson bandana & eyepatch
+  { body: '#34945a', bodyHi: '#62c484', bodyDark: '#1e6038', accent: '#dc2838', accentHi: '#ff606e', eye: '#fff060', pupil: INK, detail: '#f5c838', shorts: '#2a2634' },
+  // 2B. Crystal B: radiant golden-amber crystal
+  { body: '#f0b028', bodyHi: '#ffe470', bodyDark: '#b27410', accent: '#ffd848', accentHi: '#fff8c4', eye: '#68f4ff', pupil: '#1c5874', detail: '#d48c18', shorts: '#8c540c' },
+  // 3B. Eyes B: plum/magenta psychic with glowing gold eyes
+  { body: '#78408e', bodyHi: '#aa6ec4', bodyDark: '#4a205c', accent: '#b82856', accentHi: '#eb5884', eye: '#ffe848', pupil: INK, detail: '#5c1836', shorts: '#321440' },
   // 4B. Melting B: charred obsidian skull with blazing volcanic orange sockets
-  { body: '#4d4457', accent: '#e03b28', eye: '#ff6e1a', pupil: '#fff48f', detail: '#8f221b' },
+  { body: '#564c62', bodyHi: '#827690', bodyDark: '#302838', accent: '#e84424', accentHi: '#ff9648', eye: '#ff7018', pupil: '#fff488', detail: '#a42618', shorts: '#241e2a' },
   // 5B. Plant B: exotic teal stalk with neon magenta flytrap jaws
-  { body: '#288f81', accent: '#d429bf', eye: '#7dffec', pupil: '#ffffff', detail: '#ffe8ff' },
-  // 6B. Y.V. B: VIP solid gold pyramid with crimson shades
-  { body: '#f5c436', accent: '#d62438', eye: '#ff4252', pupil: '#140c10', detail: '#38d968' },
-  // 7B. Steroids B: commando crimson-black vest & dark tactical shades
-  { body: '#cc7d52', accent: '#353140', eye: '#18141c', pupil: '#ffe047', detail: '#c42730' },
-  // 8B. Robot B: cobalt & gold retro arcade mech with cyan CRT
-  { body: '#3b6ec9', accent: '#ebba34', eye: '#70f4ff', pupil: '#ffffff', detail: '#ff4a63' },
+  { body: '#2e9c8c', bodyHi: '#5cd0be', bodyDark: '#1a685c', accent: '#d830c0', accentHi: '#ff78ec', eye: '#78ffec', pupil: INK, detail: '#ffffff', shorts: '#18544c' },
+  // 6B. Y.V. B: solid gold pyramid with red shades
+  { body: '#f5c838', bodyHi: '#fff088', bodyDark: '#b88412', accent: '#e0283c', accentHi: '#ff6c7c', eye: '#ff3c50', pupil: INK, detail: '#44d864', shorts: '#2c1e28' },
+  // 7B. Steroids B: cowboy-hat buff tan shirtless Steroids matching reference video!
+  { body: '#e0a470', bodyHi: '#f8cfa2', bodyDark: '#b87648', accent: '#7c5234', accentHi: '#a6744c', eye: '#18141c', pupil: '#ffe048', detail: '#f5c838', shorts: '#385898' },
+  // 8B. Robot B: cobalt & gold retro mech with glowing cyan CRT
+  { body: '#3c72cc', bodyHi: '#72a4f4', bodyDark: '#22468a', accent: '#ebb834', accentHi: '#ffe678', eye: '#68f4ff', pupil: '#ffffff', detail: '#ff4858', shorts: '#203258' },
   // 9B. Chicken B: midnight-black shinobi ninja with glowing red eyes
-  { body: '#2e2a3d', accent: '#de2437', eye: '#ff3847', pupil: '#ffe880', detail: '#f5c438' },
-  // 10B. Rebel B: royal crimson desert cloak & silver scarf
-  { body: '#ad293a', accent: '#d8e0eb', eye: '#ffe347', pupil: '#1a1214', detail: '#403645' },
-  // 11B. Horror B: volatile electric-cyan plasma anomaly
-  { body: '#36c9f2', accent: '#808cff', eye: '#121a38', pupil: '#ffffff', detail: '#4d98ff' },
+  { body: '#343044', bodyHi: '#5a5470', bodyDark: '#1c1828', accent: '#e42838', accentHi: '#ff6472', eye: '#ff3848', pupil: '#ffe878', detail: '#f5c838', shorts: '#1a1624' },
+  // 10B. Rebel B: crimson desert cloak & silver scarf
+  { body: '#b02c3e', bodyHi: '#de5a6c', bodyDark: '#741826', accent: '#d8e0ec', accentHi: '#ffffff', eye: '#ffe848', pupil: '#ffffff', detail: '#6a586e', shorts: '#3a1c28' },
+  // 11B. Horror B: electric-cyan volatile rad anomaly
+  { body: '#38ccf4', bodyHi: '#8cf0ff', bodyDark: '#1c82b4', accent: '#7c94ff', accentHi: '#d6e4ff', eye: '#101838', pupil: '#ffffff', detail: '#2466a8', shorts: '#1c70a4' },
   // 12B. Rogue B: covert charcoal & crimson armor with amber visor
-  { body: '#3c3f52', accent: '#d42938', eye: '#ffc138', pupil: '#fff7cc', detail: '#8c1b26' },
+  { body: '#44485c', bodyHi: '#6e7490', bodyDark: '#262836', accent: '#dc2c3c', accentHi: '#ff6876', eye: '#ffc438', pupil: '#fff8c8', detail: '#b82230', shorts: '#1e202c' },
 ];
 
+type MutantVariant = 'idle' | 'walk' | 'hurt' | 'dead' | 'sit' | 'gosit' | 'headless_idle' | 'headless_walk' | 'headless_hurt';
+
 /**
- * Draws a rich 36x36 Hi-Bit (logical 18x18) expressive pixel-art mutant frame
- * using PxCanvas volumetric forms + ONE unified outer silhouette outline!
+ * Draws a crisp native 1x (24x24, origin 12,12) Nuclear Throne mutant sprite
+ * with bold 1px `#0d0a10` outline, chunky readable silhouette, and vibrant color blocks!
  */
-function drawMutantHiBit(
+function drawMutant1x(
   ctx: DrawCtx,
   x: number,
   y: number,
@@ -75,425 +83,513 @@ function drawMutantHiBit(
   h: number,
   raceIndex: number,
   isB: boolean,
-  variant: 'idle' | 'walk' | 'hurt' | 'dead' | 'sit' | 'gosit',
+  variant: MutantVariant,
   frame: number,
 ): void {
   const pal = (isB ? MUTANT_B_PALETTES : MUTANT_A_PALETTES)[raceIndex - 1]!;
-  const buf = new PxCanvas(w, h);
-  const cx = 18;
-  const cy = 18;
+  const p = new PxCanvas(w, h);
+  const cx = 12;
+  const cy = 12;
 
+  // DEAD: 6 frames (0..2 tumble -> 3..5 dark muted desaturated flattened resting corpse!)
   if (variant === 'dead') {
-    const bodyR = makeRamp(pal.body, '#120c17');
-    const accR = makeRamp(pal.accent, '#120c17');
-    if (frame === 0) {
-      // Mid-collapse tumble
-      buf.shadedEllipse(cx, cy + 4, 11, 7, bodyR);
-      buf.rect(cx - 5, cy + 1, 5, 4, '#cc2233');
-      buf.rect(cx + 2, cy + 2, 3, 3, pal.eye);
+    if (frame <= 1) {
+      // Mid-collapse knockback silhouette
+      const fill = frame === 0 ? '#d4b8b8' : pal.bodyDark;
+      p.rect(cx - 5, cy, 10, 6, fill);
+      p.rect(cx - 4, cy - 1, 8, 2, pal.body);
+      p.rect(cx - 3, cy + 2, 2, 2, '#9a1c28');
+      p.rect(cx + 2, cy + 1, 2, 2, INK);
+    } else if (frame === 2) {
+      // Hitting ground
+      p.rect(cx - 6, cy + 2, 12, 5, pal.bodyDark);
+      p.rect(cx - 4, cy + 1, 8, 2, pal.shorts);
+      p.rect(cx + 2, cy + 3, 3, 2, '#6c1620');
     } else {
-      // Resting fallen body in dark crimson blood stain
-      buf.organicBlob(cx, cy + 10, 14, 5, raceIndex * 7, 0.2, makeRamp('#751520', '#2b060b'));
-      buf.shadedEllipse(cx - 1, cy + 8, 11, 5.5, bodyR);
-      buf.bevelBox(cx + 4, cy + 6, 6, 4, accR, true);
-      // X-eyes
-      buf.line(cx - 7, cy + 6, cx - 5, cy + 8, '#140e16', 1);
-      buf.line(cx - 5, cy + 6, cx - 7, cy + 8, '#140e16', 1);
-      buf.line(cx - 2, cy + 6, cx, cy + 8, '#140e16', 1);
-      buf.line(cx, cy + 6, cx - 2, cy + 8, '#140e16', 1);
+      // Final resting corpses (frames 3..5): dark muted flattened silhouettes matching the video!
+      p.rect(cx - 7, cy + 4, 14, 4, '#2a2228');
+      p.rect(cx - 6, cy + 3, 11, 3, '#3c323a');
+      p.rect(cx - 4, cy + 2 + (raceIndex % 2), 6, 2, '#50444c');
+      // Subtle muted race-specific silhouette accent
+      if (raceIndex === 2) p.poly([[cx - 3, cy + 2], [cx + 1, cy + 1], [cx + 3, cy + 4]], pal.bodyDark);
+      else if (raceIndex === 6) p.poly([[cx - 4, cy + 6], [cx, cy + 2], [cx + 4, cy + 6]], '#585662');
+      else p.rect(cx - 3, cy + 4, 4, 1, pal.bodyDark);
+      p.rect(cx + 2, cy + 4, 3, 2, '#4a1820');
     }
-    buf.outline('#110b16', bodyR.out);
-    buf.flush(ctx, x, y);
+    p.outline(INK);
+    p.flush(ctx, x, y);
     return;
   }
 
-  const hurt = variant === 'hurt';
-  const body = makeRamp(hurt ? '#ffffff' : pal.body, '#120c17');
-  const acc = makeRamp(hurt ? '#ff7070' : pal.accent, '#120c17');
-  const det = makeRamp(hurt ? '#ffffff' : pal.detail, '#120c17');
-  const boot = makeRamp(hurt ? '#ffcccc' : '#302736', '#100a14');
-  const eye = hurt ? '#14101a' : pal.eye;
-  const pupil = hurt ? '#ffffff' : pal.pupil;
+  const isHurt = variant === 'hurt' || variant === 'headless_hurt';
+  const hurtPureWhite = isHurt && frame === 0;
+  const hurtPink = isHurt && frame === 1;
+  const body = hurtPureWhite ? '#ffffff' : hurtPink ? '#ffd4d4' : pal.body;
+  const bodyHi = hurtPureWhite ? '#ffffff' : hurtPink ? '#ffffff' : pal.bodyHi;
+  const bodyDark = hurtPureWhite ? '#e8e8e8' : hurtPink ? '#e08088' : pal.bodyDark;
+  const acc = hurtPureWhite ? '#ffffff' : hurtPink ? '#ff9898' : pal.accent;
+  const accHi = hurtPureWhite ? '#ffffff' : hurtPink ? '#ffffff' : pal.accentHi;
+  const det = hurtPureWhite ? '#ffffff' : hurtPink ? '#ffcccc' : pal.detail;
+  const shorts = hurtPureWhite ? '#dcdcdc' : hurtPink ? '#b86878' : pal.shorts;
+  const eye = hurtPureWhite ? INK : pal.eye;
+  const pupil = hurtPureWhite ? '#ffffff' : pal.pupil;
+  const boot = hurtPureWhite ? '#d0d0d0' : '#26202c';
 
-  const bob =
-    variant === 'walk'
-      ? (frame === 1 || frame === 3 ? -2 : 0)
-      : variant === 'idle'
-        ? (frame === 2 ? 1 : 0)
-        : variant === 'sit'
-          ? 2 + ((frame & 1) === 1 ? 1 : 0)
-          : variant === 'gosit'
-            ? (frame & 1) * 2
-            : 0;
-  const stride = variant === 'walk' ? (frame === 0 ? -3 : frame === 2 ? 3 : 0) : 0;
-  const ty = Math.min(cy + 2, cy + bob);
+  const isWalk = variant === 'walk' || variant === 'headless_walk';
+  const isSit = variant === 'sit';
+  const isGoSit = variant === 'gosit';
+  const isHeadless = variant === 'headless_idle' || variant === 'headless_walk' || variant === 'headless_hurt';
 
-  // Expressive striding boots / tucked seated feet (drawn first so torso overlaps naturally!)
-  if (variant === 'sit') {
-    buf.shadedEllipse(cx - 6, cy + 12, 4.2, 2.8, boot);
-    buf.shadedEllipse(cx + 6, cy + 12, 4.2, 2.8, boot);
+  const bob = isWalk
+    ? (frame === 1 || frame === 3 ? -1 : 0)
+    : variant === 'idle' || variant === 'headless_idle'
+      ? (frame === 2 ? 1 : 0)
+      : isSit
+        ? 2 + (frame & 1)
+        : isGoSit
+          ? 1 + (frame & 1)
+          : 0;
+  const ty = cy + bob;
+
+  // Compact chunky feet / seated legs (drawn first)
+  if (isSit) {
+    p.rect(cx - 5, cy + 6, 3, 2, boot);
+    p.rect(cx + 2, cy + 6, 3, 2, boot);
   } else {
-    buf.shadedEllipse(cx - 5 + stride, cy + 12 - Math.abs(stride) * 0.35, 3.6, 3.2, boot);
-    buf.shadedEllipse(cx + 5 - stride, cy + 12 - Math.abs(stride) * 0.35, 3.6, 3.2, boot);
+    const stepL = isWalk ? (frame === 0 ? -1 : frame === 2 ? 1 : 0) : 0;
+    const stepR = -stepL;
+    p.rect(cx - 4 + stepL, cy + 6 - (frame === 0 && isWalk ? 1 : 0), 3, 2, boot);
+    p.rect(cx + 1 + stepR, cy + 6 - (frame === 2 && isWalk ? 1 : 0), 3, 2, boot);
   }
 
   switch (raceIndex) {
     case 1: {
-      // FISH: Swept spiky dorsal fin crest, muscular amphibian torso, leather belt & golden goggle eyes!
-      buf.poly([[cx - 4, ty - 10], [cx - 1, ty - 16], [cx + 3, ty - 14], [cx + 6, ty - 9]], acc);
-      buf.line(cx - 1, ty - 15, cx + 2, ty - 13, acc.hi, 1);
-      // Plump shaded amphibious torso + head
-      buf.shadedEllipse(cx, ty + 3, 9.5, 8.5, body);
-      buf.shadedEllipse(cx, ty - 4, 8.5, 6.8, body);
-      // Gill slits on cheek
-      buf.line(cx - 7, ty - 2, cx - 5, ty - 1, body.dark2, 1);
-      buf.line(cx - 7, ty, cx - 5, ty + 1, body.dark2, 1);
-      // Tactical wasteland belt & gleaming brass buckle
-      buf.bevelBox(cx - 9, ty + 4, 18, 4, det, false);
-      buf.bevelBox(cx - 2, ty + 4, 5, 4, makeRamp('#f5cc42', '#382208'), false);
-      if (isB && !hurt) {
-        // Pirate bandana + fluttering tail + black eyepatch!
-        buf.bevelBox(cx - 9, ty - 10, 18, 4, acc, false);
-        buf.poly([[cx + 8, ty - 9], [cx + 15, ty - 7 + (frame & 1) * 2], [cx + 13, ty - 4 + (frame & 1) * 2], [cx + 8, ty - 6]], acc);
-        buf.bevelBox(cx - 6, ty - 7, 5, 5, makeRamp('#1b1621', '#09060d'), true);
-        buf.line(cx - 8, ty - 8, cx + 2, ty - 5, '#140f1a', 1);
-        buf.rect(cx + 2, ty - 6, 4, 4, eye);
-        buf.rect(cx + 4, ty - 5, 2, 2, pupil);
-        buf.set(cx + 2, ty - 6, '#ffffff');
+      // FISH: Bright sea-green amphibian, spiky dorsal fin, wide yellow eyes, brown belt & dark shorts
+      p.rect(cx - 2, ty - 8, 3, 2, accHi);
+      p.set(cx - 1, ty - 9, accHi);
+      p.set(cx + 1, ty - 8, acc);
+      // Chunky round amphibian body & head
+      p.rect(cx - 5, ty - 6, 10, 10, body);
+      p.rect(cx - 4, ty - 7, 8, 2, bodyHi);
+      p.rect(cx - 5, ty + 1, 10, 3, bodyDark);
+      // Shorts + leather belt + brass buckle
+      p.rect(cx - 4, ty + 3, 8, 3, shorts);
+      p.rect(cx - 5, ty + 2, 10, 2, det);
+      p.rect(cx - 1, ty + 2, 2, 2, '#f5cc38');
+      if (isB && !hurtPureWhite) {
+        // Pirate crimson bandana + fluttering tail + black eyepatch
+        p.rect(cx - 5, ty - 6, 10, 2, acc);
+        p.rect(cx - 7, ty - 5 + (frame & 1), 2, 2, acc);
+        p.rect(cx - 4, ty - 4, 3, 3, INK);
+        p.rect(cx + 1, ty - 4, 3, 3, eye);
+        p.set(cx + 3, ty - 3, pupil);
       } else {
-        // Expressive twin golden amphibian eyes + specular glint
-        buf.rect(cx - 6, ty - 6, 4, 4, eye);
-        buf.rect(cx + 2, ty - 6, 4, 4, eye);
-        buf.rect(cx - 4, ty - 5, 2, 2, pupil);
-        buf.rect(cx + 4, ty - 5, 2, 2, pupil);
-        buf.set(cx - 6, ty - 6, '#ffffff');
-        buf.set(cx + 2, ty - 6, '#ffffff');
+        // Wide expressive yellow amphibian eyes
+        p.rect(cx - 4, ty - 4, 3, 3, eye);
+        p.rect(cx + 1, ty - 4, 3, 3, eye);
+        p.set(cx - 2, ty - 3, pupil);
+        p.set(cx + 3, ty - 3, pupil);
+        p.set(cx - 4, ty - 4, '#ffffff');
+        p.set(cx + 1, ty - 4, '#ffffff');
       }
-      // Confident wide amphibian smirk
-      buf.line(cx - 4, ty, cx + 4, ty, '#12291c', 1);
-      buf.set(cx + 4, ty - 1, '#12291c');
+      // Wide amphibian grin
+      p.rect(cx - 2, ty, 5, 1, '#183824');
       break;
     }
 
     case 2: {
-      // CRYSTAL: Jagged asymmetric faceted prismatic golem with gleaming specular crystal planes!
-      buf.poly([[cx - 12, ty + 3], [cx - 10, ty - 7], [cx - 4, ty - 10], [cx - 3, ty + 6]], makeRamp(body.dark, body.out));
-      buf.poly([[cx + 12, ty + 3], [cx + 10, ty - 8], [cx + 4, ty - 10], [cx + 3, ty + 6]], makeRamp(body.dark, body.out));
-      buf.poly([[cx, ty - 15], [cx + 9, ty - 4], [cx + 7, ty + 11], [cx - 7, ty + 11], [cx - 9, ty - 4]], body);
-      // Crisp lit-left / shadowed-right crystal planar bevels
-      buf.poly([[cx, ty - 14], [cx - 8, ty - 4], [cx - 5, ty + 9], [cx, ty + 9]], body.light);
-      buf.poly([[cx, ty - 14], [cx - 5, ty - 5], [cx, ty - 2]], body.hi);
-      buf.poly([[cx, ty - 14], [cx + 8, ty - 4], [cx + 5, ty + 9], [cx, ty + 9]], body.dark);
-      buf.line(cx - 3, ty - 10, cx - 6, ty - 3, '#ffffff', 1);
-      buf.set(cx, ty - 13, '#ffffff');
+      // CRYSTAL: Faceted vibrant magenta/pink crystalline golem!
+      // Jagged shoulder shards
+      p.rect(cx - 6, ty - 2, 2, 6, bodyDark);
+      p.rect(cx + 4, ty - 2, 2, 6, bodyDark);
+      // Main diamond-topped faceted crystal torso
+      p.rect(cx - 4, ty - 5, 8, 10, body);
+      p.rect(cx - 3, ty - 7, 6, 3, bodyHi);
+      p.rect(cx - 1, ty - 8, 2, 2, '#ffffff');
+      // Left lit specular facet / right deep shadow facet
+      p.rect(cx - 4, ty - 5, 3, 8, bodyHi);
+      p.rect(cx - 3, ty - 6, 2, 2, '#ffffff');
+      p.rect(cx + 2, ty - 4, 3, 9, bodyDark);
+      // Faceted legs
+      p.rect(cx - 4, ty + 4, 8, 2, shorts);
       // Glowing crystalline eyes
-      buf.rect(cx - 5, ty - 4, 3, 4, eye);
-      buf.rect(cx + 2, ty - 4, 3, 4, eye);
-      buf.set(cx - 4, ty - 3, '#ffffff');
-      buf.set(cx + 3, ty - 3, '#ffffff');
+      p.rect(cx - 3, ty - 2, 2, 2, eye);
+      p.rect(cx + 1, ty - 2, 2, 2, eye);
       break;
     }
 
     case 3: {
-      // EYES: Mysterious domed cobalt psychic teeming with 6 glistening staring eyes!
-      buf.shadedEllipse(cx, ty + 3, 9.5, 8.5, body);
-      buf.shadedEllipse(cx, ty - 4, 8.8, 7.5, body);
-      buf.bevelBox(cx - 9, ty + 6, 18, 4, acc, true);
-      const eyeSpecs: Array<[number, number, number, number]> = [
-        [-6, -6, 5, 5], [2, -6, 5, 5],
-        [-3, -1, 4, 4], [3, 1, 4, 3],
-        [-7, 1, 3, 3], [0, -10, 3, 3],
-      ];
-      for (const [ox, oy, ew, eh] of eyeSpecs) {
-        buf.rect(cx + ox, ty + oy, ew, eh, eye);
-        buf.rect(cx + ox + Math.floor(ew * 0.45), ty + oy + Math.floor(eh * 0.45), Math.max(1, ew - 3), Math.max(1, eh - 3), pupil);
-        buf.set(cx + ox, ty + oy, '#ffffff');
+      // EYES: Pale blue-slate domed psychic covered with bold blinking white/black eyes!
+      p.rect(cx - 5, ty - 6, 10, 10, body);
+      p.rect(cx - 4, ty - 7, 8, 2, bodyHi);
+      p.rect(cx - 5, ty + 1, 10, 3, bodyDark);
+      p.rect(cx - 4, ty + 3, 8, 3, shorts);
+      const blink = variant === 'idle' && frame === 3;
+      if (blink) {
+        p.rect(cx - 4, ty - 3, 3, 1, INK);
+        p.rect(cx + 1, ty - 3, 3, 1, INK);
+        p.rect(cx - 1, ty - 6, 2, 1, INK);
+      } else {
+        // Bold cluster of glaring eyes
+        p.rect(cx - 4, ty - 4, 3, 3, eye);
+        p.set(cx - 2, ty - 3, pupil);
+        p.rect(cx + 1, ty - 4, 3, 3, eye);
+        p.set(cx + 3, ty - 3, pupil);
+        p.rect(cx - 1, ty - 6, 2, 2, eye);
+        p.set(cx, ty - 6, pupil);
+        p.rect(cx - 2, ty, 2, 2, eye);
+        p.set(cx - 1, ty + 1, pupil);
+        p.rect(cx + 2, ty, 2, 2, eye);
+        p.set(cx + 3, ty + 1, pupil);
       }
       break;
     }
 
     case 4: {
-      // MELTING: Dramatic cracked ivory skull, hollow sockets, clenched teeth & exposed crimson ribcage!
-      // Gaunt ribcage torso
-      buf.poly([[cx - 7, ty + 1], [cx + 7, ty + 1], [cx + 9, ty + 11], [cx - 9, ty + 11]], makeRamp(body.dark, body.out));
-      buf.rect(cx - 3, ty + 2, 6, 8, acc.base);
-      buf.rect(cx - 2, ty + 3, 4, 6, acc.hi);
-      for (const ry of [2, 5, 8]) {
-        buf.rect(cx - 7, ty + ry, 5, 2, body.hi);
-        buf.rect(cx + 2, ty + ry, 5, 2, body.base);
+      // MELTING: Pale gaunt skeletal/fleshy dripping mutant with dark hollow eyes & crimson ribcage
+      // Gaunt torso + exposed crimson ribcage
+      p.rect(cx - 4, ty, 8, 6, bodyDark);
+      p.rect(cx - 2, ty + 1, 4, 4, acc);
+      p.rect(cx - 4, ty + 1, 2, 1, bodyHi);
+      p.rect(cx + 2, ty + 1, 2, 1, bodyHi);
+      p.rect(cx - 4, ty + 3, 2, 1, body);
+      p.rect(cx + 2, ty + 3, 2, 1, body);
+      // Dripping cranium
+      p.rect(cx - 5, ty - 6, 10, 6, body);
+      p.rect(cx - 4, ty - 7, 8, 2, bodyHi);
+      p.rect(cx - 5, ty, 2, 2, body); // melting cheek drip
+      p.rect(cx + 3, ty, 2, 2, bodyDark);
+      // Hollow dark eye sockets (glowing volcanic orange in B-skin)
+      p.rect(cx - 3, ty - 4, 2, 3, eye);
+      p.rect(cx + 1, ty - 4, 2, 3, eye);
+      if (isB && !hurtPureWhite) {
+        p.set(cx - 2, ty - 3, pupil);
+        p.set(cx + 2, ty - 3, pupil);
       }
-      // Sculpted cranium & cheekbone skull
-      buf.shadedEllipse(cx, ty - 7, 8.2, 6.8, body);
-      buf.bevelBox(cx - 5, ty - 2, 10, 4, body, false);
-      // Cranial fracture crack
-      buf.crack(cx + 3, ty - 13, 5, 1.8, 3, '#1a121f');
-      // Deep hollow eye sockets (volcanic glow in B-skin!)
-      buf.ellipse(cx - 3.5, ty - 6, 2.4, 2.6, eye);
-      buf.ellipse(cx + 3.5, ty - 6, 2.4, 2.6, eye);
-      if (isB && !hurt) {
-        buf.rect(cx - 4, ty - 7, 2, 2, pupil);
-        buf.rect(cx + 3, ty - 7, 2, 2, pupil);
-      }
-      buf.rect(cx - 1, ty - 4, 2, 2, '#18111c');
       // Clenched skull teeth
-      for (let tx = cx - 4; tx <= cx + 3; tx += 2) {
-        buf.set(tx, ty, '#18111c');
-      }
+      p.rect(cx - 2, ty - 1, 4, 1, INK);
+      p.set(cx - 1, ty - 1, bodyHi);
+      p.set(cx + 1, ty - 1, bodyHi);
       break;
     }
 
     case 5: {
-      // PLANT: Leafy stalk warrior with snapping wide crimson flytrap jaws & gleaming fangs!
-      buf.poly([[cx - 6, ty + 2], [cx + 6, ty + 2], [cx + 9, ty + 11], [cx - 9, ty + 11]], body);
-      // Splayed collar leaves
-      buf.shadedEllipse(cx - 9, ty + 4, 4.5, 2.4, body);
-      buf.shadedEllipse(cx + 9, ty + 4, 4.5, 2.4, body);
-      // Giant carnivorous flytrap head
-      buf.shadedEllipse(cx, ty - 6, 9.5, 7.5, acc);
-      // Gaping dark jagged maw with razor white fangs
-      buf.poly([[cx - 8, ty - 5], [cx + 8, ty - 5], [cx + 6, ty - 1], [cx - 6, ty - 1]], '#1a070d');
-      for (let fx = cx - 6; fx <= cx + 5; fx += 3) {
-        buf.rect(fx, ty - 5, 2, 2, '#ffffff');
-        buf.set(fx + 1, ty - 2, '#fff0d6');
-      }
-      // Fierce glowing predator eyes
-      buf.rect(cx - 6, ty - 10, 3, 3, eye);
-      buf.rect(cx + 3, ty - 10, 3, 3, eye);
-      buf.set(cx - 5, ty - 10, '#ffffff');
-      buf.set(cx + 4, ty - 10, '#ffffff');
+      // PLANT: Bright lime-green snapping flytrap head with crimson maw & white teeth!
+      // Leafy stalk body + splayed collar leaves
+      p.rect(cx - 4, ty + 1, 8, 5, bodyDark);
+      p.rect(cx - 3, ty + 1, 6, 4, body);
+      p.rect(cx - 6, ty + 2, 2, 2, bodyHi);
+      p.rect(cx + 4, ty + 2, 2, 2, bodyHi);
+      // Big snapping lime-green & crimson flytrap head
+      p.rect(cx - 5, ty - 7, 10, 8, body);
+      p.rect(cx - 4, ty - 8, 8, 2, bodyHi);
+      // Crimson inner maw + crisp white fangs!
+      p.rect(cx - 4, ty - 4, 8, 4, acc);
+      p.rect(cx - 3, ty - 3, 6, 2, '#18060a');
+      p.set(cx - 3, ty - 3, det);
+      p.set(cx - 1, ty - 3, det);
+      p.set(cx + 1, ty - 3, det);
+      p.set(cx + 3, ty - 3, det);
+      p.set(cx - 2, ty - 2, det);
+      p.set(cx + 2, ty - 2, det);
+      // Bright yellow eyes on top of head
+      p.rect(cx - 3, ty - 6, 2, 2, eye);
+      p.rect(cx + 1, ty - 6, 2, 2, eye);
       break;
     }
 
     case 6: {
-      // Y.V.: Razor-sharp sunlit 3D pyramid + expressive cyclops eye + chunky bling gold chain!
-      buf.poly([[cx, ty - 15], [cx + 12, ty + 10], [cx - 12, ty + 10]], body);
-      buf.poly([[cx, ty - 14], [cx, ty + 9], [cx - 11, ty + 9]], body.light);
-      buf.poly([[cx, ty - 14], [cx + 11, ty + 9], [cx, ty + 9]], body.dark);
-      buf.line(cx, ty - 14, cx - 10, ty + 8, '#ffffff', 1);
-      if (isB && !hurt) {
-        // Slick VIP shades
-        buf.bevelBox(cx - 7, ty - 5, 14, 5, makeRamp('#1d1421', '#09060d'), true);
-        buf.rect(cx - 5, ty - 4, 10, 3, acc.base);
-        buf.line(cx - 4, ty - 4, cx - 1, ty - 2, '#ffffff', 1);
-      } else {
-        // Iconic bold angled cyclops eye
-        buf.ellipse(cx, ty - 3, 5.5, 3.2, '#140f1a');
-        buf.ellipse(cx, ty - 3, 4.2, 2.0, eye);
-        buf.rect(cx - 1, ty - 4, 2, 3, pupil);
-        buf.set(cx - 2, ty - 4, '#ffffff');
+      // Y.V.: Iconic crisp pure-white triangle with huge expressive central eye & tiny legs!
+      // Exact stepped triangle pyramid
+      for (let row = 0; row < 12; row++) {
+        const halfW = Math.min(6, Math.floor((row + 1) * 0.55));
+        const ry = ty - 7 + row;
+        p.rect(cx - halfW, ry, halfW * 2 + 1, 1, body);
+        if (halfW >= 2) {
+          p.rect(cx - halfW, ry, Math.max(1, Math.floor(halfW * 0.7)), 1, bodyHi);
+          p.rect(cx + Math.max(1, Math.floor(halfW * 0.4)), ry, Math.max(1, halfW - Math.floor(halfW * 0.4) + 1), 1, bodyDark);
+        }
       }
-      // Chunky gleaming gold chain & dollar pendant
-      buf.line(cx - 7, ty + 3, cx, ty + 6, acc.hi, 2);
-      buf.line(cx + 7, ty + 3, cx, ty + 6, acc.base, 2);
-      buf.bevelBox(cx - 3, ty + 5, 6, 5, acc, true);
-      buf.set(cx, ty + 7, '#ffffff');
+      if (isB && !hurtPureWhite) {
+        // Cool red shades
+        p.rect(cx - 4, ty - 2, 9, 3, INK);
+        p.rect(cx - 3, ty - 1, 7, 1, acc);
+      } else {
+        // Huge expressive central eye
+        p.rect(cx - 3, ty - 3, 7, 4, INK);
+        p.rect(cx - 2, ty - 2, 5, 2, eye);
+        p.rect(cx, ty - 2, 2, 2, pupil);
+        p.set(cx - 1, ty - 2, '#ffffff');
+      }
+      // Subtle bling gold chain at bottom
+      p.rect(cx - 3, ty + 3, 7, 1, acc);
+      p.rect(cx - 1, ty + 4, 3, 1, accHi);
       break;
     }
 
     case 7: {
-      // STEROIDS: Huge muscular traps/shoulders, shredded lab coat, bare chest & gleaming round glasses!
-      // Giant muscular arms & broad shoulders
-      buf.shadedEllipse(cx - 10, ty + 2, 4.5, 6.5, body);
-      buf.shadedEllipse(cx + 10, ty + 2, 4.5, 6.5, body);
-      buf.poly([[cx - 10, ty - 5], [cx + 10, ty - 5], [cx + 11, ty + 11], [cx - 11, ty + 11]], body);
-      // Open shredded white lab coat (or black commando vest in B-skin!)
-      buf.bevelBox(cx - 10, ty - 3, 6, 13, acc, false);
-      buf.bevelBox(cx + 4, ty - 3, 6, 13, acc, false);
-      // Muscular chest pectoral line
-      buf.line(cx - 3, ty + 1, cx + 3, ty + 1, body.dark2, 1);
-      buf.line(cx, ty + 1, cx, ty + 7, body.dark, 1);
-      // Square heroic scientist head + round gleaming spectacles
-      buf.bevelBox(cx - 7, ty - 14, 14, 10, body, true);
-      buf.rect(cx - 6, ty - 10, 5, 4, eye);
-      buf.rect(cx + 1, ty - 10, 5, 4, eye);
-      buf.rect(cx - 1, ty - 9, 2, 1, '#1a141c');
-      buf.set(cx - 5, ty - 10, '#ffffff');
-      buf.set(cx + 2, ty - 10, '#ffffff');
-      buf.rect(cx - 4, ty - 8, 2, 2, pupil);
-      buf.rect(cx + 3, ty - 8, 2, 2, pupil);
+      // STEROIDS: Iconic buff warm-tan shirtless bodybuilder!
+      // Broad muscular shoulders, bare pecs & abs, bald head + round glasses (A) or brown cowboy hat (B), blue-gray shorts!
+      // Chunky muscular bare arms on both sides
+      p.rect(cx - 7, ty - 2, 3, 6, body);
+      p.rect(cx - 7, ty - 2, 2, 3, bodyHi);
+      p.rect(cx - 7, ty + 2, 3, 2, bodyDark);
+      p.rect(cx + 4, ty - 2, 3, 6, body);
+      p.rect(cx + 5, ty - 2, 2, 3, bodyHi);
+      p.rect(cx + 4, ty + 2, 3, 2, bodyDark);
+      // Huge muscular shirtless torso
+      p.rect(cx - 5, ty - 3, 10, 7, body);
+      // Sculpted sunlit pecs & dark muscle crease
+      p.rect(cx - 4, ty - 2, 3, 2, bodyHi);
+      p.rect(cx + 1, ty - 2, 3, 2, bodyHi);
+      p.rect(cx - 4, ty, 8, 1, det); // pec under-line
+      p.rect(cx, ty - 2, 1, 5, det); // sternum / ab center line
+      p.rect(cx - 3, ty + 2, 2, 1, bodyDark);
+      p.rect(cx + 1, ty + 2, 2, 1, bodyDark);
+      // Blue-gray shorts + belt buckle
+      p.rect(cx - 5, ty + 3, 10, 3, shorts);
+      p.rect(cx - 1, ty + 3, 2, 2, isB ? det : '#98a6bc');
+      // Bald muscular head
+      p.rect(cx - 4, ty - 7, 8, 5, body);
+      p.rect(cx - 3, ty - 8, 6, 2, bodyHi);
+      if (isB && !hurtPureWhite) {
+        // Iconic brown cowboy hat from the reference video!
+        p.rect(cx - 6, ty - 7, 12, 2, acc);
+        p.rect(cx - 4, ty - 9, 8, 3, acc);
+        p.rect(cx - 3, ty - 9, 5, 1, accHi);
+        p.rect(cx - 4, ty - 7, 8, 1, '#4c301c');
+        // Squinting fierce shades/eyes under brim
+        p.rect(cx - 3, ty - 5, 2, 2, INK);
+        p.rect(cx + 1, ty - 5, 2, 2, INK);
+      } else {
+        // Classic Steroids round white/black glasses!
+        p.rect(cx - 4, ty - 6, 3, 3, INK);
+        p.rect(cx + 1, ty - 6, 3, 3, INK);
+        p.rect(cx - 3, ty - 5, 2, 2, eye);
+        p.rect(cx + 1, ty - 5, 2, 2, eye);
+        p.set(cx - 2, ty - 4, pupil);
+        p.set(cx + 2, ty - 4, pupil);
+        p.set(cx - 3, ty - 5, accHi);
+        p.set(cx + 1, ty - 5, accHi);
+        p.rect(cx - 1, ty - 5, 2, 1, INK); // glasses bridge
+      }
+      // Gritty determined jaw grin
+      p.rect(cx - 2, ty - 3, 4, 1, '#f4efe6');
       break;
     }
 
     case 8: {
-      // ROBOT: Chunky brushed-steel CRT automaton, glowing phosphor visor, chest gauges & antenna!
-      // Antenna & glowing beacon tip
-      buf.rect(cx - 1, ty - 16, 2, 5, '#2b3440');
-      buf.shadedEllipse(cx, ty - 15, 2.2, 2.2, det);
-      // Mechanical clamped side arms
-      buf.bevelBox(cx - 12, ty + 1, 4, 8, acc, true);
-      buf.bevelBox(cx + 8, ty + 1, 4, 8, acc, true);
-      // Brushed-steel armored CRT chassis
-      buf.bevelBox(cx - 9, ty - 12, 18, 22, body, true);
-      // Curved dark glass CRT bezel + glowing phosphor face + animated scanline
-      buf.bevelBox(cx - 7, ty - 9, 14, 10, makeRamp('#141c24', '#080c10'), true);
-      buf.rect(cx - 6, ty - 8, 12, 8, eye);
-      buf.rect(cx - 6, ty - 6 + (frame & 1) * 2, 12, 2, pupil);
-      buf.rect(cx - 5, ty - 7, 3, 2, '#ffffff');
-      // Chest grille & glowing status LEDs
-      buf.bevelBox(cx - 6, ty + 3, 12, 5, acc, false);
-      buf.rect(cx - 4, ty + 5, 2, 2, det.hi);
-      buf.rect(cx, ty + 5, 2, 2, eye);
-      buf.rect(cx + 3, ty + 5, 2, 2, '#ffe047');
+      // ROBOT: Boxy gunmetal steel robot with antenna & bright glowing cyan visor!
+      p.rect(cx, ty - 9, 1, 3, bodyDark);
+      p.rect(cx - 1, ty - 9, 2, 1, det);
+      // Side mechanical arms
+      p.rect(cx - 6, ty - 1, 2, 5, acc);
+      p.rect(cx + 4, ty - 1, 2, 5, acc);
+      // Boxy steel CRT chassis
+      p.rect(cx - 5, ty - 6, 10, 11, body);
+      p.rect(cx - 5, ty - 6, 10, 2, bodyHi);
+      p.rect(cx - 5, ty + 3, 10, 2, bodyDark);
+      // Dark CRT bezel + bright glowing cyan visor
+      p.rect(cx - 4, ty - 4, 8, 5, INK);
+      p.rect(cx - 3, ty - 3, 6, 3, eye);
+      p.rect(cx - 2, ty - 3 + (frame & 1), 4, 1, pupil);
+      // Chest grille & tiny red/yellow LEDs
+      p.rect(cx - 3, ty + 2, 6, 2, acc);
+      p.set(cx - 2, ty + 2, det);
+      p.set(cx + 1, ty + 2, '#ffe048');
       break;
     }
 
     case 9: {
-      // CHICKEN: Feathered martial warrior + scarlet comb (A) or dark ninja hood (B) + fluttering headband!
-      if (!isB) {
-        // Spiky scarlet rooster comb
-        buf.poly([[cx - 4, ty - 11], [cx - 2, ty - 16], [cx + 1, ty - 13], [cx + 4, ty - 16], [cx + 5, ty - 11]], acc);
+      // CHICKEN: Bright white feathered chicken with crimson comb, yellow beak, red headband (or headless!)
+      // Plump feathered torso
+      p.rect(cx - 5, ty - 1, 10, 6, body);
+      p.rect(cx - 4, ty - 1, 7, 2, bodyHi);
+      p.rect(cx - 5, ty + 3, 10, 2, bodyDark);
+      p.rect(cx - 4, ty + 3, 8, 2, shorts); // martial sash
+      if (isHeadless) {
+        // Headless chicken neck + bright crimson spurt
+        p.rect(cx - 2, ty - 3, 4, 2, '#cc2028');
+        p.set(cx - 1 + (frame & 1), ty - 5, '#ff3844');
+        p.set(cx + 1, ty - 4 - (frame & 1), '#ff3844');
+      } else {
+        // Head
+        p.rect(cx - 4, ty - 6, 8, 6, body);
+        p.rect(cx - 3, ty - 6, 6, 2, bodyHi);
+        if (!isB) {
+          // Vivid crimson comb on top
+          p.rect(cx - 2, ty - 8, 2, 2, acc);
+          p.rect(cx + 1, ty - 8, 2, 2, acc);
+          p.set(cx - 1, ty - 9, accHi);
+        }
+        // Crimson martial headband + fluttering tail
+        p.rect(cx - 4, ty - 5, 8, 2, acc);
+        p.rect(cx - 7, ty - 4 + (frame & 1), 3, 2, acc);
+        if (isB) {
+          p.rect(cx - 3, ty - 3, 6, 2, INK);
+        }
+        p.set(cx - 2, ty - 3, eye);
+        p.set(cx + 2, ty - 3, eye);
+        if (!isB) {
+          // Sharp yellow beak
+          p.rect(cx + 2, ty - 2, 4, 2, det);
+          p.set(cx + 3, ty - 2, '#fff498');
+        }
       }
-      buf.shadedEllipse(cx, ty + 3, 9.5, 8.5, body);
-      buf.shadedEllipse(cx, ty - 4, 8.5, 7.2, body);
-      // Fluttering crimson martial headband & billowing tail
-      buf.bevelBox(cx - 9, ty - 9, 18, 4, acc, false);
-      buf.poly([[cx - 8, ty - 8], [cx - 15, ty - 6 + (frame & 1) * 2], [cx - 14, ty - 2 + (frame & 1) * 2], [cx - 8, ty - 5]], acc);
-      if (isB) {
-        buf.rect(cx - 6, ty - 5, 12, 4, '#0d0a14');
-      }
-      buf.rect(cx - 4, ty - 5, 3, 3, eye);
-      buf.rect(cx + 3, ty - 5, 3, 3, eye);
-      buf.set(cx - 3, ty - 5, pupil);
-      buf.set(cx + 4, ty - 5, pupil);
-      if (!isB) {
-        // Sharp hooked golden martial beak
-        buf.poly([[cx + 1, ty - 2], [cx + 8, ty], [cx + 1, ty + 3]], det);
-        buf.set(cx + 3, ty - 1, '#fff5a6');
-      }
-      // Sash belt
-      buf.rect(cx - 8, ty + 5, 16, 3, acc.dark);
       break;
     }
 
     case 10: {
-      // REBEL: Peaked desert nomad cloth hood, deep shadowed cowl, blazing amber eyes & draped scarf!
-      buf.poly([[cx - 5, ty - 14], [cx + 5, ty - 14], [cx + 11, ty - 4], [cx + 10, ty + 11], [cx - 10, ty + 11], [cx - 11, ty - 4]], body);
-      // Deep shadowed hood interior + glowing piercing amber eyes
-      buf.ellipse(cx, ty - 5, 6.5, 4.5, '#120d17');
-      buf.rect(cx - 4, ty - 6, 3, 3, eye);
-      buf.rect(cx + 2, ty - 6, 3, 3, eye);
-      buf.set(cx - 4, ty - 6, '#ffffff');
-      buf.set(cx + 2, ty - 6, '#ffffff');
-      // Layered desert nomad scarf & asymmetric draped sash
-      buf.bevelBox(cx - 9, ty, 18, 5, acc, true);
-      buf.poly([[cx + 3, ty + 4], [cx + 9, ty + 4], [cx + 11, ty + 11], [cx + 5, ty + 11]], acc);
+      // REBEL: Hooded slate-blue wasteland nomad with warm tan scarf & glowing white eyes!
+      p.rect(cx - 5, ty - 5, 10, 10, body);
+      p.rect(cx - 4, ty - 7, 8, 3, body);
+      p.rect(cx - 3, ty - 7, 5, 2, bodyHi);
+      p.rect(cx + 2, ty - 5, 3, 9, bodyDark);
+      // Deep shadowed hood opening + glowing eyes
+      p.rect(cx - 3, ty - 5, 6, 4, INK);
+      p.rect(cx - 2, ty - 4, 2, 2, eye);
+      p.rect(cx + 1, ty - 4, 2, 2, eye);
+      // Warm tan draped scarf across neck & shoulder
+      p.rect(cx - 5, ty - 1, 10, 3, acc);
+      p.rect(cx - 4, ty - 1, 7, 1, accHi);
+      p.rect(cx + 2, ty + 1, 3, 4, acc);
       break;
     }
 
     case 11: {
-      // HORROR: Translucent bubbling neon radioactive slime beast with orbiting rad droplets!
-      const shift = (frame & 1) * 2;
-      buf.organicBlob(cx, ty + 1, 10.5, 10.5, 13 + frame, 0.22, body);
-      buf.shadedEllipse(cx - 1, ty - 1, 7.5, 7, makeRamp(body.light, body.out));
-      buf.ellipse(cx - 3, ty - 4, 3, 2.2, '#ffffff');
-      // Orbiting floating rad globules
-      buf.shadedEllipse(cx - 12, ty - 5 + shift, 3, 3, acc);
-      buf.shadedEllipse(cx + 12, ty - 2 - shift, 2.8, 2.8, acc);
-      // Haunting dark sunken eyes + gaping glowing radioactive grin
-      buf.ellipse(cx - 4, ty - 3, 2.4, 2.6, eye);
-      buf.ellipse(cx + 4, ty - 3, 2.4, 2.6, eye);
-      buf.set(cx - 3, ty - 2, pupil);
-      buf.set(cx + 5, ty - 2, pupil);
-      buf.bevelBox(cx - 4, ty + 3, 8, 4, makeRamp(eye, '#0a140c'), true);
-      buf.rect(cx - 2, ty + 4, 1, 2, acc.hi);
-      buf.rect(cx + 1, ty + 4, 1, 2, acc.hi);
+      // HORROR: Glowing radioactive lime-green hound/blob beast with floating rad droplets!
+      const shift = frame & 1;
+      p.rect(cx - 5, ty - 5, 10, 10, body);
+      p.rect(cx - 4, ty - 6, 8, 2, bodyHi);
+      p.rect(cx - 6, ty - 3, 12, 6, body);
+      p.rect(cx - 3, ty - 4, 6, 4, bodyHi);
+      p.rect(cx - 2, ty - 3, 3, 2, accHi);
+      p.rect(cx - 5, ty + 3, 10, 2, bodyDark);
+      // Orbiting bright rad pixels
+      p.rect(cx - 8, ty - 3 + shift, 2, 2, acc);
+      p.rect(cx + 6, ty - 1 - shift, 2, 2, acc);
+      // Dark hollow eyes & glowing grin
+      p.rect(cx - 3, ty - 3, 2, 2, eye);
+      p.rect(cx + 1, ty - 3, 2, 2, eye);
+      p.rect(cx - 3, ty + 1, 6, 2, eye);
+      p.set(cx - 1, ty + 1, accHi);
+      p.set(cx + 1, ty + 1, accHi);
       break;
     }
 
     default: {
-      // ROGUE: Ex-IDPD armored shock trooper with sloped helmet, curved cyan visor & white pauldrons!
-      // Armored chestplate
-      buf.poly([[cx - 9, ty], [cx + 9, ty], [cx + 10, ty + 11], [cx - 10, ty + 11]], makeRamp(body.dark, body.out));
-      buf.bevelBox(cx - 5, ty + 2, 10, 7, body, true);
-      // Beveled armored white shoulder pauldrons
-      buf.bevelBox(cx - 13, ty - 1, 6, 7, acc, true);
-      buf.bevelBox(cx + 7, ty - 1, 6, 7, acc, true);
-      // Sloped tactical helmet + crest ridge + glowing visor
-      buf.poly([[cx - 6, ty - 14], [cx + 6, ty - 14], [cx + 10, ty - 2], [cx - 10, ty - 2]], body);
-      buf.rect(cx - 2, ty - 14, 4, 5, acc.hi);
-      buf.bevelBox(cx - 7, ty - 9, 14, 5, makeRamp('#0d1526', '#060a12'), true);
-      buf.rect(cx - 5, ty - 7, 10, 2, eye);
-      buf.rect(cx - 4, ty - 7, 4, 1, '#ffffff');
+      // ROGUE: Cobalt-blue IDPD armor with dark visor, cyan gleam & yellow chest stripe!
+      // White/detail shoulder pauldrons
+      p.rect(cx - 6, ty - 1, 2, 4, det);
+      p.rect(cx + 4, ty - 1, 2, 4, det);
+      // Armored cobalt torso + yellow tactical stripe
+      p.rect(cx - 4, ty - 1, 8, 6, body);
+      p.rect(cx - 4, ty + 1, 8, 2, acc);
+      p.rect(cx - 3, ty + 1, 4, 1, accHi);
+      p.rect(cx - 4, ty + 3, 8, 2, shorts);
+      // Sloped cobalt IDPD helmet + dark visor + cyan gleam
+      p.rect(cx - 4, ty - 7, 8, 6, body);
+      p.rect(cx - 3, ty - 7, 6, 2, bodyHi);
+      p.rect(cx - 1, ty - 8, 2, 2, det);
+      p.rect(cx - 3, ty - 5, 6, 3, INK);
+      p.rect(cx - 2, ty - 4, 5, 1, eye);
+      p.set(cx - 1, ty - 4, pupil);
       break;
     }
   }
 
-  buf.outline('#110b16', body.out);
-  buf.flush(ctx, x, y);
+  p.outline(INK);
+  p.flush(ctx, x, y);
 }
 
 export function registerAllMutants(b: FallbackAtlasBuilder): void {
   for (let race = 1; race <= 12; race++) {
     const p = `sprMutant${race}`;
-    b.addSpriteHiBit(`${p}Idle`, 18, 18, 9, 9, 4, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, false, 'idle', f));
-    b.addSpriteHiBit(`${p}Walk`, 18, 18, 9, 9, 4, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, false, 'walk', f));
-    b.addSpriteHiBit(`${p}Hurt`, 18, 18, 9, 9, 1, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, false, 'hurt', f));
-    b.addSpriteHiBit(`${p}Dead`, 18, 18, 9, 9, 2, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, false, 'dead', f));
-    b.addSpriteHiBit(`${p}Sit`, 18, 18, 9, 9, 2, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, false, 'sit', f));
-    b.addSpriteHiBit(`${p}GoSit`, 18, 18, 9, 9, 2, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, false, 'gosit', f));
+    b.addSprite(`${p}Idle`, 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, false, 'idle', f));
+    b.addSprite(`${p}Walk`, 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, false, 'walk', f));
+    b.addSprite(`${p}Hurt`, 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, false, 'hurt', f));
+    b.addSprite(`${p}Dead`, 24, 24, 12, 12, 6, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, false, 'dead', f));
+    b.addSprite(`${p}Sit`, 24, 24, 12, 12, 2, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, false, 'sit', f));
+    b.addSprite(`${p}GoSit`, 24, 24, 12, 12, 2, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, false, 'gosit', f));
 
-    b.addSpriteHiBit(`${p}BIdle`, 18, 18, 9, 9, 4, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, true, 'idle', f));
-    b.addSpriteHiBit(`${p}BWalk`, 18, 18, 9, 9, 4, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, true, 'walk', f));
-    b.addSpriteHiBit(`${p}BHurt`, 18, 18, 9, 9, 1, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, true, 'hurt', f));
-    b.addSpriteHiBit(`${p}BDead`, 18, 18, 9, 9, 2, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, true, 'dead', f));
-    b.addSpriteHiBit(`${p}BSit`, 18, 18, 9, 9, 2, (ctx, x, y, w, h, f) => drawMutantHiBit(ctx, x, y, w, h, race, true, 'sit', f));
+    b.addSprite(`${p}BIdle`, 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, true, 'idle', f));
+    b.addSprite(`${p}BWalk`, 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, true, 'walk', f));
+    b.addSprite(`${p}BHurt`, 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, true, 'hurt', f));
+    b.addSprite(`${p}BDead`, 24, 24, 12, 12, 6, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, true, 'dead', f));
+    b.addSprite(`${p}BSit`, 24, 24, 12, 12, 2, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, race, true, 'sit', f));
   }
 
-  // HI-BIT FACETED CRYSTAL SHIELD DOMES (52x52 -> logical 26x26) + STRONG SPIRIT HALO
-  const drawCrystalShieldHi = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, baseHex: string): void => {
-    const buf = new PxCanvas(w, h);
-    const r = 20 + (f & 1) * 2;
-    const cx = 26;
-    const cy = 26;
-    const cr = makeRamp(baseHex, '#180826');
-    buf.poly([
-      [cx, cy - r], [cx + r * 0.72, cy - r * 0.45], [cx + r, cy + r * 0.25],
-      [cx + r * 0.55, cy + r * 0.9], [cx - r * 0.55, cy + r * 0.9],
-      [cx - r, cy + r * 0.25], [cx - r * 0.72, cy - r * 0.45],
-    ], cr);
-    buf.poly([[cx, cy - r + 2], [cx - r * 0.65, cy - r * 0.35], [cx - r * 0.4, cy + r * 0.4], [cx, cy]], cr.hi);
-    buf.line(cx - 10, cy - 11, cx - 2, cy - 17, '#ffffff', 2);
-    buf.line(cx - 12, cy - 9, cx - 15, cy + 2, '#ffffff', 1);
-    buf.outline('#140821');
-    buf.flush(ctx, x, y);
-  };
-  b.addSpriteHiBit('sprShield', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) => drawCrystalShieldHi(ctx, x, y, w, h, f, '#b959f2'));
-  b.addSpriteHiBit('sprShieldB', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) => drawCrystalShieldHi(ctx, x, y, w, h, f, '#f2bd38'));
+  // Headless Chicken sprites (used by renderer.ts when chicken headlessTicks > 0!)
+  b.addSprite('sprMutant9HeadlessIdle', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, 9, false, 'headless_idle', f));
+  b.addSprite('sprMutant9HeadlessWalk', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, 9, false, 'headless_walk', f));
+  b.addSprite('sprMutant9HeadlessHurt', 24, 24, 12, 12, 3, (ctx, x, y, w, h, f) => drawMutant1x(ctx, x, y, w, h, 9, false, 'headless_hurt', f));
 
-  b.addSpriteHiBit('sprShieldDisappear', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) => {
-    const buf = new PxCanvas(w, h);
-    const cx = 26;
-    const cy = 26;
-    const spread = 6 + f * 4;
-    const sz = Math.max(2, 7 - f * 2);
-    const cr = makeRamp('#c96eff', '#180826');
+  // CRISP 1x FACETED CRYSTAL SHIELD DOMES (26x26, orig 13,13)
+  const drawCrystalShield1x = (
+    ctx: DrawCtx,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    f: number,
+    baseCol: string,
+    hiCol: string,
+    darkCol: string,
+  ): void => {
+    const p = new PxCanvas(w, h);
+    const cx = 13;
+    const cy = 13;
+    const r = 10 + (f & 1);
+    p.poly([
+      [cx, cy - r], [cx + Math.round(r * 0.72), cy - Math.round(r * 0.45)],
+      [cx + r, cy + 2], [cx + Math.round(r * 0.55), cy + Math.round(r * 0.85)],
+      [cx - Math.round(r * 0.55), cy + Math.round(r * 0.85)],
+      [cx - r, cy + 2], [cx - Math.round(r * 0.72), cy - Math.round(r * 0.45)],
+    ], baseCol);
+    p.poly([[cx, cy - r + 1], [cx - Math.round(r * 0.65), cy - Math.round(r * 0.35)], [cx - 3, cy + 4], [cx, cy + 1]], hiCol);
+    p.poly([[cx + 2, cy - 2], [cx + r - 1, cy + 2], [cx + 5, cy + Math.round(r * 0.8)], [cx + 1, cy + Math.round(r * 0.8)]], darkCol);
+    p.line(cx - 5, cy - 5, cx - 1, cy - 8, '#ffffff', 1);
+    p.set(cx - 6, cy - 3, '#ffffff');
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  };
+  b.addSprite('sprShield', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) =>
+    drawCrystalShield1x(ctx, x, y, w, h, f, '#d458e8', '#ffa4ff', '#8a249c'),
+  );
+  b.addSprite('sprShieldB', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) =>
+    drawCrystalShield1x(ctx, x, y, w, h, f, '#f2b830', '#fff088', '#a66e10'),
+  );
+
+  b.addSprite('sprShieldDisappear', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 13;
+    const cy = 13;
+    const spread = 3 + f * 2;
+    const sz = Math.max(1, 3 - Math.floor(f * 0.7));
     const dirs: ReadonlyArray<[number, number]> = [
       [-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0],
     ];
     for (const [dx, dy] of dirs) {
       const sx = cx + dx * spread;
       const sy = cy + dy * spread;
-      buf.poly([[sx, sy - sz], [sx + sz, sy], [sx, sy + sz], [sx - sz, sy]], cr);
-      buf.set(sx, sy - 1, '#ffffff');
+      p.rect(sx - sz, sy - sz, sz * 2 + 1, sz * 2 + 1, '#e068f4');
+      p.set(sx, sy, '#ffffff');
     }
-    buf.outline('#140821');
-    buf.flush(ctx, x, y);
+    p.outline(INK);
+    p.flush(ctx, x, y);
   });
 
-  b.addSpriteHiBit('sprStrongSpirit', 20, 20, 10, 10, 4, (ctx, x, y, w, h, f) => {
-    const buf = new PxCanvas(w, h);
-    const cx = 20;
-    const hy = 5 + (f === 1 || f === 2 ? -2 : 0);
-    // Crisp hollow glowing angelic cyan spirit halo hovering over head
-    for (let a = 0; a < 36; a++) {
-      const ang = (a / 36) * Math.PI * 2;
-      const hx = cx + Math.cos(ang) * 11;
-      const py = hy + Math.sin(ang) * 3.2;
-      buf.rect(hx - 1, py - 1, 2, 2, '#4fd6ff');
-      buf.set(hx, py, '#d4fcff');
-    }
-    const gx = cx + [-8, -2, 4, 8][f % 4]!;
-    buf.rect(gx - 1, hy - 3, 3, 2, '#ffffff');
-    buf.flush(ctx, x, y);
+  // ICONIC CRISP 1x WHITE STRONG SPIRIT HALO (matching 13_frozen_5_3.png & 18_throne_idle.png!)
+  b.addSprite('sprStrongSpirit', 20, 20, 10, 10, 4, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 10;
+    const hy = 3 + (f === 1 || f === 2 ? -1 : 0);
+    // Crisp hollow white oval ring with dark outline
+    p.rect(cx - 4, hy - 1, 9, 1, '#ffffff');
+    p.rect(cx - 4, hy + 2, 9, 1, '#d8f4ff');
+    p.rect(cx - 5, hy, 2, 2, '#ffffff');
+    p.rect(cx + 4, hy, 2, 2, '#d8f4ff');
+    p.outline(INK);
+    p.flush(ctx, x, y);
   });
 }
