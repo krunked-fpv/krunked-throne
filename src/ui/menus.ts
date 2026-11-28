@@ -19,6 +19,19 @@ import type {
 } from '@/contracts';
 import type { AssetBundle } from '@/assets';
 import {
+  KRUNKED_LOGO_FRAMES,
+  KRUNKED_LOGO_GLOW_HEIGHT,
+  KRUNKED_LOGO_GLOW_ORIGIN_X,
+  KRUNKED_LOGO_GLOW_ORIGIN_Y,
+  KRUNKED_LOGO_GLOW_WIDTH,
+  KRUNKED_LOGO_HEIGHT,
+  KRUNKED_LOGO_ORIGIN_X,
+  KRUNKED_LOGO_ORIGIN_Y,
+  KRUNKED_LOGO_WIDTH,
+  getKrunkedLogoFrameSurface,
+  getKrunkedLogoGlowSurface,
+} from '@/assets/fallback-ui';
+import {
   MAX_GAMEPAD_DEADZONE,
   MIN_GAMEPAD_DEADZONE,
   getGamepadGlyphs,
@@ -1887,6 +1900,7 @@ export class MenuSystem {
   private regions: HitRegion[] = [];
   private hoveredId: string | null = null;
   private focusedIndex = 0;
+  private titleSubCol = 0; // 0 = left button, 1 = right button on Title art-pack row
   private campfireRow: 'roster' | 'actions' = 'roster';
   private campfireActionIndex = 3; // 0=skin, 1=crown, 2=gold, 3=go, 4=back
   private pauseInspectIdx = -1; // -1 = none, 0..muts-1 = mutation, muts = ultra
@@ -2002,6 +2016,7 @@ export class MenuSystem {
     if (this.lastScreen !== ctx.screen) {
       this.lastScreen = ctx.screen;
       this.focusedIndex = 0;
+      this.titleSubCol = 0;
       this.campfireRow = 'roster';
       this.campfireActionIndex = 3;
       this.pauseInspectIdx = -1;
@@ -2112,12 +2127,18 @@ export class MenuSystem {
 
     switch (ctx.screen) {
       case 'title': {
-        const rowCount = 4; // 0=PLAY, 1=OPTIONS, 2=PACK TOGGLE, 3=LOAD PACK
+        const hasSplitArtRow =
+          !ctx.assetLoading &&
+          (this.bundle.sourceMode === 'steam' || Boolean(ctx.hasCachedLocal || ctx.hasServerSteam));
+
         if (input.navUp) {
-          this.focusedIndex = (this.focusedIndex - 1 + rowCount) % rowCount;
+          this.focusedIndex = (this.focusedIndex - 1 + 3) % 3;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         } else if (input.navDown) {
-          this.focusedIndex = (this.focusedIndex + 1) % rowCount;
+          this.focusedIndex = (this.focusedIndex + 1) % 3;
+          actions.push({ type: 'ui_sfx', sound: 'sndHover' });
+        } else if (this.focusedIndex === 2 && hasSplitArtRow && (input.navLeft || input.navRight)) {
+          this.titleSubCol = this.titleSubCol === 0 ? 1 : 0;
           actions.push({ type: 'ui_sfx', sound: 'sndHover' });
         }
 
@@ -2126,14 +2147,12 @@ export class MenuSystem {
             actions.push({ type: 'open_screen', screen: 'campfire' });
           } else if (this.focusedIndex === 1) {
             actions.push({ type: 'open_screen', screen: 'options' });
-          } else if (this.focusedIndex === 2) {
-            if (this.bundle.sourceMode === 'steam') {
-              actions.push({ type: 'use_builtin_art' });
-            } else if (ctx.hasCachedLocal || ctx.hasServerSteam) {
-              actions.push({ type: 'use_local_art' });
-            } else {
-              actions.push({ type: 'request_load_local' });
-            }
+          } else if (hasSplitArtRow && this.titleSubCol === 1) {
+            actions.push({ type: 'request_load_local' });
+          } else if (this.bundle.sourceMode === 'steam') {
+            actions.push({ type: 'use_builtin_art' });
+          } else if (ctx.hasCachedLocal || ctx.hasServerSteam) {
+            actions.push({ type: 'use_local_art' });
           } else {
             actions.push({ type: 'request_load_local' });
           }
@@ -2909,111 +2928,528 @@ export class MenuSystem {
   }
 
   // --------------------------------------------------------------------------
-  // 1. TITLE SCREEN (EXACT MATCH TO 01_title.png & part_6.mp4 00:27..00:44!)
+  // 1. TITLE SCREEN (RESTORED 9a554e6 WASTELAND + BIG KRUNKED THRONE EMBLEM!)
   // --------------------------------------------------------------------------
+
+  /**
+   * Bold Nuclear Throne wasteland menu entry for the Title Screen:
+   * renders Steam sprMainMenuSplat or crisp jagged pixel accent splat + chevron pointers on hover/focus.
+   */
+  private drawTitleMenuItem(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    id: string,
+    cx: number,
+    y: number,
+    w: number,
+    h: number,
+    label: string,
+    onActivate: () => MenuAction | null,
+    opts: { accent: string; focused: boolean },
+  ): void {
+    const ix = Math.round(cx - w * 0.5);
+    const iy = Math.round(y);
+    const hovered = this.hoveredId === id || opts.focused;
+
+    if (hovered) {
+      const hasSplat = this.isSteamMode && this.sprites.hasSprite('sprMainMenuSplat');
+      if (hasSplat) {
+        // sprMainMenuSplat frame 3 (155x53, orig=(60,34)) -> center cleanly behind PLAY/OPTIONS
+        this.sprites.draw(ctx, 'sprMainMenuSplat', cx - 14, iy + Math.floor(h * 0.5) + 3, {
+          frame: 3,
+          alpha: 0.92,
+          pixelSnap: true,
+        });
+      } else {
+        // Sweeping dynamic Vlambeer/Nuclear Throne jagged black ink brush-splat (ZERO boxy rectangle!)
+        ctx.fillStyle = '#07050c';
+        // Core sweeping brushstroke body
+        ctx.fillRect(ix - 2, iy + 2, w + 6, h - 4);
+        ctx.fillRect(ix + 8, iy, w - 12, h);
+        // Sweeping tapered horizontal ink tails & brush slashes
+        ctx.fillRect(ix - 18, iy + 5, w + 40, 4);
+        ctx.fillRect(ix - 26, iy + 10, w + 56, 4);
+        ctx.fillRect(ix - 12, iy + 15, w + 34, 3);
+        ctx.fillRect(ix + 14, iy - 2, w - 26, 2);
+        ctx.fillRect(ix + 4, iy + h, w - 18, 2);
+        // Raw ink splatter flecks flying off right & left tips
+        ctx.fillRect(ix - 31, iy + 11, 3, 2);
+        ctx.fillRect(ix - 22, iy + 17, 2, 2);
+        ctx.fillRect(ix + w + 33, iy + 10, 4, 2);
+        ctx.fillRect(ix + w + 25, iy + 5, 3, 2);
+        ctx.fillRect(ix + w + 22, iy + 17, 2, 2);
+      }
+
+      // Animated pixel pointer chevron on left
+      const nudge = Math.round(Math.sin(this.renderTimeSec * 9) * 1.5);
+      const ptrX = ix - 11 + nudge;
+      const ptrY = iy + Math.floor(h * 0.5) - 2;
+      if (this.isSteamMode && this.sprites.hasSprite('sprMenuPointer')) {
+        this.sprites.draw(ctx, 'sprMenuPointer', ptrX, ptrY, { frame: 0, pixelSnap: true });
+      } else {
+        ctx.fillStyle = '#09060d';
+        ctx.fillRect(ptrX - 1, ptrY - 1, 5, 7);
+        ctx.fillStyle = opts.accent;
+        ctx.fillRect(ptrX, ptrY, 2, 5);
+        ctx.fillRect(ptrX + 2, ptrY + 1, 2, 3);
+        ctx.fillRect(ptrX + 4, ptrY + 2, 1, 1);
+      }
+    } else {
+      // Sleek minimal dark wasteland shadow underline (keeps sunset skyline visible!)
+      ctx.fillStyle = 'rgba(10, 7, 15, 0.52)';
+      ctx.fillRect(ix + 16, iy + h - 5, w - 32, 3);
+    }
+
+    this.fonts.draw(
+      ctx,
+      label,
+      cx + (hovered ? 2 : 0),
+      iy + Math.floor(h * 0.5),
+      hovered ? 'fntL' : 'fntM1',
+      {
+        align: 'center',
+        baseline: 'middle',
+        color: hovered ? opts.accent : '#d8d4e3',
+        outline: true,
+      },
+    );
+
+    this.regions.push({ id, x: ix - 6, y: iy, w: w + 12, h, onActivate });
+  }
+
+  private renderTitleWastelandBackdrop(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    width: number,
+    height: number,
+    timeSec: number,
+  ): void {
+    // Steam bakMenu (320x240) when Steam Pack is active!
+    if (this.isSteamMode && this.sprites.hasSprite('bakMenu')) {
+      const bx = Math.round((width - 320) * 0.5);
+      // Seamless per-scanline edge extrusion left & right of 320x240 bakMenu in 16:9 (ZERO vertical seam or black sidebars!)
+      if (bx > 0) {
+        const leftDrawn = this.sprites.drawSubRect(ctx, 'bakMenu', 0, 0, 0, 1, 240, 0, 0, bx, height);
+        const rightX = bx + 320;
+        const rightW = Math.max(0, width - rightX);
+        const rightDrawn =
+          rightW > 0
+            ? this.sprites.drawSubRect(ctx, 'bakMenu', 0, 319, 0, 1, 240, rightX, 0, rightW, height)
+            : true;
+        if (!leftDrawn || !rightDrawn) {
+          const steamSky: ReadonlyArray<[number, string]> = [
+            [0, '#5a5a4e'],
+            [44, '#666457'],
+            [94, '#706c5d'],
+            [114, '#8d7244'],
+            [168, '#9b7b43'],
+          ];
+          for (let i = 0; i < steamSky.length; i++) {
+            const [sy, col] = steamSky[i]!;
+            const ny = i + 1 < steamSky.length ? steamSky[i + 1]![0] : height;
+            ctx.fillStyle = col;
+            ctx.fillRect(0, sy, width, ny - sy);
+          }
+        }
+      }
+      this.sprites.draw(ctx, 'bakMenu', bx, 0, { frame: 0, pixelSnap: true });
+      if (bx > 0) {
+        // Gentle warm atmospheric edge vignette on outer 16:9 wings (NO dark sidebars!)
+        const vigW = Math.min(bx + 10, 44);
+        for (let step = 0; step < vigW; step++) {
+          const distFromEdge = (vigW - step) / vigW;
+          const a = distFromEdge * distFromEdge * 0.28;
+          ctx.fillStyle = `rgba(18, 12, 10, ${a.toFixed(3)})`;
+          ctx.fillRect(step, 0, 1, height);
+          ctx.fillRect(width - 1 - step, 0, 1, height);
+        }
+      }
+      ctx.fillStyle = 'rgba(10, 7, 14, 0.16)';
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+
+    // Built-In Art: Iconic Nuclear Throne-inspired sun-bleached dusty wasteland hill, ruined skyline & buried crown!
+    const skyBands: ReadonlyArray<[number, string]> = [
+      [0, '#5a5648'],
+      [28, '#666050'],
+      [56, '#756c57'],
+      [82, '#87785c'],
+      [104, '#9c8662'],
+      [122, '#b39564'],
+    ];
+    for (let i = 0; i < skyBands.length; i++) {
+      const [sy, col] = skyBands[i]!;
+      const nextY = i + 1 < skyBands.length ? skyBands[i + 1]![0] : height;
+      ctx.fillStyle = col;
+      ctx.fillRect(0, sy, width, nextY - sy);
+      if (i > 0) {
+        ctx.fillStyle = skyBands[i - 1]![1];
+        for (let dx = (i % 2) * 2; dx < width; dx += 4) {
+          ctx.fillRect(dx, sy, 2, 1);
+        }
+      }
+    }
+
+    // Soft drifting dusty wasteland cloud haze across upper sky
+    const drawDustCloud = (cx0: number, cy0: number, cw: number, ch: number): void => {
+      const wx = ((cx0 + Math.floor(timeSec * 2.5)) % (width + cw + 40)) - cw - 20;
+      ctx.fillStyle = 'rgba(218, 204, 168, 0.16)';
+      ctx.fillRect(wx, cy0, cw, ch);
+      ctx.fillRect(wx + 10, cy0 - 3, cw - 20, 3);
+      ctx.fillStyle = 'rgba(72, 64, 52, 0.14)';
+      ctx.fillRect(wx + 4, cy0 + ch - 2, cw - 8, 2);
+    };
+    drawDustCloud(24, 34, 88, 9);
+    drawDustCloud(220, 22, 74, 8);
+    drawDustCloud(330, 56, 96, 10);
+
+    // Distant hazy ruined wasteland city skyline & jagged girders silhouetted along desert ridge!
+    const ridgeY = 128;
+    const skyline: ReadonlyArray<[number, number, number]> = [
+      [0.06, 18, 26], [0.11, 14, 16], [0.17, 10, 32],
+      [0.64, 16, 22], [0.69, 22, 34], [0.75, 12, 18], [0.80, 18, 28], [0.87, 14, 20],
+    ];
+    for (const [fx, bw, bh] of skyline) {
+      const bx = Math.round(fx * width);
+      ctx.fillStyle = '#5e5245';
+      ctx.fillRect(bx, ridgeY - bh, bw, bh + 10);
+      // Ruined jagged broken roofline & hollow window slits
+      ctx.fillStyle = '#4d4238';
+      ctx.fillRect(bx + Math.floor(bw * 0.55), ridgeY - bh + 2, Math.ceil(bw * 0.45), bh + 8);
+      ctx.fillStyle = '#87785c';
+      ctx.fillRect(bx + 3, ridgeY - bh + 4, 2, 3);
+      ctx.fillRect(bx + 7, ridgeY - bh + 4, 2, 3);
+      ctx.fillRect(bx + 3, ridgeY - bh + 11, 2, 3);
+      // Protruding rusty rebar spikes on roof
+      ctx.fillStyle = '#4d4238';
+      ctx.fillRect(bx + 2, ridgeY - bh - 5, 1, 5);
+      ctx.fillRect(bx + bw - 4, ridgeY - bh - 3, 1, 3);
+    }
+
+    // Mid-ground sweeping warm ochre desert hill (left slope)
+    for (let x = 0; x < width; x += 2) {
+      const slopeL = Math.round(122 + Math.sin(x * 0.011 + 0.5) * 14 + (x / width) * 26);
+      ctx.fillStyle = '#99743f';
+      ctx.fillRect(x, slopeL, 2, height - slopeL);
+      ctx.fillStyle = '#ab8449';
+      ctx.fillRect(x, slopeL, 2, 2);
+    }
+
+    // Foreground sunlit sweeping golden wasteland dune (right-to-left diagonal rise!)
+    for (let x = 0; x < width; x += 2) {
+      const duneY = Math.round(166 - (x / width) * 34 + Math.sin(x * 0.022) * 5);
+      ctx.fillStyle = '#ba9146';
+      ctx.fillRect(x, duneY, 2, height - duneY);
+      ctx.fillStyle = '#cfa655';
+      ctx.fillRect(x, duneY, 2, 3);
+      // Warm sunlit sand band in lower foreground
+      if (duneY + 26 < height) {
+        ctx.fillStyle = '#ad843e';
+        ctx.fillRect(x, duneY + 28, 2, height - (duneY + 28));
+      }
+    }
+
+    // Subtle organic desert wind-carved sand troughs & scattered wasteland pebbles
+    ctx.fillStyle = '#967035';
+    ctx.fillRect(Math.round(width * 0.58), 166, 36, 2);
+    ctx.fillRect(Math.round(width * 0.62), 168, 22, 2);
+    ctx.fillRect(Math.round(width * 0.42), 206, 28, 2);
+    ctx.fillRect(Math.round(width * 0.78), 192, 24, 2);
+    ctx.fillStyle = '#deb764';
+    ctx.fillRect(Math.round(width * 0.58), 165, 34, 1);
+    ctx.fillRect(Math.round(width * 0.42), 205, 26, 1);
+
+    // Iconic Half-Buried Gilded Wasteland Crown in bottom-left desert sand!
+    const crX = Math.round(width * 0.14);
+    const crY = 186;
+    // Soft sand shadow beneath crown
+    ctx.fillStyle = '#87622e';
+    ctx.fillRect(crX - 18, crY + 20, 40, 6);
+    ctx.fillRect(crX - 14, crY + 25, 32, 3);
+    // Bold dark ink silhouette of tilted royal crown
+    ctx.fillStyle = '#120b0d';
+    ctx.fillRect(crX - 15, crY + 2, 30, 20);
+    ctx.fillRect(crX - 12, crY - 4, 24, 8);
+    ctx.fillRect(crX - 5, crY - 9, 10, 6);
+    // Crimson velvet dome with curved gold ribs
+    ctx.fillStyle = '#9e1c2c';
+    ctx.fillRect(crX - 13, crY + 3, 26, 16);
+    ctx.fillStyle = '#cf2a3c';
+    ctx.fillRect(crX - 11, crY - 2, 20, 14);
+    // Gold crown arches & top orb
+    ctx.fillStyle = '#e8b632';
+    ctx.fillRect(crX - 3, crY - 7, 6, 4);
+    ctx.fillRect(crX - 2, crY - 3, 4, 18);
+    ctx.fillRect(crX - 10, crY + 1, 3, 14);
+    ctx.fillRect(crX + 7, crY + 1, 3, 14);
+    // Golden jeweled rim band tilted into sand
+    ctx.fillStyle = '#d99e26';
+    ctx.fillRect(crX - 14, crY + 13, 28, 8);
+    ctx.fillStyle = '#fff08a';
+    ctx.fillRect(crX - 12, crY + 14, 24, 2);
+    ctx.fillRect(crX - 2, crY - 7, 3, 2);
+    // Center ruby jewel on rim
+    ctx.fillStyle = '#ff384c';
+    ctx.fillRect(crX - 2, crY + 16, 4, 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(crX - 1, crY + 16, 1, 1);
+    // Sunlit desert sand mound lapping organically over lower crown base!
+    ctx.fillStyle = '#cfa655';
+    ctx.fillRect(crX - 18, crY + 18, 12, 6);
+    ctx.fillRect(crX + 6, crY + 19, 14, 5);
+    ctx.fillRect(crX - 10, crY + 21, 24, 5);
+    ctx.fillStyle = '#e6c270';
+    ctx.fillRect(crX - 16, crY + 18, 10, 2);
+    ctx.fillRect(crX + 8, crY + 19, 10, 2);
+
+    // Subtle warm dusk edge vignette so logo & bright menu text pop cleanly
+    ctx.fillStyle = 'rgba(18, 12, 14, 0.14)';
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  private renderKrunkedTitleLogo(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    cx: number,
+    logoY: number,
+    timeSec: number,
+  ): void {
+    const glowPulse = 0.22 + 0.12 * Math.sin(timeSec * 3.0);
+
+    // Built-In Art mode: render directly from our Hi-Bit fallback atlas sprKrunkedLogo/sprLogo
+    if (!this.isSteamMode && this.sprites.hasSprite('sprLogo')) {
+      if (this.sprites.hasSprite('sprLogoGlow')) {
+        this.sprites.draw(ctx, 'sprLogoGlow', cx, logoY, { alpha: glowPulse, pixelSnap: true });
+      }
+      const logoSpr = this.sprites.getSprite('sprLogo');
+      const logoFrame = computeTitleLogoFrame(timeSec, logoSpr?.frames.length ?? KRUNKED_LOGO_FRAMES);
+      this.sprites.draw(ctx, 'sprLogo', cx, logoY, {
+        frame: logoFrame,
+        pixelSnap: true,
+      });
+      return;
+    }
+
+    // Steam Pack mode (and any bundle without built-in sprLogo): render our dedicated Hi-Bit
+    // KRUNKED THRONE emblem instead of Steam's "NUCLEAR THRONE" sprLogo!
+    const logoFrame = computeTitleLogoFrame(timeSec, KRUNKED_LOGO_FRAMES);
+    const logoSurface = getKrunkedLogoFrameSurface(logoFrame);
+    if (logoSurface) {
+      const glowSurface = getKrunkedLogoGlowSurface();
+      if (glowSurface) {
+        ctx.save();
+        ctx.globalAlpha *= glowPulse;
+        ctx.drawImage(
+          glowSurface,
+          0,
+          0,
+          glowSurface.width,
+          glowSurface.height,
+          Math.round(cx - KRUNKED_LOGO_GLOW_ORIGIN_X),
+          Math.round(logoY - KRUNKED_LOGO_GLOW_ORIGIN_Y),
+          KRUNKED_LOGO_GLOW_WIDTH,
+          KRUNKED_LOGO_GLOW_HEIGHT,
+        );
+        ctx.restore();
+      }
+      ctx.drawImage(
+        logoSurface,
+        0,
+        0,
+        logoSurface.width,
+        logoSurface.height,
+        Math.round(cx - KRUNKED_LOGO_ORIGIN_X),
+        Math.round(logoY - KRUNKED_LOGO_ORIGIN_Y),
+        KRUNKED_LOGO_WIDTH,
+        KRUNKED_LOGO_HEIGHT,
+      );
+      return;
+    }
+
+    // Headless Node fallback when neither HTMLCanvasElement nor OffscreenCanvas is available
+    ctx.fillStyle = 'rgba(64, 232, 72, 0.22)';
+    ctx.fillRect(cx - 118, 20, 236, 60);
+    ctx.fillStyle = '#160f1c';
+    ctx.fillRect(cx - 114, 24, 228, 52);
+    drawPixelBorder(ctx, cx - 114, 24, 228, 52, '#52e864', 2);
+
+    this.fonts.draw(ctx, 'KRUNKED', cx, 33, 'fntL', {
+      align: 'center',
+      color: '#5cf043',
+      outline: true,
+    });
+    this.fonts.draw(ctx, 'THRONE', cx, 53, 'fntL', {
+      align: 'center',
+      color: '#dce8f7',
+      outline: true,
+    });
+  }
 
   private renderTitleScreen(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     mctx: MenuRenderContext,
   ): void {
-    const { width, height, timeSec } = mctx;
+    const { width, height, timeSec, save } = mctx;
     const cx = Math.round(width * 0.5);
-    const isCustomPack = this.bundle.sourceMode === 'steam';
 
-    // 1. Full-screen animated swirling purple portal vortex + white pixel lightning + 28px black letterbox!
-    drawPortalVortex(ctx, width, height, timeSec, true);
+    this.renderTitleWastelandBackdrop(ctx, width, height, timeSec);
 
-    // 2. Centered vertical stack of bold chunky outlined Nuclear Throne menu items (ZERO boxes!)
-    this.drawChunkyButton(
+    // Animated floating ash embers
+    for (let i = 0; i < 18; i++) {
+      const ex = ((i * 47 + Math.floor(timeSec * (12 + (i % 4) * 5))) % (width + 16)) - 8;
+      const ey = height - ((i * 29 + Math.floor(timeSec * (16 + (i % 3) * 6))) % height);
+      ctx.fillStyle = i % 3 === 0 ? '#ffe047' : '#ff6b35';
+      ctx.fillRect(Math.round(ex), Math.round(ey), 2, 2);
+    }
+
+    // Big pulsing dripping radioactive KRUNKED / chrome-steel THRONE emblem in BOTH Built-In & Steam modes!
+    this.renderKrunkedTitleLogo(ctx, cx, 56, timeSec);
+
+    // Bold NT Wasteland Primary Menu Items (PLAY & OPTIONS)
+    this.drawTitleMenuItem(
       ctx,
       'title_play',
       cx,
-      56,
+      112,
+      124,
+      24,
       'PLAY',
       () => ({ type: 'open_screen', screen: 'campfire' }),
-      { focused: this.focusedIndex === 0 },
+      { accent: '#52e864', focused: this.focusedIndex === 0 },
     );
 
-    this.drawChunkyButton(
+    this.drawTitleMenuItem(
       ctx,
       'title_options',
       cx,
-      86,
+      141,
+      124,
+      22,
       'OPTIONS',
       () => ({ type: 'open_screen', screen: 'options' }),
-      { focused: this.focusedIndex === 1 },
+      { accent: '#ffe047', focused: this.focusedIndex === 1 },
     );
 
+    // Custom Pack / Built-In Art Pack Toggle Row
+    const isCustomPack = this.bundle.sourceMode === 'steam';
+    const toggleY = 171;
+    const toggleH = 16;
     if (mctx.assetLoading) {
-      this.drawChunkyButton(
+      this.drawButton(
         ctx,
         'title_loading_assets',
-        cx,
-        116,
-        'LOADING...',
+        cx - 68,
+        toggleY,
+        136,
+        toggleH,
+        '@yLOADING CUSTOM PACK...',
         () => null,
-        { focused: this.focusedIndex === 2, color: '#ffe047' },
+        { font: 'fntSmall', accent: '#ffe047' },
       );
     } else if (isCustomPack) {
-      this.drawChunkyButton(
+      const leftW = 92;
+      const rightW = 74;
+      const totalW = leftW + 4 + rightW;
+      const startX = cx - Math.floor(totalW / 2);
+      this.drawButton(
         ctx,
         'title_use_builtin',
-        cx,
-        116,
-        'PACK: CUSTOM',
+        startX,
+        toggleY,
+        leftW,
+        toggleH,
+        'USE BUILT-IN ART',
         () => ({ type: 'use_builtin_art' }),
-        { focused: this.focusedIndex === 2 },
+        { font: 'fntSmall', accent: '#52e864', focused: this.focusedIndex === 2 && this.titleSubCol === 0 },
+      );
+      this.drawButton(
+        ctx,
+        'title_load_local',
+        startX + leftW + 4,
+        toggleY,
+        rightW,
+        toggleH,
+        'LOAD FOLDER',
+        () => ({ type: 'request_load_local' }),
+        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 && this.titleSubCol === 1 },
       );
     } else if (mctx.hasCachedLocal || mctx.hasServerSteam) {
-      this.drawChunkyButton(
+      const leftW = 90;
+      const rightW = 74;
+      const totalW = leftW + 4 + rightW;
+      const startX = cx - Math.floor(totalW / 2);
+      this.drawButton(
         ctx,
         'title_use_local',
-        cx,
-        116,
-        'PACK: BUILT-IN',
+        startX,
+        toggleY,
+        leftW,
+        toggleH,
+        'USE CUSTOM PACK',
         () => ({ type: 'use_local_art' }),
-        { focused: this.focusedIndex === 2 },
+        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 && this.titleSubCol === 0 },
+      );
+      this.drawButton(
+        ctx,
+        'title_load_local',
+        startX + leftW + 4,
+        toggleY,
+        rightW,
+        toggleH,
+        'LOAD FOLDER',
+        () => ({ type: 'request_load_local' }),
+        { font: 'fntSmall', accent: '#ffe047', focused: this.focusedIndex === 2 && this.titleSubCol === 1 },
       );
     } else {
-      this.drawChunkyButton(
+      this.drawButton(
         ctx,
-        'title_use_local',
-        cx,
-        116,
-        'PACK: BUILT-IN',
+        'title_load_local',
+        cx - 68,
+        toggleY,
+        136,
+        toggleH,
+        'LOAD CUSTOM PACK',
         () => ({ type: 'request_load_local' }),
-        { focused: this.focusedIndex === 2 },
+        { font: 'fntSmall', accent: '#52a8ff', focused: this.focusedIndex === 2 },
       );
     }
 
-    this.drawChunkyButton(
-      ctx,
-      'title_load_local',
-      cx,
-      146,
-      'LOAD PACK',
-      () => ({ type: 'request_load_local' }),
-      { focused: this.focusedIndex === 3 },
-    );
-
-    // 3. Subtle muted labels on the bottom pure-black letterbox bar (matches `Bobot roi` / `u100r7s`!)
     const g = getGamepadGlyphs(mctx.gamepadFamily ?? 'generic');
-    const bottomLeft = mctx.gamepadConnected
-      ? `KRUNKED THRONE  @g${g.familyLabel}`
-      : 'KRUNKED THRONE';
-    this.fonts.draw(ctx, bottomLeft, 8, height - 12, 'fntSmall', {
-      color: '#a8a8b2',
-      shadow: false,
-    });
 
+    // Best run footer
+    if (save.totalRuns > 0) {
+      const best =
+        save.bestLoop > 0
+          ? `@dBEST: @yL${save.bestLoop} ${save.bestArea}@d  KILLS: @w${save.bestKills}`
+          : `@dBEST: @w${save.bestArea}@d  KILLS: @w${save.bestKills}`;
+      this.fonts.draw(ctx, best, cx, 196, 'fntSmall', { align: 'center', outline: true });
+    } else if (mctx.inputMode === 'gamepad' || mctx.gamepadConnected) {
+      this.fonts.draw(
+        ctx,
+        `@g${g.familyLabel} READY  @d[LS/DPAD] MOVE  [${g.confirm}] SELECT`,
+        cx,
+        196,
+        'fntSmall',
+        { align: 'center', outline: true },
+      );
+    }
+
+    // Subtle top-right connected controller badge when active
+    if (mctx.gamepadConnected) {
+      this.fonts.draw(ctx, `@g${g.familyLabel} READY`, width - 6, 5, 'fntSmall', {
+        align: 'right',
+        outline: true,
+      });
+    }
+
+    // Clean atmospheric footer (NO debug "(823 SPRITES)" text!)
     const cleanedStatus = mctx.assetStatusText
       ? mctx.assetStatusText.replace(/\s*\(\d+\s*SPRITES\)/gi, '').trim()
       : '';
-    const bottomRight = cleanedStatus || (isCustomPack ? 'CUSTOM PACK' : 'BUILT-IN v1');
-    this.fonts.draw(ctx, bottomRight, width - 8, height - 12, 'fntSmall', {
-      align: 'right',
-      color: '#7c7c86',
-      shadow: false,
+    const footerText =
+      cleanedStatus ||
+      (isCustomPack ? '@dCUSTOM ART PACK ACTIVE' : '@dTHE WASTELAND CALLS YOU');
+    this.fonts.draw(ctx, footerText, cx, height - 13, 'fntSmall', {
+      align: 'center',
+      outline: true,
     });
   }
 
@@ -3537,18 +3973,32 @@ export class MenuSystem {
       },
     );
 
-    // 7. Crown / Gold effect description strip (borderless dark ink!)
+    // 7. Crown / Gold effect description strip (borderless dark ink — strictly 1 line so it never wraps into roster!)
     const effectY = rowY + btnH + 2;
     const crownEffectText = crown.description.replace(/#/g, ' - ');
-    const statusInfo =
-      crown.id !== 'none'
-        ? `@p${crown.name}: @s${crownEffectText}${hasGold && !isWide ? `  @y[${storedGoldLabel}]` : ''}`
-        : hasGold
-          ? `@ySTORED GOLD: @w${storedGoldLabel}  @d- ${crownEffectText}`
-          : `@d${crown.name}: ${crownEffectText}`;
+    const maxStatusW = width - 16;
+    const buildStatusInfo = (): string => {
+      if (crown.id !== 'none') {
+        const goldTag = hasGold && !isWide ? `  @y[${storedGoldLabel}]` : '';
+        const full = `@p${crown.name}: @s${crownEffectText}${goldTag}`;
+        if (this.fonts.measure(full, 'fntSmall').width <= maxStatusW) return full;
+        const shortGold = hasGold && !isWide ? '  @y[GOLD]' : '';
+        const compact = `@p${crown.name}: @s${crownEffectText}${shortGold}`;
+        if (this.fonts.measure(compact, 'fntSmall').width <= maxStatusW) return compact;
+        const noGold = `@p${crown.name}: @s${crownEffectText}`;
+        if (this.fonts.measure(noGold, 'fntSmall').width <= maxStatusW) return noGold;
+        return `@p${crown.name}: @s${crownEffectText.slice(0, 32)}..`;
+      }
+      if (hasGold) {
+        const full = `@ySTORED GOLD: @w${storedGoldLabel}  @d- ${crownEffectText}`;
+        if (this.fonts.measure(full, 'fntSmall').width <= maxStatusW) return full;
+        return `@ySTORED GOLD: @w${storedGoldLabel}`;
+      }
+      return `@d${crown.name}: ${crownEffectText}`;
+    };
+    const statusInfo = buildStatusInfo();
     this.fonts.draw(ctx, statusInfo, Math.round(width * 0.5), effectY + 2, 'fntSmall', {
       align: 'center',
-      maxWidth: width - 16,
       outline: true,
     });
 

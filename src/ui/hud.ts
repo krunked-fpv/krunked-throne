@@ -1417,7 +1417,7 @@ export class HudRenderer {
       ctx.fillRect(lx, ly, lw, 2);
     }
 
-    const bossSprX = Math.round(width * 0.76) - Math.round(slideOffsetX * 0.35);
+    const bossSprX = Math.round(width * 0.78) - Math.round(slideOffsetX * 0.35);
     const bossSprY = midY + 2;
     const dRad = 52;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
@@ -1434,6 +1434,14 @@ export class HudRenderer {
         ctx.fillRect(bossSprX + inner, midY + dy, outer - inner, 2);
       }
     }
+
+    // Draw nameplate brush-splat BEFORE the boss portrait so right brush tails tuck cleanly behind the boss
+    const bandW = Math.min(Math.round(width * 0.44), 174);
+    const bandH = bossSubtitle ? 48 : 32;
+    const bandX = Math.round(width * 0.05) - slideOffsetX;
+    const bandY = midY - Math.floor(bandH * 0.5);
+
+    drawInkBrushSplat(ctx, bandX, bandY, bandW, bandH, '#000000', theme.accent);
 
     const portraitFrame = BOSS_INTRO_FRAME_MAP[boss.bossId] ?? 0;
     if (this.sprites.hasSprite('sprBuiltinBossPortrait')) {
@@ -1465,13 +1473,6 @@ export class HudRenderer {
         pixelSnap: true,
       });
     }
-
-    const bandW = Math.min(Math.round(width * 0.48), 192);
-    const bandH = bossSubtitle ? 48 : 32;
-    const bandX = Math.round(width * 0.06) - slideOffsetX;
-    const bandY = midY - Math.floor(bandH * 0.5);
-
-    drawInkBrushSplat(ctx, bandX, bandY, bandW, bandH, '#000000', theme.accent);
 
     const textCenterX = bandX + Math.floor(bandW * 0.5);
     const nameFitsLarge = this.fonts.measure(bossDisplayName, 'fntL').width <= bandW - 14;

@@ -9,15 +9,32 @@ import {
   drawCharSelectCardHiBit,
   drawMutantBigPortraitHiBit,
 } from './fallback-portraits';
-import { PxCanvas } from './pixel-art';
+import { PxCanvas, bayer4, makeRamp } from './pixel-art';
 
 const INK = '#0d0a10';
 
 // ============================================================================
-// 1. CRISP NATIVE 1x KRUNKED THRONE TITLE LOGO (sprLogo 258x96x8, sprLogoGlow)
+// 1. KRUNKED THRONE HI-BIT TITLE EMBLEM (sprLogo 516x192 -> 258x96x8, sprLogoGlow)
+//    Rendered on the main Title/Entry screen in BOTH Built-In Art & Steam Pack modes!
 // ============================================================================
 
-function paintSculptedLetter1x(
+export const KRUNKED_LOGO_WIDTH = 258;
+export const KRUNKED_LOGO_HEIGHT = 96;
+export const KRUNKED_LOGO_ORIGIN_X = 129;
+export const KRUNKED_LOGO_ORIGIN_Y = 48;
+export const KRUNKED_LOGO_FRAMES = 8;
+
+export const KRUNKED_LOGO_GLOW_WIDTH = 261;
+export const KRUNKED_LOGO_GLOW_HEIGHT = 93;
+export const KRUNKED_LOGO_GLOW_ORIGIN_X = 130;
+export const KRUNKED_LOGO_GLOW_ORIGIN_Y = 45;
+
+/**
+ * Custom bold heavy-metal / wasteland comic sculptural letterforms rendered into
+ * a 2x Hi-Bit PxCanvas with genuine angled diagonals, beveled bowls & serifs.
+ * Coordinates are normalized within a 54x62 cell box (letter width ~50, height 60).
+ */
+function paintSculptedLetter(
   p: PxCanvas,
   ch: string,
   x: number,
@@ -26,58 +43,65 @@ function paintSculptedLetter1x(
   h: number,
   col: string,
 ): void {
-  const s = Math.max(5, Math.round(w * 0.28));
+  const s = Math.max(9, Math.round(w * 0.27)); // Heavy stroke thickness
   const midY = y + Math.round(h * 0.48);
   const rX = x + w;
   const bY = y + h;
 
   switch (ch) {
     case 'K':
-      p.poly([[x, y], [x + s, y], [x + s, bY], [x, bY]], col);
-      p.poly([[x + s - 1, midY - 1], [rX - s, y], [rX + 1, y], [x + s + 4, midY + 2]], col);
-      p.poly([[x + s + 1, midY - 3], [x + s + 6, midY - 1], [rX + 1, bY], [rX - s - 1, bY]], col);
+      p.poly([[x, y], [x + s + 2, y], [x + s, bY], [x, bY]], col);
+      p.poly([[x + s - 2, midY - 2], [rX - s, y], [rX + 2, y], [x + s + 8, midY + 4]], col);
+      p.poly([[x + s + 2, midY - 6], [x + s + 13, midY - 2], [rX + 2, bY], [rX - s - 2, bY]], col);
       break;
     case 'R':
-      p.poly([[x, y], [x + s, y], [x + s, bY], [x, bY]], col);
-      p.poly([[x + s - 1, y], [rX - 4, y], [rX, y + 4], [rX, midY - 1], [rX - 4, midY + 3], [x + s - 1, midY + 3]], col);
-      p.poly([[x + s + 2, midY], [x + s + 8, midY], [rX, bY], [rX - s - 1, bY]], col);
-      p.rect(x + s, y + s - 1, Math.max(2, w - s * 2), Math.max(2, midY - y - s), '');
+      p.poly([[x, y], [x + s + 1, y], [x + s, bY], [x, bY]], col);
+      p.poly([[x + s - 2, y], [rX - 8, y], [rX, y + 8], [rX, midY - 2], [rX - 9, midY + 6], [x + s - 2, midY + 6]], col);
+      p.poly([[x + s + 4, midY + 1], [x + s + 16, midY + 1], [rX + 1, bY], [rX - s - 2, bY]], col);
+      // Hollow bowl cutout
+      p.poly([[x + s + 1, y + s - 2], [rX - s - 1, y + s - 2], [rX - s + 1, midY - 4], [x + s + 1, midY - 4]], '');
       break;
     case 'U':
-      p.poly([[x, y], [x + s, y], [x + s, bY - 6], [x + s + 2, bY - s], [rX - s - 2, bY - s], [rX - s, bY - 6], [rX - s, y], [rX, y], [rX, bY - 4], [rX - 4, bY], [x + 4, bY], [x, bY - 4]], col);
+      p.poly([[x, y], [x + s, y], [x + s, bY - 12], [x + s + 5, bY - s + 1], [rX - s - 5, bY - s + 1], [rX - s, bY - 12], [rX - s, y], [rX, y], [rX, bY - 8], [rX - 9, bY], [x + 9, bY], [x, bY - 8]], col);
       break;
     case 'N':
-      p.rect(x, y, s, h, col);
-      p.rect(rX - s, y, s, h, col);
-      p.poly([[x + 2, y], [x + s + 2, y], [rX - 2, bY], [rX - s - 2, bY]], col);
+      p.poly([[x, y], [x + s, y], [x + s, bY], [x, bY]], col);
+      p.poly([[rX - s, y], [rX, y], [rX, bY], [rX - s, bY]], col);
+      p.poly([[x + 4, y], [x + s + 4, y], [rX - 4, bY], [rX - s - 4, bY]], col);
       break;
     case 'E':
-      p.rect(x, y, s, h, col);
-      p.rect(x + s - 1, y, w - s + 1, s, col);
-      p.rect(x + s - 1, midY - Math.floor(s * 0.45), w - s - 2, s, col);
-      p.rect(x + s - 1, bY - s, w - s + 1, s, col);
+      p.rect(x, y, s + 1, h, col);
+      p.poly([[x + s - 2, y], [rX, y], [rX - 3, y + s - 1], [x + s - 2, y + s - 1]], col);
+      p.poly([[x + s - 2, midY - Math.floor(s * 0.45)], [rX - 7, midY - Math.floor(s * 0.45)], [rX - 10, midY + Math.ceil(s * 0.45)], [x + s - 2, midY + Math.ceil(s * 0.45)]], col);
+      p.poly([[x + s - 2, bY - s + 1], [rX, bY - s + 1], [rX - 2, bY], [x + s - 2, bY]], col);
       break;
     case 'D':
-      p.poly([[x, y], [rX - 5, y], [rX, y + 5], [rX, bY - 5], [rX - 5, bY], [x, bY]], col);
-      p.rect(x + s, y + s, Math.max(2, w - s * 2), Math.max(2, h - s * 2), '');
+      p.poly([[x, y], [rX - 10, y], [rX, y + 10], [rX, bY - 10], [rX - 10, bY], [x, bY]], col);
+      // Hollow D cutout
+      p.poly([[x + s + 1, y + s - 1], [rX - s - 3, y + s - 1], [rX - s + 1, y + s + 4], [rX - s + 1, bY - s - 4], [rX - s - 3, bY - s + 1], [x + s + 1, bY - s + 1]], '');
       break;
     case 'T':
-      p.rect(x - 1, y, w + 2, s, col);
-      p.rect(x + Math.round((w - s) * 0.5), y + s - 1, s, h - s + 1, col);
+      p.poly([[x - 2, y], [rX + 2, y], [rX, y + s], [x, y + s]], col);
+      p.poly([[x + Math.round((w - s - 2) * 0.5), y + s - 2], [x + Math.round((w + s + 2) * 0.5), y + s - 2], [x + Math.round((w + s) * 0.5), bY], [x + Math.round((w - s) * 0.5), bY]], col);
       break;
     case 'H':
       p.rect(x, y, s, h, col);
       p.rect(rX - s, y, s, h, col);
-      p.rect(x + s - 1, midY - Math.floor(s * 0.48), w - s * 2 + 2, s, col);
+      p.rect(x + s - 2, midY - Math.floor(s * 0.48), w - s * 2 + 4, s, col);
       break;
     case 'O':
-      p.poly([[x + 4, y], [rX - 4, y], [rX, y + 4], [rX, bY - 4], [rX - 4, bY], [x + 4, bY], [x, bY - 4], [x, y + 4]], col);
-      p.rect(x + s, y + s, Math.max(2, w - s * 2), Math.max(2, h - s * 2), '');
+      p.poly([[x + 9, y], [rX - 9, y], [rX, y + 9], [rX, bY - 9], [rX - 9, bY], [x + 9, bY], [x, bY - 9], [x, y + 9]], col);
+      p.poly([[x + s + 2, y + s - 1], [rX - s - 2, y + s - 1], [rX - s, y + s + 3], [rX - s, bY - s - 3], [rX - s - 2, bY - s + 1], [x + s + 2, bY - s + 1], [x + s, bY - s - 3], [x + s, y + s + 3]], '');
       break;
   }
 }
 
-function shadeWord1x(
+/**
+ * Shades an opaque word silhouette mask in `mask` into either:
+ * - 'krunked': rich 6-step hue-shifted radioactive neon slime + Bayer dither + glossy highlights + organic slime drips
+ * - 'throne': heavy riveted brushed wasteland chrome-steel with sky/horizon/desert reflection split & corner bolts
+ */
+function shadeWordFromMask(
   dst: PxCanvas,
   mask: PxCanvas,
   topY: number,
@@ -86,105 +110,330 @@ function shadeWord1x(
 ): void {
   const w = dst.w;
   const h = dst.h;
-  // 3D drop extrusion + 2px bold ink outline
+
+  // 1. Deep 3D extruded dark drop block (+0..+7px down, +0..+1px right) + thick outer ink outline
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!mask.isOpaque(x, y)) continue;
-      for (let ey = 1; ey <= 4; ey++) {
-        dst.set(x, y + ey, style === 'krunked' ? '#0e2c12' : '#181c26');
+      // Extruded 3D bottom drop shadow
+      for (let ey = 1; ey <= 7; ey++) {
+        dst.set(x + (ey > 4 ? 1 : 0), y + ey, style === 'krunked' ? '#0a2410' : '#181c26');
       }
-      for (let oy = -2; oy <= 2; oy++) {
-        for (let ox = -2; ox <= 2; ox++) {
-          if (ox * ox + oy * oy <= 5 && !mask.isOpaque(x + ox, y + oy)) {
-            dst.set(x + ox, y + oy, INK);
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask.isOpaque(x, y)) continue;
+      // 3px bold comic ink halo around every letter edge
+      for (let oy = -3; oy <= 3; oy++) {
+        for (let ox = -3; ox <= 3; ox++) {
+          if (ox * ox + oy * oy <= 10 && !mask.isOpaque(x + ox, y + oy)) {
+            dst.set(x + ox, y + oy, '#090610');
           }
         }
       }
-      dst.set(x, y + 5, INK);
+      dst.set(x, y + 8, '#090610');
+      dst.set(x, y + 9, '#090610');
     }
   }
+
+  // 2. Interior pixel shading with distance-to-top-edge specular bevel & Bayer dithering!
   for (let y = 0; y < h; y++) {
     const t = Math.max(0, Math.min(1, (y - topY) / Math.max(1, wordH)));
     for (let x = 0; x < w; x++) {
       if (!mask.isOpaque(x, y)) continue;
-      const topEmpty = !mask.isOpaque(x, y - 1);
-      const botEmpty = !mask.isOpaque(x, y + 1);
+      const topEmpty1 = !mask.isOpaque(x, y - 1);
+      const topEmpty2 = !mask.isOpaque(x, y - 2);
+      const topEmpty3 = !mask.isOpaque(x, y - 3);
+      const leftEmpty1 = !mask.isOpaque(x - 1, y);
+      const leftEmpty2 = !mask.isOpaque(x - 2, y);
+      const botEmpty1 = !mask.isOpaque(x, y + 1);
+      const botEmpty2 = !mask.isOpaque(x, y + 2);
+      const rightEmpty1 = !mask.isOpaque(x + 1, y);
+      // Sample Bayer on 2px grid so 1x nearest-neighbor blits preserve full ordered dither pattern!
+      const b = bayer4(x >> 1, y >> 1) / 16;
+
       if (style === 'krunked') {
-        let col = t < 0.28 ? '#a8ff58' : t < 0.58 ? '#52e838' : t < 0.82 ? '#24a828' : '#12681c';
-        if (topEmpty) col = '#ecffc0';
-        else if (botEmpty) col = '#0c4416';
+        // 6-tone glossy radioactive slime gradient
+        let col = '#116120';
+        const g = t + (b - 0.5) * 0.14;
+        if (g < 0.22) col = '#a6ff5e';
+        else if (g < 0.44) col = '#5cf043';
+        else if (g < 0.68) col = '#27c235';
+        else if (g < 0.86) col = '#158a27';
+        else col = '#0d571c';
+
+        // Glossy jelly bevels along exposed upper & left edges
+        if (topEmpty1 || topEmpty2) col = '#e8ffbd';
+        else if (topEmpty3 && leftEmpty2) col = '#ffffff';
+        else if ((leftEmpty1 || leftEmpty2) && t < 0.65) col = '#c2ff85';
+        else if (botEmpty1 || botEmpty2) col = '#0b4217';
+        else if (rightEmpty1 && t > 0.25) col = '#106620';
+
+        // Subtle organic radioactive internal slime sheen bubbles
+        const sheen = Math.sin(x * 0.08 + y * 0.05) + Math.cos(x * 0.17 - y * 0.11);
+        if (!topEmpty2 && !botEmpty2 && t > 0.2 && t < 0.55 && sheen > 1.55) {
+          col = '#d6ffa1';
+        }
         dst.set(x, y, col);
       } else {
-        let col = t < 0.25 ? '#dce8f6' : t < 0.50 ? '#98a8bc' : t < 0.65 ? '#3c4454' : t < 0.85 ? '#6c6866' : '#423c40';
-        if (topEmpty) col = '#ffffff';
-        else if (botEmpty) col = '#1c202a';
+        // Riveted brushed wasteland chrome-steel with classic heavy-metal horizon split!
+        const split = 0.52 + Math.sin(x * 0.035) * 0.04;
+        let col: string;
+        if (t < split) {
+          const u = t / split + (b - 0.5) * 0.14;
+          if (u < 0.28) col = '#dce8f7';
+          else if (u < 0.58) col = '#9eb0c7';
+          else col = '#67788f';
+        } else {
+          const u = (t - split) / (1 - split) + (b - 0.5) * 0.14;
+          if (u < 0.18) col = '#2c3342';
+          else if (u < 0.52) col = '#4a5569';
+          else if (u < 0.80) col = '#7a6f66'; // Warm wasteland desert bounce light!
+          else col = '#453c3d';
+        }
+        // Subtle brushed horizontal grain
+        if ((y & 3) === 0 && !topEmpty2 && !botEmpty2 && b > 0.5) {
+          col = t < split ? '#b4c4d9' : '#586278';
+        }
+        // Razor metallic bevels
+        if (topEmpty1 || topEmpty2) col = '#f5fbff';
+        else if ((leftEmpty1 || leftEmpty2) && t < split) col = '#d4e2f2';
+        else if (botEmpty1 || botEmpty2) col = '#1b202b';
+        else if (rightEmpty1) col = '#2a3140';
+
         dst.set(x, y, col);
       }
     }
   }
 }
 
-function registerLogoSprites(b: FallbackAtlasBuilder): void {
-  b.addSprite('sprLogoGlow', 261, 93, 130, 45, 1, (ctx, ox, oy, w, h) => {
-    const cx = Math.floor(w * 0.5);
-    ctx.save();
-    ctx.fillStyle = 'rgba(64, 232, 72, 0.14)';
-    ctx.fillRect(ox + cx - 110, oy + 12, 220, 32);
-    ctx.fillStyle = 'rgba(120, 255, 100, 0.10)';
-    ctx.fillRect(ox + cx - 92, oy + 46, 184, 30);
-    ctx.restore();
-  });
+function paintSlimeDripHiBit(p: PxCanvas, x: number, y: number, len: number, width = 8): void {
+  const hw = Math.floor(width / 2);
+  // Thick dark ink outline
+  p.shadedCapsule(x, y, x, y + len, hw + 2.5, makeRamp('#090610', '#090610'));
+  p.ellipse(x, y + len + 1, hw + 3, hw + 3, '#090610');
+  // Glossy radioactive slime fill
+  const slimeRamp = makeRamp('#38d942', '#0b4217');
+  p.shadedCapsule(x, y, x, y + len, hw, slimeRamp);
+  p.ellipse(x, y + len + 1, hw + 1, hw + 1, '#4df046');
+  p.rect(x - hw + 1, y, Math.max(2, hw - 1), len, '#9cff63');
+  p.ellipse(x - 1, y + len, Math.max(1, hw - 2), Math.max(1, hw - 2), '#e8ffbd');
+}
 
-  const krunkedWord = 'KRUNKED';
-  const throneWord = 'THRONE';
-  const drips: ReadonlyArray<[number, number]> = [
-    [22, 7], [56, 5], [96, 8], [134, 6], [172, 7], [208, 5], [236, 6],
-  ];
+const LOGO_KRUNKED_WORD = 'KRUNKED';
+const LOGO_THRONE_WORD = 'THRONE';
+const LOGO_SLIME_DRIPS: ReadonlyArray<[number, number, number]> = [
+  [40, 14, 8], [108, 10, 7], [186, 15, 9], [268, 11, 7], [344, 14, 8], [412, 10, 7], [472, 13, 8],
+];
 
-  b.addSprite('sprLogo', 258, 96, 129, 48, 8, (ctx, ox, oy, w, h, f) => {
-    const p = new PxCanvas(w, h);
-    // Backplate bar
-    p.rect(24, 38, w - 48, 20, INK);
-    p.rect(26, 40, w - 52, 16, '#363c4a');
-    p.rect(28, 41, w - 56, 2, '#f5c838');
-    // Top word: KRUNKED
-    const kMask = new PxCanvas(w, h);
-    const kW = 27;
-    const kH = 33;
-    const kGap = 5;
-    const kTotal = krunkedWord.length * kW + (krunkedWord.length - 1) * kGap;
-    const kStartX = Math.floor((w - kTotal) * 0.5);
-    for (let i = 0; i < krunkedWord.length; i++) {
-      paintSculptedLetter1x(kMask, krunkedWord[i]!, kStartX + i * (kW + kGap), 6, kW, kH, '#ffffff');
+export function drawKrunkedLogoGlowHiBit(
+  ctx: DrawCtx,
+  ox: number,
+  oy: number,
+  w: number,
+  _h: number,
+): void {
+  const cx = Math.floor(w * 0.5);
+  const drawEllipGlow = (gy: number, rx: number, ry: number, col: string): void => {
+    ctx.fillStyle = col;
+    for (let dy = -ry; dy <= ry; dy += 2) {
+      const span = Math.round(rx * Math.sqrt(Math.max(0, 1 - (dy * dy) / (ry * ry))));
+      if (span > 0) ctx.fillRect(ox + cx - span, oy + gy + dy, span * 2, 2);
     }
-    shadeWord1x(p, kMask, 6, kH, 'krunked');
-    for (const [dx, dLen] of drips) {
-      p.rect(dx - 2, 39, 5, dLen + 2, INK);
-      p.rect(dx - 1, 39, 3, dLen, '#48e838');
-      p.set(dx - 1, 39 + dLen - 1, '#d8ffb0');
+  };
+  ctx.save();
+  drawEllipGlow(52, 248, 46, 'rgba(46, 232, 72, 0.14)');
+  drawEllipGlow(52, 220, 34, 'rgba(110, 255, 102, 0.16)');
+  drawEllipGlow(134, 210, 42, 'rgba(92, 190, 155, 0.10)');
+  drawEllipGlow(92, 92, 26, 'rgba(165, 255, 130, 0.14)');
+  ctx.restore();
+}
+
+export function drawKrunkedLogoHiBit(
+  ctx: DrawCtx,
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+  f: number,
+): void {
+  const p = new PxCanvas(w, h);
+  const steel = makeRamp('#5a6578');
+  const gold = makeRamp('#e0a832');
+
+  // 1. Heavy armored industrial wasteland backplate behind emblem seam
+  p.poly(
+    [[34, 82], [56, 70], [w - 56, 70], [w - 34, 82], [w - 34, 108], [w - 54, 118], [54, 118], [34, 108]],
+    '#090610',
+  );
+  p.poly(
+    [[40, 84], [58, 74], [w - 58, 74], [w - 40, 84], [w - 40, 106], [w - 56, 114], [56, 114], [40, 106]],
+    steel.dark2,
+  );
+  p.rect(54, 78, w - 108, 4, steel.hi);
+  p.rect(54, 82, w - 108, 4, gold.base);
+  p.rect(54, 108, w - 108, 4, '#241c24');
+
+  // Angled hazard caution stripes on left & right wings
+  for (let s = 0; s < 4; s++) {
+    const lx = 58 + s * 16;
+    const rx = w - 122 + s * 16;
+    p.poly([[lx, 106], [lx + 8, 88], [lx + 15, 88], [lx + 7, 106]], gold.light);
+    p.poly([[rx, 88], [rx + 8, 106], [rx + 15, 106], [rx + 7, 88]], gold.light);
+  }
+  // Corner rivets on chassis plate
+  for (const [rx, ry] of [[46, 86], [w - 50, 86], [46, 100], [w - 50, 100]] as const) {
+    p.rect(rx, ry, 5, 5, '#090610');
+    p.rect(rx + 1, ry + 1, 3, 3, steel.spec);
+  }
+
+  // 2. Top Word: sculpted dripping radioactive neon-green "KRUNKED"
+  const kMask = new PxCanvas(w, h);
+  const kW = 54;
+  const kH = 66;
+  const kGap = 10;
+  const kTotal = LOGO_KRUNKED_WORD.length * kW + (LOGO_KRUNKED_WORD.length - 1) * kGap;
+  const kStartX = Math.floor((w - kTotal) * 0.5);
+  const kStartY = 12;
+  for (let i = 0; i < LOGO_KRUNKED_WORD.length; i++) {
+    paintSculptedLetter(kMask, LOGO_KRUNKED_WORD[i]!, kStartX + i * (kW + kGap), kStartY, kW, kH, '#ffffff');
+  }
+  shadeWordFromMask(p, kMask, kStartY, kH, 'krunked');
+
+  // Rounded radioactive slime drips hanging cleanly above THRONE (zero bleed!)
+  for (const [dx, dLen, dW] of LOGO_SLIME_DRIPS) {
+    paintSlimeDripHiBit(p, dx, kStartY + kH + 1, dLen, dW);
+  }
+
+  // 3. Bottom Word: riveted heavy-metal brushed steel "THRONE" (progressively forged 0..6, complete at 7!)
+  const revealed = f >= 6 ? 6 : Math.min(6, f);
+  if (revealed > 0) {
+    const tMask = new PxCanvas(w, h);
+    const tW = 58;
+    const tH = 68;
+    const tGap = 12;
+    const tTotal = LOGO_THRONE_WORD.length * tW + (LOGO_THRONE_WORD.length - 1) * tGap;
+    const tStartX = Math.floor((w - tTotal) * 0.5);
+    const tStartY = 108;
+    for (let i = 0; i < revealed; i++) {
+      paintSculptedLetter(tMask, LOGO_THRONE_WORD[i]!, tStartX + i * (tW + tGap), tStartY, tW, tH, '#ffffff');
     }
-    // Bottom word: THRONE (reveals progressively frames 0..6, full at 7)
-    const revealed = f >= 6 ? 6 : Math.min(6, f);
-    if (revealed > 0) {
-      const tMask = new PxCanvas(w, h);
-      const tW = 29;
-      const tH = 34;
-      const tGap = 6;
-      const tTotal = throneWord.length * tW + (throneWord.length - 1) * tGap;
-      const tStartX = Math.floor((w - tTotal) * 0.5);
-      for (let i = 0; i < revealed; i++) {
-        paintSculptedLetter1x(tMask, throneWord[i]!, tStartX + i * (tW + tGap), 54, tW, tH, '#ffffff');
+    shadeWordFromMask(p, tMask, tStartY, tH, 'throne');
+
+    // Riveted industrial bolt heads along upper & lower corners of THRONE letters
+    for (let i = 0; i < revealed; i++) {
+      const lx = tStartX + i * (tW + tGap);
+      for (const [bx, by] of [[lx + 6, tStartY + 6], [lx + tW - 9, tStartY + 6], [lx + 6, tStartY + tH - 9], [lx + tW - 9, tStartY + tH - 9]] as const) {
+        if (tMask.isOpaque(bx, by) && tMask.isOpaque(bx + 3, by + 3)) {
+          p.rect(bx, by, 4, 4, '#181c26');
+          p.rect(bx, by, 2, 2, '#eef6ff');
+        }
       }
-      shadeWord1x(p, tMask, 54, tH, 'throne');
     }
-    if (f === 7) {
-      const cx = Math.floor(w * 0.5);
-      p.rect(cx - 8, 43, 16, 10, INK);
-      p.rect(cx - 6, 45, 12, 6, '#48e838');
-      p.rect(cx - 3, 46, 6, 4, '#e8ffd0');
+  }
+
+  // 4. Central radioactive nuclear reactor jewel + crisp 4-point metallic glints on final frame 7!
+  if (f === 7) {
+    const cx = Math.floor(w * 0.5);
+    p.bevelBox(cx - 18, 84, 36, 20, steel, true);
+    p.rect(cx - 14, 88, 28, 12, '#090610');
+    p.rect(cx - 12, 90, 24, 8, '#28d444');
+    p.rect(cx - 9, 91, 18, 6, '#7dff75');
+    p.rect(cx - 5, 92, 10, 4, '#f4ffe8');
+    for (const [gx, gy] of [[kStartX + 10, kStartY + 5], [kStartX + kTotal - 16, kStartY + 5], [90, 114], [w - 92, 114]] as const) {
+      p.rect(gx - 5, gy, 11, 2, '#ffffff');
+      p.rect(gx, gy - 5, 2, 11, '#ffffff');
+      p.rect(gx - 2, gy - 2, 5, 5, '#e8ffbd');
     }
-    p.flush(ctx, ox, oy);
-  });
+  }
+
+  p.flush(ctx, ox, oy);
+}
+
+type LogoSurface = HTMLCanvasElement | OffscreenCanvas;
+
+let cachedKrunkedLogoGlow: LogoSurface | null | undefined;
+const cachedKrunkedLogoFrames = new Map<number, LogoSurface>();
+
+function createLogoSurface(w: number, h: number): { canvas: LogoSurface; ctx: DrawCtx } | null {
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (ctx) return { canvas: c, ctx };
+  } else if (typeof OffscreenCanvas !== 'undefined') {
+    const c = new OffscreenCanvas(w, h);
+    const ctx = c.getContext('2d');
+    if (ctx) return { canvas: c, ctx };
+  }
+  return null;
+}
+
+/**
+ * Lazily renders and caches the 2x Hi-Bit KRUNKED THRONE glow aura (522x186) so the main
+ * Title screen renders our emblem identically in both Built-In Art mode and Steam Pack mode.
+ */
+export function getKrunkedLogoGlowSurface(): LogoSurface | null {
+  if (cachedKrunkedLogoGlow !== undefined) return cachedKrunkedLogoGlow;
+  const w = KRUNKED_LOGO_GLOW_WIDTH * 2;
+  const h = KRUNKED_LOGO_GLOW_HEIGHT * 2;
+  const surf = createLogoSurface(w, h);
+  if (!surf) {
+    cachedKrunkedLogoGlow = null;
+    return null;
+  }
+  surf.ctx.imageSmoothingEnabled = false;
+  drawKrunkedLogoGlowHiBit(surf.ctx, 0, 0, w, h);
+  cachedKrunkedLogoGlow = surf.canvas;
+  return cachedKrunkedLogoGlow;
+}
+
+/**
+ * Lazily renders and caches a 2x Hi-Bit KRUNKED THRONE emblem frame (516x192, frames 0..7)
+ * so Steam Pack mode displays KRUNKED THRONE instead of Steam's "NUCLEAR THRONE" sprLogo.
+ */
+export function getKrunkedLogoFrameSurface(frame: number): LogoSurface | null {
+  const f = Math.max(0, Math.min(KRUNKED_LOGO_FRAMES - 1, Math.floor(frame)));
+  const existing = cachedKrunkedLogoFrames.get(f);
+  if (existing) return existing;
+  const w = KRUNKED_LOGO_WIDTH * 2;
+  const h = KRUNKED_LOGO_HEIGHT * 2;
+  const surf = createLogoSurface(w, h);
+  if (!surf) return null;
+  surf.ctx.imageSmoothingEnabled = false;
+  drawKrunkedLogoHiBit(surf.ctx, 0, 0, w, h, f);
+  cachedKrunkedLogoFrames.set(f, surf.canvas);
+  return surf.canvas;
+}
+
+function registerLogoSprites(b: FallbackAtlasBuilder): void {
+  // sprLogoGlow: 522x186 Hi-Bit -> logical 261x93, orig=(130, 45), 1 frame smooth elliptical radioactive aura
+  b.addSpriteHiBit(
+    'sprLogoGlow',
+    KRUNKED_LOGO_GLOW_WIDTH,
+    KRUNKED_LOGO_GLOW_HEIGHT,
+    KRUNKED_LOGO_GLOW_ORIGIN_X,
+    KRUNKED_LOGO_GLOW_ORIGIN_Y,
+    1,
+    drawKrunkedLogoGlowHiBit,
+  );
+
+  // sprLogo: 516x192 Hi-Bit -> logical 258x96, orig=(129, 48), 8 frames
+  b.addSpriteHiBit(
+    'sprLogo',
+    KRUNKED_LOGO_WIDTH,
+    KRUNKED_LOGO_HEIGHT,
+    KRUNKED_LOGO_ORIGIN_X,
+    KRUNKED_LOGO_ORIGIN_Y,
+    KRUNKED_LOGO_FRAMES,
+    drawKrunkedLogoHiBit,
+  );
+
+  // Dedicated aliases sharing exact TPAG rects (0 extra atlas pixels)
+  b.addAlias('sprKrunkedLogo', 'sprLogo');
+  b.addAlias('sprKrunkedLogoGlow', 'sprLogoGlow');
 }
 
 // ============================================================================

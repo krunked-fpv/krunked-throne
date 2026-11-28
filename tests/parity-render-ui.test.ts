@@ -1115,11 +1115,141 @@ function makeTestSpriteDef(
     const patience = DEFAULT_MUTATIONS.find((m) => m.id === 'patience')!;
     expect(patience.description).toBe('@gMUTATE@s LATER');
 
-    // 5. Keybind conflict swap via SaveManager
+    // Keybind conflict swap via SaveManager
     const sm = new SaveManager();
     const rebound = sm.rebindKey('up', 'KeyS');
     expect(rebound.up).toBe('KeyS');
     expect(rebound.down).toBe('KeyW');
+  });
+
+  it('restores the 9a554e6 Hi-Bit KRUNKED THRONE logo and wasteland Title screen in both Built-In and Steam modes', () => {
+    const manifest = createFallbackManifest();
+    expect(manifest.textures).toHaveLength(1);
+
+    // Restored 2x Hi-Bit KRUNKED THRONE logo + glow & aliases on page 0
+    const sprLogo = manifest.sprites.sprLogo!;
+    const sprLogoGlow = manifest.sprites.sprLogoGlow!;
+    expect(sprLogo.width).toBe(258);
+    expect(sprLogo.height).toBe(96);
+    expect(sprLogo.frames).toHaveLength(8);
+    expect(sprLogo.frames[7]!.srcW).toBe(516);
+    expect(sprLogo.frames[7]!.srcH).toBe(192);
+    expect(sprLogo.frames[7]!.textureId).toBe(0);
+    expect(sprLogoGlow.width).toBe(261);
+    expect(sprLogoGlow.height).toBe(93);
+    expect(sprLogoGlow.frames[0]!.srcW).toBe(522);
+    expect(sprLogoGlow.frames[0]!.srcH).toBe(186);
+    expect(manifest.sprites.sprKrunkedLogo).toBeDefined();
+    expect(manifest.sprites.sprKrunkedLogoGlow).toBeDefined();
+
+    // 1. Built-In Art mode Title screen renders wasteland backdrop, PLAY, OPTIONS, and split art-pack row
+    const fbBundle = createFallbackBundle();
+    const fbMenus = new MenuSystem(fbBundle);
+    const save = createDefaultSaveData();
+    const fbMock = createMockCtx();
+    fbMenus.render(fbMock.ctx, {
+      screen: 'title',
+      save,
+      simState: null,
+      width: LOGICAL_WIDTH_16_9,
+      height: LOGICAL_HEIGHT,
+      timeSec: 2.0,
+      returnScreenFromOptions: 'title',
+      hasServerSteam: true,
+    });
+    const fbRegs = fbMenus.getHitRegions();
+    expect(fbRegs.find((r) => r.id === 'title_play')?.onActivate()).toEqual({ type: 'open_screen', screen: 'campfire' });
+    expect(fbRegs.find((r) => r.id === 'title_options')?.onActivate()).toEqual({ type: 'open_screen', screen: 'options' });
+    expect(fbRegs.find((r) => r.id === 'title_use_local')?.onActivate()).toEqual({ type: 'use_local_art' });
+    expect(fbRegs.find((r) => r.id === 'title_load_local')?.onActivate()).toEqual({ type: 'request_load_local' });
+    // Wasteland backdrop does NOT render the 28px black letterbox portal vortex on Title
+    expect(fbMock.fillRects.some((r) => r.style === '#5a5648')).toBe(true);
+
+    // Keyboard/gamepad navigation: Down -> OPTIONS -> Art Pack row, Left/Right toggles split art-pack buttons!
+    const blankSnap = {
+      pointer: { logicalX: 0, logicalY: 0, down: false, clicked: false, rightClicked: false, moved: false },
+      navUp: false,
+      navDown: false,
+      navLeft: false,
+      navRight: false,
+      confirm: false,
+      back: false,
+      retry: false,
+    };
+    const titleCtx = {
+      screen: 'title' as const,
+      save,
+      simState: null,
+      width: LOGICAL_WIDTH_16_9,
+      height: LOGICAL_HEIGHT,
+      timeSec: 2.0,
+      returnScreenFromOptions: 'title' as const,
+      hasServerSteam: true,
+    };
+    fbMenus.update({ ...blankSnap, navDown: true }, titleCtx); // -> 1 (OPTIONS)
+    expect(fbMenus.getFocusedIndex()).toBe(1);
+    fbMenus.update({ ...blankSnap, navDown: true }, titleCtx); // -> 2 (Art Pack row, col 0)
+    expect(fbMenus.getFocusedIndex()).toBe(2);
+    expect(fbMenus.update({ ...blankSnap, confirm: true }, titleCtx)).toContainEqual({ type: 'use_local_art' });
+    fbMenus.update({ ...blankSnap, navRight: true }, titleCtx); // -> col 1 (LOAD FOLDER)
+    expect(fbMenus.update({ ...blankSnap, confirm: true }, titleCtx)).toContainEqual({ type: 'request_load_local' });
+
+    // 2. Steam Pack mode Title screen draws bakMenu seamlessly in 16:9 and NEVER draws Steam's "NUCLEAR THRONE" sprLogo!
+    const steamLogoSentinel = makeTestSpriteDef('sprLogo', 258, 96, 129, 48, [
+      { textureId: 0, srcX: 777, srcY: 777, srcW: 258, srcH: 96, targetX: 0, targetY: 0, targetW: 258, targetH: 96, boundW: 258, boundH: 96 },
+    ]);
+    const steamBakMenu = makeTestSpriteDef('bakMenu', 320, 240, 0, 0, [
+      { textureId: 0, srcX: 10, srcY: 10, srcW: 320, srcH: 240, targetX: 0, targetY: 0, targetW: 320, targetH: 240, boundW: 320, boundH: 240 },
+    ]);
+    const fakeTex = {} as unknown as HTMLCanvasElement;
+    const steamSprites: Record<string, SpriteDef> = {
+      ...fbBundle.manifest.sprites,
+      sprLogo: steamLogoSentinel,
+      bakMenu: steamBakMenu,
+    };
+    const steamBundle: AssetBundle = {
+      ...fbBundle,
+      sourceMode: 'steam',
+      manifest: { ...fbBundle.manifest, sprites: steamSprites },
+      getSprite: (n) => steamSprites[n],
+      getTexture: () => fakeTex,
+    };
+
+    const steamMenus = new MenuSystem(steamBundle);
+    const steamDrawSrcs: Array<{ sx: number; sy: number; sw: number; sh: number }> = [];
+    const steamMock = createMockCtx();
+    const rawSteamCtx = steamMock.ctx as unknown as { drawImage: (...args: unknown[]) => void };
+    const origSteamDraw = rawSteamCtx.drawImage;
+    rawSteamCtx.drawImage = (...args: unknown[]) => {
+      if (args.length >= 9) {
+        steamDrawSrcs.push({
+          sx: Number(args[1]),
+          sy: Number(args[2]),
+          sw: Number(args[3]),
+          sh: Number(args[4]),
+        });
+      }
+      origSteamDraw(...args);
+    };
+
+    steamMenus.render(steamMock.ctx, {
+      screen: 'title',
+      save,
+      simState: null,
+      width: LOGICAL_WIDTH_16_9,
+      height: LOGICAL_HEIGHT,
+      timeSec: 2.0,
+      returnScreenFromOptions: 'title',
+      hasServerSteam: true,
+    });
+    // bakMenu (320x240) IS drawn
+    expect(steamDrawSrcs.some((d) => d.sx === 10 && d.sy === 10 && d.sw === 320 && d.sh === 240)).toBe(true);
+    // Steam's sprLogo sentinel (srcX=777, srcY=777) MUST NEVER be drawn — our KRUNKED THRONE logo replaces it!
+    expect(steamDrawSrcs.some((d) => d.sx === 777 && d.sy === 777)).toBe(false);
+    // Title split row exposes USE BUILT-IN ART + LOAD FOLDER
+    const steamRegs = steamMenus.getHitRegions();
+    expect(steamRegs.find((r) => r.id === 'title_use_builtin')?.onActivate()).toEqual({ type: 'use_builtin_art' });
+    expect(steamRegs.find((r) => r.id === 'title_load_local')?.onActivate()).toEqual({ type: 'request_load_local' });
   });
 });
 
