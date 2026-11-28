@@ -627,7 +627,7 @@ describe('parity-render-ui: HUD Fixes (Ultra Rads, Sleeping Boss, Back Muscle 4:
     expect(mockIntro.fillRects[0]).toMatchObject({ x: 0, y: 0, w: LOGICAL_WIDTH_16_9, h: LOGICAL_HEIGHT });
     expect(mockIntro.fillRects.length).toBeGreaterThan(20);
 
-    // 3. After Boss Intro completes (introTicks === 0): normal HUD + beveled Boss HP bar render together
+    // 3. After Boss Intro completes (introTicks === 0): Boss Intro splash clears and normal gameplay HUD renders cleanly (no non-NT bottom boss HP bar)
     bossHudState.introTicks = 0;
     const mockAwake = createMockCtx();
     hud.render(mockAwake.ctx, {
@@ -638,7 +638,9 @@ describe('parity-render-ui: HUD Fixes (Ultra Rads, Sleeping Boss, Back Muscle 4:
       width: LOGICAL_WIDTH_16_9,
       height: LOGICAL_HEIGHT,
     });
-    expect(mockAwake.fillRects.length).toBeGreaterThan(mockSleep.fillRects.length);
+    expect(mockAwake.fillRects[0]).not.toMatchObject({ x: 0, y: 0, w: LOGICAL_WIDTH_16_9, h: LOGICAL_HEIGHT });
+    expect(mockAwake.fillRects.length).toBeGreaterThan(0);
+    expect(mockAwake.fillRects.length).toBeLessThan(mockIntro.fillRects.length);
   });
 });
 
