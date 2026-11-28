@@ -548,40 +548,84 @@ function drawRegularEnemy1x(
     }
 
     case 'guardian': {
-      // Vibrant glowing NEON-GREEN Palace Guardian (15_palace_7_1.png!)
-      const wShift = frame & 1;
-      // Glowing spectral cloak body + hooded radiant shoulders
-      p.rect(cx - 6, ty - 7, 12, 13, body);
-      p.rect(cx - 5, ty - 9, 10, 3, bodyHi);
-      p.rect(cx - 4, ty - 6, 8, 9, bodyHi);
-      p.rect(cx - 7, ty - 9, 2, 4, body); // side crest horns
-      p.rect(cx + 5, ty - 9, 2, 4, body);
-      // Floating bottom spectral tentacles
-      p.rect(cx - 5, ty + 6, 2, 4 + wShift, bodyDark);
-      p.rect(cx - 1, ty + 6, 3, 5 - wShift, body);
-      p.rect(cx + 4, ty + 6, 2, 4 + wShift, bodyDark);
-      // Glowing bright eyes & radiant chest core
-      p.rect(cx - 4, ty - 6, 2, 3, '#103810');
-      p.rect(cx + 2, ty - 6, 2, 3, '#103810');
-      p.set(cx - 3, ty - 5, eye);
-      p.set(cx + 3, ty - 5, eye);
-      p.rect(cx - 2, ty - 1, 4, 4, state === 'fire' ? '#ffffff' : acc);
-      p.rect(cx - 1, ty, 2, 2, '#ffffff');
+      // Menacing swirling luminous neon-green Palace Guardian (exact match to 15_palace_7_1.png!)
+      // Tall flickering flame-crested spectral wraith with tattered floating wispy robes,
+      // hollow sunken dark eyes, radiant energy veins, and crackling orbiting rad flecks!
+      const sway = frame % 2 === 0 ? -1 : 1;
+      const fire = state === 'fire' || state === 'tell';
+      // Swirling asymmetric twin flame horns curling upward from head crest
+      p.poly([[cx - 5, ty - 5], [cx - 7 + sway, ty - 11], [cx - 3, ty - 8]], bodyHi);
+      p.poly([[cx + 5, ty - 5], [cx + 8 - sway, ty - 11], [cx + 3, ty - 8]], bodyHi);
+      p.set(cx - 7 + sway, ty - 12, acc);
+      p.set(cx + 8 - sway, ty - 12, acc);
+      // Curved cowl / flame hood tapering smoothly into wide swirling shoulders
+      p.ellipse(cx, ty - 5, 5.5, 4.5, body);
+      p.ellipse(cx, ty - 6, 3.8, 2.8, bodyHi);
+      // Tapered sinuous draped spectral robe body (NOT a blocky rectangle!)
+      p.poly([
+        [cx - 6, ty - 4],
+        [cx + 6, ty - 4],
+        [cx + 7, ty + 3],
+        [cx + 5 + sway, ty + 9],
+        [cx + 2, ty + 6],
+        [cx, ty + 10],
+        [cx - 2, ty + 7],
+        [cx - 5 - sway, ty + 10],
+        [cx - 7, ty + 3],
+      ], body);
+      // Deep emerald tattered inner-robe folds + bright glowing central rad column
+      p.poly([[cx - 6, ty], [cx - 4, ty + 8], [cx - 6, ty + 9]], bodyDark);
+      p.poly([[cx + 6, ty], [cx + 4, ty + 8], [cx + 6, ty + 9]], bodyDark);
+      p.rect(cx - 3, ty - 3, 6, 8, bodyHi);
+      p.rect(cx - 1, ty - 2, 2, 7, fire ? '#ffffff' : acc);
+      // Swirling outstretched spectral energy wisps on sides
+      p.line(cx - 6, ty - 1, cx - 9, ty + 2 + sway, body, 1);
+      p.line(cx + 6, ty - 1, cx + 9, ty + 2 - sway, body, 1);
+      // Fierce sunken dark spectral eye cavities + eerie glowing inner slits
+      p.rect(cx - 4, ty - 6, 3, 3, '#0e2810');
+      p.rect(cx + 1, ty - 6, 3, 3, '#0e2810');
+      p.set(cx - 3, ty - 5, fire ? '#ffffff' : bodyHi);
+      p.set(cx + 2, ty - 5, fire ? '#ffffff' : bodyHi);
+      // Glowing hollow energy core in chest when firing/charging
+      if (fire) {
+        p.ellipse(cx, ty + 1, 3, 3, '#ffffff');
+      } else {
+        p.rect(cx - 1, ty, 2, 3, '#e8ffc0');
+      }
+      // Crackling floating rad flecks beside silhouette
+      p.set(cx - 9, ty - 6 - sway, acc);
+      p.set(cx + 9, ty - 4 + sway, acc);
       break;
     }
 
     case 'dog_guardian': {
-      p.rect(cx - 8 + stride, ty + 6, 4, 4, bodyDark);
-      p.rect(cx + 4 - stride, ty + 6, 4, 4, bodyDark);
-      p.ellipse(cx, ty, 10, 7.5, body);
-      p.ellipse(cx - 2, ty - 2, 6, 3, bodyHi);
-      p.rect(cx - 1, ty - 7, 3, 3, acc);
-      p.rect(cx - 5, ty - 4, 3, 3, eye);
-      p.rect(cx + 2, ty - 4, 3, 3, eye);
-      p.rect(cx - 5, ty + 1, 10, 4, '#0c2010');
-      p.set(cx - 4, ty + 1, '#ffffff');
-      p.set(cx - 1, ty + 1, '#ffffff');
-      p.set(cx + 2, ty + 1, '#ffffff');
+      // Fierce hunched emerald/neon-green Palace Guardian Dog with blazing rad mane & jagged jaws!
+      // Muscular clawed legs
+      p.rect(cx - 9 + stride, ty + 5, 4, 5, bodyDark);
+      p.rect(cx - 9 + stride, ty + 8, 4, 2, INK);
+      p.rect(cx + 5 - stride, ty + 5, 4, 5, bodyDark);
+      p.rect(cx + 5 - stride, ty + 8, 4, 2, INK);
+      // Spiked neon-green dorsal rad mane crest!
+      p.poly([[cx - 9, ty - 2], [cx - 11, ty - 8], [cx - 5, ty - 5]], bodyHi);
+      p.poly([[cx - 4, ty - 5], [cx - 3, ty - 11], [cx + 1, ty - 6]], acc);
+      p.poly([[cx + 1, ty - 5], [cx + 4, ty - 10], [cx + 6, ty - 4]], bodyHi);
+      // Bulky hunched muscular torso
+      p.ellipse(cx, ty, 11, 7, body);
+      p.ellipse(cx - 2, ty - 2, 7, 3.5, bodyHi);
+      p.ellipse(cx + 3, ty + 3, 7, 3.5, bodyDark);
+      // Fierce brow & glaring radiant eyes
+      p.rect(cx - 6, ty - 4, 4, 3, '#0b220e');
+      p.rect(cx + 2, ty - 4, 4, 3, '#0b220e');
+      p.rect(cx - 5, ty - 3, 2, 2, state === 'fire' ? '#ffffff' : acc);
+      p.rect(cx + 3, ty - 3, 2, 2, state === 'fire' ? '#ffffff' : acc);
+      // Wide snarling jaw with razor fangs
+      p.rect(cx - 6, ty + 1, 12, 4, '#0c1e0e');
+      p.rect(cx - 4, ty + 2, 8, 2, '#1f6420');
+      p.rect(cx - 5, ty + 1, 2, 2, '#ffffff');
+      p.rect(cx - 1, ty + 1, 2, 2, '#ffffff');
+      p.rect(cx + 3, ty + 1, 2, 2, '#ffffff');
+      p.set(cx - 3, ty + 4, '#ffffff');
+      p.set(cx + 1, ty + 4, '#ffffff');
       break;
     }
 

@@ -188,11 +188,13 @@ function registerLogoSprites(b: FallbackAtlasBuilder): void {
 }
 
 // ============================================================================
-// 2. ALL 29 BESPOKE CRISP 1x MUTATION ICONS + 24 ULTRA ICONS + 13 CROWNS
-// Study 13_frozen_5_3.png & 15_palace_7_1.png top-right:
-// HUD icons (16x16) are SHAPED transparent-background wasteland icons with
-// bold 1px #0d0a10 outlines in iconic green / gray / bone / crimson / gold!
+// 2. ALL 29 BESPOKE CRISP 1x FULL-BLEED MUTATION CARDS (24x32),
+//    VIBRANT LIME-GREEN SHAPED HUD ICONS (16x16), 24 ULTRA CARDS & 13 CROWNS
+// Study 11a_levelup.png (full-bleed edge-to-edge 24x32 cards) &
+// 15_palace_7_1.png / 21_paused.png (vivid lime-green & black-outlined HUD icons)!
 // ============================================================================
+
+const HUD_INK = '#000000';
 
 interface IconPalette {
   d: string; // dark shade ('1')
@@ -200,74 +202,75 @@ interface IconPalette {
   h: string; // bright highlight ('3')
   a: string; // accent ('4')
   b: string; // accent bright ('5')
-  cardBg: string; // card fill for 24x32 level-up card
-  cardTrim: string;
+  cardBg: string; // deep full-bleed backdrop
+  cardMid: string; // lit full-bleed backdrop
+  cardTrim: string; // energetic atmospheric glow / streaks
 }
 
 const MUTATION_PALETTES: readonly IconPalette[] = [
   // 0: Fallback Rad
-  { d: '#247824', m: '#58e848', h: '#b8ff88', a: '#f5cc38', b: '#ffffff', cardBg: '#1c2c20', cardTrim: '#58e848' },
-  // 1: Rhino Skin (gray-green rhino head + ivory horn)
-  { d: '#525a64', m: '#8e96a0', h: '#c8d0da', a: '#ede6d4', b: '#ffffff', cardBg: '#22262c', cardTrim: '#98a4b0' },
-  // 2: Extra Feet (mutated green-gray foot + bright speed lines)
-  { d: '#287a2c', m: '#58d854', h: '#a8ff8c', a: '#f5cc38', b: '#ffffff', cardBg: '#1c2c22', cardTrim: '#58d854' },
-  // 3: Plutonium Hunger (glowing neon-green rad orb + magnetic arcs)
-  { d: '#1e7820', m: '#58f048', h: '#c4ff88', a: '#94a4b4', b: '#ffffff', cardBg: '#162c1c', cardTrim: '#58f048' },
-  // 4: Rabbit Paw (fuzzy bone-white paw + gold charm ring)
-  { d: '#8c8070', m: '#e8e0d0', h: '#ffffff', a: '#f5c838', b: '#fff498', cardBg: '#2c261e', cardTrim: '#e8d8b8' },
-  // 5: Throne Butt (glowing green throne crest & dark iron)
-  { d: '#384050', m: '#6e7888', h: '#a8b4c4', a: '#58f048', b: '#d0ff98', cardBg: '#1e2624', cardTrim: '#58f048' },
-  // 6: Lucky Shot (green clover + gleaming gold bullet)
-  { d: '#24802c', m: '#52dc4c', h: '#a8ff88', a: '#f5c838', b: '#fff6a0', cardBg: '#1c2c1e', cardTrim: '#f5c838' },
-  // 7: Bloodlust (crimson blood-heart with white gleam)
-  { d: '#841622', m: '#dc2838', h: '#ff7480', a: '#f5e8ec', b: '#ffffff', cardBg: '#30141c', cardTrim: '#e83444' },
-  // 8: Gamma Guts (glowing green coiled radioactive stomach)
-  { d: '#207c20', m: '#68f444', h: '#ccff88', a: '#ffe448', b: '#ffffff', cardBg: '#162c18', cardTrim: '#68f444' },
-  // 9: Second Stomach (green belly pouch + red/white medkit cross)
-  { d: '#287a30', m: '#58c854', h: '#a4f490', a: '#e42c38', b: '#ffffff', cardBg: '#1c2c20', cardTrim: '#e83c48' },
-  // 10: Back Muscle (muscular tan/green shoulders + gold ammo belt)
-  { d: '#7c4c2e', m: '#d49464', h: '#f8cc9c', a: '#f5c838', b: '#fff498', cardBg: '#2c221a', cardTrim: '#d49464' },
-  // 11: Scarier Face (fierce horned bone-white/green monster skull)
-  { d: '#5c665c', m: '#c8d0c4', h: '#ffffff', a: '#58f048', b: '#ff3c44', cardBg: '#202624', cardTrim: '#c8d4c4' },
-  // 12: Euphoria (hypnotic swirling green-and-white spiral eye)
-  { d: '#287838', m: '#64e86c', h: '#d4ffbe', a: '#a470e8', b: '#ffffff', cardBg: '#1e1c30', cardTrim: '#64e86c' },
-  // 13: Long Arms (mutated green arm wielding silver sword)
-  { d: '#2a7c30', m: '#5cd458', h: '#a8ff98', a: '#a4b4c4', b: '#ffffff', cardBg: '#1c2a24', cardTrim: '#98b4c8' },
-  // 14: Boiling Veins (blazing red-orange fire over pulsing veins)
-  { d: '#921c14', m: '#ec3c24', h: '#ff8c2c', a: '#ffe448', b: '#ffffff', cardBg: '#321814', cardTrim: '#ff7c24' },
-  // 15: Shotgun Shoulders (twin red-and-brass shotgun shells on gray shoulders)
-  { d: '#525c68', m: '#8c96a4', h: '#c4ced8', a: '#e43428', b: '#f5cc38', cardBg: '#262022', cardTrim: '#e43428' },
-  // 16: Recycle Gland (bright green recycle arrows + gold bullet)
-  { d: '#20822e', m: '#52e858', h: '#b8ff98', a: '#f5c838', b: '#ffffff', cardBg: '#182c1e', cardTrim: '#52e858' },
-  // 17: Laser Brain (glowing neon-green brain + white-green beam!)
-  { d: '#248c24', m: '#64f448', h: '#ccff90', a: '#98ff68', b: '#ffffff', cardBg: '#162e1a', cardTrim: '#64f448' },
-  // 18: Last Wish (radiant golden star/flower + white sparkles)
-  { d: '#a67414', m: '#f5cc38', h: '#fff698', a: '#ff4858', b: '#ffffff', cardBg: '#2c2618', cardTrim: '#f5cc38' },
-  // 19: Eagle Eyes (sharp golden-white eagle eye + crosshair)
-  { d: '#8a621c', m: '#e8b838', h: '#fff498', a: '#e4343c', b: '#ffffff', cardBg: '#222630', cardTrim: '#e8b838' },
-  // 20: Impact Wrists (slamming muscular fist + white impact burst)
-  { d: '#845034', m: '#dc9c6e', h: '#f8d4ac', a: '#ff7028', b: '#ffffff', cardBg: '#2c201a', cardTrim: '#ff7c30' },
-  // 21: Bolt Marrow (homing glowing neon-green crossbow bolt)
-  { d: '#20822a', m: '#58f054', h: '#c4ffa8', a: '#ede6d4', b: '#ffffff', cardBg: '#182c20', cardTrim: '#58f054' },
-  // 22: Stress (sweating wide-eyed tense green-gray face + red vein!)
-  { d: '#48604c', m: '#8ca88c', h: '#c8e4c4', a: '#e82c38', b: '#ffffff', cardBg: '#281c20', cardTrim: '#e83844' },
-  // 23: Trigger Fingers (mutated hand on gun trigger + yellow spark!)
-  { d: '#525c68', m: '#94a0ae', h: '#dce4ee', a: '#ff9024', b: '#fff488', cardBg: '#242228', cardTrim: '#ffa034' },
-  // 24: Sharp Teeth (snarling crimson jaws lined with razor white fangs!)
-  { d: '#841624', m: '#dc2838', h: '#ff707c', a: '#f0ece4', b: '#ffffff', cardBg: '#30161c', cardTrim: '#f0ece4' },
-  // 25: Patience (glowing neon-green wasteland clock dial — exact video icon!)
-  { d: '#207c24', m: '#68f040', h: '#c8ff88', a: '#3a4248', b: '#ffffff', cardBg: '#182c1c', cardTrim: '#68f040' },
-  // 26: Hammerhead (armored gray-green hammerhead skull cracking rock)
-  { d: '#4a5650', m: '#84968c', h: '#c4d4cc', a: '#ff8c28', b: '#fff088', cardBg: '#222624', cardTrim: '#98aca0' },
-  // 27: Strong Spirit (iconic bright pure-white halo over dark-outlined mutant head!)
-  { d: '#4a5664', m: '#8898a8', h: '#c8d8e8', a: '#c4f4ff', b: '#ffffff', cardBg: '#182430', cardTrim: '#ffffff' },
-  // 28: Open Mind (cracked skull glowing with golden treasure light)
-  { d: '#645c56', m: '#c8c0b4', h: '#ffffff', a: '#f5c838', b: '#fff698', cardBg: '#24222c', cardTrim: '#f5c838' },
-  // 29: Heavy Heart (armored iron crimson heart with gold bullets)
-  { d: '#7c1420', m: '#dc2838', h: '#ff7884', a: '#f5c838', b: '#b4c0cc', cardBg: '#2c161e', cardTrim: '#dc2838' },
+  { d: '#22841e', m: '#62ec48', h: '#c4ff88', a: '#ffe448', b: '#ffffff', cardBg: '#122c14', cardMid: '#1e4a20', cardTrim: '#62ec48' },
+  // 1: Rhino Skin (armored olive-lime rhino hide + bright ivory horn!)
+  { d: '#2c6830', m: '#66c458', h: '#b8f498', a: '#f4eedc', b: '#ffffff', cardBg: '#1c2824', cardMid: '#304438', cardTrim: '#7ce868' },
+  // 2: Extra Feet (vibrant neon-green mutated sprinting foot + gold speed arcs)
+  { d: '#208824', m: '#5ef04a', h: '#bcff90', a: '#ffe048', b: '#ffffff', cardBg: '#122e18', cardMid: '#204e26', cardTrim: '#62ec48' },
+  // 3: Plutonium Hunger (blazing neon-green rad core pulling glowing arcs)
+  { d: '#1c801c', m: '#62f448', h: '#d0ff94', a: '#b8ff68', b: '#ffffff', cardBg: '#0c2612', cardMid: '#184a20', cardTrim: '#78ff58' },
+  // 4: Rabbit Paw (crisp bone-white lucky paw + radiant lime & gold charm)
+  { d: '#2c7e2c', m: '#f0ece2', h: '#ffffff', a: '#62ec48', b: '#ffe048', cardBg: '#1c2a1e', cardMid: '#30482e', cardTrim: '#f5cc38' },
+  // 5: Throne Butt (glowing radioactive lime-green nuclear throne crest!)
+  { d: '#227a24', m: '#62ec48', h: '#c8ff8c', a: '#8c98a6', b: '#ffffff', cardBg: '#18241e', cardMid: '#284030', cardTrim: '#62ec48' },
+  // 6: Lucky Shot (vivid emerald clover + gleaming gold bullet)
+  { d: '#1e8824', m: '#5cf048', h: '#bcff8c', a: '#ffd438', b: '#fff8b0', cardBg: '#122c18', cardMid: '#204e28', cardTrim: '#ffd438' },
+  // 7: Bloodlust (vivid crimson blood-heart with fierce white highlight)
+  { d: '#881422', m: '#ee283a', h: '#ff7c88', a: '#ffccd0', b: '#ffffff', cardBg: '#320e16', cardMid: '#5a1a26', cardTrim: '#ff4454' },
+  // 8: Gamma Guts (blazing radioactive lime-green coiled mutant stomach)
+  { d: '#1e841c', m: '#6cf844', h: '#d8ff90', a: '#ffe848', b: '#ffffff', cardBg: '#0e2c12', cardMid: '#1e5420', cardTrim: '#84ff54' },
+  // 9: Second Stomach (bright lime belly pouch + vivid red/white medkit cross)
+  { d: '#208626', m: '#5ef04c', h: '#b8ff90', a: '#f02e3a', b: '#ffffff', cardBg: '#142e1a', cardMid: '#244e2a', cardTrim: '#ff4450' },
+  // 10: Back Muscle (muscular tan/lime flexed shoulders + bright gold ammo belt)
+  { d: '#7e4a28', m: '#e2a06c', h: '#fad2a0', a: '#ffd438', b: '#62ec48', cardBg: '#2e1e14', cardMid: '#4e3422', cardTrim: '#ffd438' },
+  // 11: Scarier Face (iconic radioactive green & bone-white snarling monster skull!)
+  { d: '#228222', m: '#68f04c', h: '#d8ffaa', a: '#f4f8ee', b: '#ff3c44', cardBg: '#142818', cardMid: '#264a28', cardTrim: '#68f04c' },
+  // 12: Euphoria (hypnotic glowing neon-green spiral psychic eye)
+  { d: '#20822c', m: '#62f058', h: '#d4ffb8', a: '#b878ff', b: '#ffffff', cardBg: '#1c1434', cardMid: '#32245a', cardTrim: '#62f058' },
+  // 13: Long Arms (vivid lime-green mutated arm swinging gleaming steel blade!)
+  { d: '#208426', m: '#5ef04e', h: '#b8ff90', a: '#dce8f4', b: '#ffffff', cardBg: '#142a22', cardMid: '#24483a', cardTrim: '#a8e8ff' },
+  // 14: Boiling Veins (blazing orange-crimson flame erupting over veins)
+  { d: '#981a12', m: '#f44022', h: '#ff9628', a: '#fff048', b: '#ffffff', cardBg: '#361410', cardMid: '#642418', cardTrim: '#ffa828' },
+  // 15: Shotgun Shoulders (bright crimson-and-gold shells mounted on lime shoulders)
+  { d: '#247e28', m: '#60e64e', h: '#b8ff90', a: '#f03428', b: '#ffd838', cardBg: '#281a1c', cardMid: '#462a2c', cardTrim: '#f03428' },
+  // 16: Recycle Gland (bright neon-green recycle loop + gleaming gold bullet)
+  { d: '#1c8824', m: '#58f24e', h: '#c4ff98', a: '#ffd438', b: '#ffffff', cardBg: '#102c18', cardMid: '#1e5028', cardTrim: '#58f24e' },
+  // 17: Laser Brain (iconic blazing neon-green wrinkly brain + beam!)
+  { d: '#208c20', m: '#68f848', h: '#d8ff98', a: '#9cff68', b: '#ffffff', cardBg: '#0e2e14', cardMid: '#1e5824', cardTrim: '#78ff58' },
+  // 18: Last Wish (radiant golden star/flower + vibrant green leaves)
+  { d: '#a87212', m: '#ffd438', h: '#fff8a0', a: '#58ec48', b: '#ffffff', cardBg: '#2c2412', cardMid: '#52421c', cardTrim: '#ffe858' },
+  // 19: Eagle Eyes (sharp golden-lime eagle eye + vivid crimson crosshair)
+  { d: '#247c28', m: '#62e84c', h: '#c8ff90', a: '#f4343c', b: '#fff058', cardBg: '#1a242c', cardMid: '#2c3e48', cardTrim: '#ffd838' },
+  // 20: Impact Wrists (slamming lime/tan fist + fiery shockwave burst)
+  { d: '#227e24', m: '#64ec4c', h: '#c4ff94', a: '#ff7c24', b: '#ffffff', cardBg: '#2c1c14', cardMid: '#503220', cardTrim: '#ff8c28' },
+  // 21: Bolt Marrow (blazing neon-green homing bolt + crisp bone fletch)
+  { d: '#1c8624', m: '#5ef44c', h: '#ceffa4', a: '#f4eedc', b: '#ffffff', cardBg: '#122c1a', cardMid: '#20502c', cardTrim: '#5ef44c' },
+  // 22: Stress (sweating hyper-tense neon-green face + bright red vein!)
+  { d: '#267c28', m: '#64e650', h: '#c4ff98', a: '#f42c38', b: '#ffffff', cardBg: '#2a161c', cardMid: '#4c242c', cardTrim: '#f43844' },
+  // 23: Trigger Fingers (vivid lime mutated finger squeezing gun + yellow spark!)
+  { d: '#247c28', m: '#62e84c', h: '#c4ff94', a: '#ffa028', b: '#fff898', cardBg: '#222026', cardMid: '#3a3440', cardTrim: '#ffa830' },
+  // 24: Sharp Teeth (snarling vivid crimson jaws + gleaming white fangs!)
+  { d: '#8c1424', m: '#ec283a', h: '#ff7480', a: '#f6f2ea', b: '#ffffff', cardBg: '#341018', cardMid: '#5c1c28', cardTrim: '#ff5c68' },
+  // 25: Patience (iconic glowing neon-green wasteland clock dial — exact 15_palace_7_1.png!)
+  { d: '#1c8420', m: '#68f440', h: '#d4ff90', a: '#242c28', b: '#ffffff', cardBg: '#102c16', cardMid: '#205224', cardTrim: '#78ff50' },
+  // 26: Hammerhead (armored olive-lime skull smashing stone + orange sparks)
+  { d: '#287a2c', m: '#66e054', h: '#c4ff98', a: '#ff9028', b: '#fff490', cardBg: '#20261e', cardMid: '#384434', cardTrim: '#ff9028' },
+  // 27: Strong Spirit (glowing pure-white/cyan halo over vivid lime mutant head!)
+  { d: '#227c2a', m: '#5ce654', h: '#b8ff98', a: '#b8f4ff', b: '#ffffff', cardBg: '#122230', cardMid: '#203c54', cardTrim: '#ffffff' },
+  // 28: Open Mind (cracked lime/bone skull glowing with radiant golden light!)
+  { d: '#247c28', m: '#d4e8c8', h: '#ffffff', a: '#ffd438', b: '#64f048', cardBg: '#201e2c', cardMid: '#38344e', cardTrim: '#ffd438' },
+  // 29: Heavy Heart (riveted crimson heart studded with gold bullets)
+  { d: '#841422', m: '#ea283a', h: '#ff7c88', a: '#ffd438', b: '#d0dce8', cardBg: '#2e141c', cardMid: '#52222e', cardTrim: '#ea283a' },
 ];
 
-// Crisp 14x14 hand-crafted pixel-art silhouettes for all 30 mutation indices!
+// Crisp 14x14 hand-crafted pixel-art silhouettes for HUD mutation icons (16x16)!
 // Characters: '1'=dark, '2'=main, '3'=hi, '4'=accent, '5'=bright, 'w'=white, 'k'=dark ink interior
 const MUTATION_GRIDS_14: readonly (readonly string[])[] = [
   // 0: Fallback Rad symbol
@@ -278,10 +281,10 @@ const MUTATION_GRIDS_14: readonly (readonly string[])[] = [
   ['54....332.....', '.54..3322.....', '..54.3222.....', '...4.2221.....', '.....2221.....', '....232211....', '....23222233..', '....222222322.', '....111111111.'],
   // 3: Plutonium Hunger (glowing green rad orb pulling magnetic arcs)
   ['.44........44.', '45..........54', '4...33333....4', '4..33ww322...4', '4..3wwwww21..4', '4..32333221..4', '4...222211...4', '45..11111...54', '.44........44.'],
-  // 4: Rabbit Paw (lucky white paw + gold charm ring)
-  ['.....454......', '....4...4.....', '.....444......', '....33322.....', '...33www21....', '...3wwwww21...', '..3wwkwwkw21..', '..32wkwwkw21..', '..222wwww21...', '...1111111....'],
+  // 4: Rabbit Paw (lucky bone-white paw + lime & gold charm ring)
+  ['.....545......', '....5...5.....', '.....444......', '....33322.....', '...33www21....', '...3wwwww21...', '..3wwkwwkw21..', '..32wkwwkw21..', '..222wwww21...', '...1111111....'],
   // 5: Throne Butt (glowing green nuclear crown/throne crest)
-  ['.5..5555..5...', '.44.4554.44...', '..333443332...', '.3222222221...', '.3214554121...', '.3214ww4121...', '.2214444121...', '..22111121....', '...111111.....'],
+  ['.5..3333..5...', '.33.3553.33...', '..333223332...', '.3222222221...', '.3213553121...', '.3213ww3121...', '.2212222121...', '..22111121....', '...111111.....'],
   // 6: Lucky Shot (bright green 4-leaf clover + gleaming gold bullet)
   ['..332....45...', '.33222..454...', '..22221.444...', '....21..454...', '..33221.444...', '.332221.454...', '..2211..444...', '....1...444...'],
   // 7: Bloodlust (vivid crimson blood-heart with white gleam)
@@ -292,71 +295,71 @@ const MUTATION_GRIDS_14: readonly (readonly string[])[] = [
   ['...3333333....', '..332222221...', '.32225445221..', '.32255445521..', '.32544444451..', '.32544444451..', '.22255445511..', '..222544511...', '...1111111....'],
   // 10: Back Muscle (buff shoulders + diagonal gold bullet belt)
   ['...455554.....', '..333222211...', '.33222452211..', '.32224542211..', '.32245422211..', '.22454222211..', '..222211221...', '...1111111....'],
-  // 11: Scarier Face (snarling horned skull with glowing green/red eyes!)
-  ['.33........33.', '..3333333333..', '.33wwwwwww221.', '.32kk4w4kk221.', '.32k5kwk5k221.', '..222wkww211..', '..22.w.w.w.1..', '..22.k.k.k.1..', '...11111111...'],
+  // 11: Scarier Face (snarling horned lime-green skull with glowing eyes!)
+  ['.33........33.', '..3333333333..', '.332222222221.', '.32kk2w2kk221.', '.32k5kwk5k221.', '..222wkww211..', '..22.4.4.4.1..', '..22.k.k.k.1..', '...11111111...'],
   // 12: Euphoria (hypnotic glowing green spiral eye)
   ['...3333332....', '.33222222211..', '.322..44..21..', '32..45554..21.', '32.454k454.21.', '32..45554..21.', '.221..44..11..', '..112222111...'],
   // 13: Long Arms (mutated green arm brandishing bright silver sword!)
   ['.........555..', '........554...', '.......554....', '......554.....', '.....544......', '..33444.......', '.3322232......', '33222221......', '1222211.......'],
   // 14: Boiling Veins (roaring orange/yellow flame over pulsing veins)
   ['.....54.......', '....5544..4...', '...45444.44...', '..3245422332..', '.32224222221..', '.22454224421..', '..2442245411..', '...22244211...', '....111111....'],
-  // 15: Shotgun Shoulders (twin red-and-gold shotgun shells!)
+  // 15: Shotgun Shoulders (twin red-and-gold shotgun shells on lime shoulders!)
   ['..444...444...', '..4w4...4w4...', '..444...444...', '..444...444...', '..444...444...', '..555...555...', '..555...555...', '.33222222211..', '.22111111111..'],
   // 16: Recycle Gland (bright green recycle loop around gold bullet!)
   ['...3333332....', '..332222221...', '.32...45...21.', '.32..4544..21.', '.32..4444..21.', '.221.4444.121.', '..221....122..', '...12222221...'],
   // 17: Laser Brain (glowing neon-green wrinkly brain + blazing laser!)
   ['..333322......', '.33w33322.....', '.32k232221....', '33222k22444444', '32k22224555555', '3222k222444444', '.22122221.....', '..111111......'],
-  // 18: Last Wish (radiant golden star + glowing core)
-  ['......3.......', '.....332......', '.....322......', '333332w522221.', '.22224554221..', '....245421....', '.....2421.....', '......11......'],
-  // 19: Eagle Eyes (sharp golden-white eagle eye + red crosshair!)
+  // 18: Last Wish (radiant golden star + green stem)
+  ['......3.......', '.....332......', '.....322......', '333332w522221.', '.22224554221..', '....245421....', '.....2421.....', '......44......'],
+  // 19: Eagle Eyes (sharp lime-gold eagle eye + red crosshair!)
   ['......4.......', '...3334333....', '.33224554221..', '444245k542444.', '.22224554221..', '...1114111....', '......4.......'],
-  // 20: Impact Wrists (slamming muscular fist + white shockwaves!)
+  // 20: Impact Wrists (slamming muscular fist + orange shockwaves!)
   ['.........54...', '..33332...54..', '.332k2k2...54.', '33222221..554.', '32222221.5554.', '32222221..554.', '.2211111...54.', '.........54...'],
   // 21: Bolt Marrow (curving green homing crossbow bolt + bone tip!)
   ['.........33...', '.........332..', '...4555553322.', '.4555555533222', '455......3322.', '4........332..', '.........33...'],
-  // 22: Stress (sweating wide-eyed tense green-gray face + red vein!)
+  // 22: Stress (sweating wide-eyed tense lime-green face + red vein!)
   ['...3333333....', '..332222221...', '.322ww2ww224..', '.322wk2wk2444.', '.32222222224..', '.322kkkkk221..', '.222wkwkw211..', '..222222211...', '...1111111....'],
-  // 23: Trigger Fingers (gun trigger + mutated finger + bright muzzle flash!)
+  // 23: Trigger Fingers (gun trigger + bright lime finger + muzzle flash!)
   ['.222222222.54.', '23333333215544', '2222222221.54.', '221..333..1...', '221..3321.....', '221...321.....', '221..221......', '1111111.......'],
   // 24: Sharp Teeth (snarling red jaws lined with jagged white fangs!)
   ['..3333333333..', '.322222222221.', '.25w5.5w5.5w1.', '.24w4.4w4.4w1.', '.2.4...4...41.', '.2...4...4..1.', '.2..4w4.4w4.1.', '.222222222221.', '..1111111111..'],
   // 25: Patience (glowing neon-green circular wasteland clock dial — exact video icon!)
   ['....333333....', '..3322222233..', '.322224422221.', '.322224422221.', '.322224444221.', '.322222222221.', '.222222222211.', '..2222222211..', '....111111....'],
-  // 26: Hammerhead (armored gray-green hammerhead skull smashing stone!)
+  // 26: Hammerhead (armored lime-green hammerhead skull smashing stone!)
   ['.33333333332..', '3332222222211.', '3222222222211.', '2211111111111.', '....45..54....', '...45422454...', '..45.2321.54..', '.....2221.....', '.....1111.....'],
-  // 27: Strong Spirit (ICONIC pure-white glowing halo hovering above mutant head!)
+  // 27: Strong Spirit (ICONIC pure-white glowing halo hovering above lime mutant head!)
   ['...55555555...', '.554444444455.', '...55555555...', '..............', '....333333....', '...33222221...', '...32k22k21...', '...22222211...', '....111111....'],
-  // 28: Open Mind (cracked skull glowing with golden treasure light!)
+  // 28: Open Mind (cracked lime/bone skull glowing with golden treasure light!)
   ['.....5555.....', '....455554....', '...33455433...', '..3222442221..', '..32kk22kk21..', '..2222222211..', '...22k22k11...', '....111111....'],
   // 29: Heavy Heart (armored iron crimson heart studded with gold bullets!)
   ['..332...332...', '.33222.22221..', '55544444444555', '44422455422444', '.322245542221.', '..2224444221..', '...22222221...', '....222221....', '.....1111.....'],
 ];
 
 const ULTRA_PALETTES_24: readonly IconPalette[] = [
-  { d: '#754614', m: '#d9982b', h: '#ffe073', a: '#4de878', b: '#ffffff', cardBg: '#162820', cardTrim: '#f5c838' },
-  { d: '#946511', m: '#f2c138', h: '#fff59e', a: '#6ef2ff', b: '#ffffff', cardBg: '#162632', cardTrim: '#ffe048' },
-  { d: '#641a8e', m: '#c458ec', h: '#f4bcff', a: '#ff3c5c', b: '#ffc4cc', cardBg: '#261436', cardTrim: '#f5c838' },
-  { d: '#78228e', m: '#dc68ff', h: '#ffffff', a: '#ffe048', b: '#fff8c0', cardBg: '#2a1432', cardTrim: '#ffe048' },
-  { d: '#284a9e', m: '#5898ff', h: '#c0e0ff', a: '#f5cc48', b: '#ffffff', cardBg: '#14203c', cardTrim: '#f5c838' },
-  { d: '#542a9e', m: '#9268ff', h: '#e0d4ff', a: '#ff5488', b: '#ffffff', cardBg: '#22143a', cardTrim: '#ffe048' },
-  { d: '#8c7e6c', m: '#ece2d0', h: '#ffffff', a: '#ff5c28', b: '#ffe868', cardBg: '#30161a', cardTrim: '#f5c838' },
-  { d: '#847868', m: '#e4dac6', h: '#ffffff', a: '#58ff70', b: '#dcffe0', cardBg: '#1c2820', cardTrim: '#ffe048' },
-  { d: '#1e782c', m: '#4ce05c', h: '#bcffc0', a: '#ec3044', b: '#ffffff', cardBg: '#142a1a', cardTrim: '#f5c838' },
-  { d: '#227a2e', m: '#58e864', h: '#c8ffca', a: '#ff385c', b: '#ffe868', cardBg: '#261422', cardTrim: '#ffe048' },
-  { d: '#9e6c12', m: '#f5c838', h: '#fff8b0', a: '#ffffff', b: '#ffec78', cardBg: '#261e32', cardTrim: '#f5c838' },
-  { d: '#207a32', m: '#4ce064', h: '#c8ffd0', a: '#f5c838', b: '#ffffff', cardBg: '#182a1c', cardTrim: '#ffe048' },
-  { d: '#546274', m: '#9cb0c8', h: '#e8f2fc', a: '#ff9834', b: '#fff698', cardBg: '#242030', cardTrim: '#f5c838' },
-  { d: '#8a581a', m: '#e8b438', h: '#fff298', a: '#58ff70', b: '#ff4454', cardBg: '#2a2016', cardTrim: '#ffe048' },
-  { d: '#4e6070', m: '#9ab4c8', h: '#e4f2fc', a: '#f5c838', b: '#58ff78', cardBg: '#162630', cardTrim: '#f5c838' },
-  { d: '#485a68', m: '#8ea4b4', h: '#d8e8f4', a: '#58ff78', b: '#ffe048', cardBg: '#182826', cardTrim: '#ffe048' },
-  { d: '#9e1c26', m: '#f03440', h: '#ff969e', a: '#ffb028', b: '#fff8a8', cardBg: '#321618', cardTrim: '#f5c838' },
-  { d: '#546880', m: '#b8cee8', h: '#ffffff', a: '#5ce8ff', b: '#ff4858', cardBg: '#182232', cardTrim: '#ffe048' },
-  { d: '#4c6448', m: '#90ae8a', h: '#d8ecd4', a: '#f5c838', b: '#ffffff', cardBg: '#1e2a1e', cardTrim: '#f5c838' },
-  { d: '#785e42', m: '#caaa7e', h: '#faecd4', a: '#ff5448', b: '#ffe868', cardBg: '#2e1a1e', cardTrim: '#ffe048' },
-  { d: '#18822c', m: '#4eff68', h: '#d8ffdc', a: '#d8ff48', b: '#ffffff', cardBg: '#102a16', cardTrim: '#f5c838' },
-  { d: '#5e24a8', m: '#ba60ff', h: '#f0ccff', a: '#4eff78', b: '#ffffff', cardBg: '#201432', cardTrim: '#ffe048' },
-  { d: '#1e54be', m: '#4ea6ff', h: '#c8f4ff', a: '#ffe048', b: '#ffffff', cardBg: '#12203c', cardTrim: '#f5c838' },
-  { d: '#2c5ea8', m: '#6cb8ff', h: '#e8f8ff', a: '#6ef6ff', b: '#ffffff', cardBg: '#142638', cardTrim: '#ffe048' },
+  { d: '#754614', m: '#d9982b', h: '#ffe073', a: '#4de878', b: '#ffffff', cardBg: '#10241a', cardMid: '#1f4430', cardTrim: '#f5c838' },
+  { d: '#946511', m: '#f2c138', h: '#fff59e', a: '#6ef2ff', b: '#ffffff', cardBg: '#102030', cardMid: '#1e3c56', cardTrim: '#ffe048' },
+  { d: '#641a8e', m: '#c458ec', h: '#f4bcff', a: '#ff3c5c', b: '#ffc4cc', cardBg: '#221034', cardMid: '#401e60', cardTrim: '#f5c838' },
+  { d: '#78228e', m: '#dc68ff', h: '#ffffff', a: '#ffe048', b: '#fff8c0', cardBg: '#261030', cardMid: '#481e58', cardTrim: '#ffe048' },
+  { d: '#284a9e', m: '#5898ff', h: '#c0e0ff', a: '#f5cc48', b: '#ffffff', cardBg: '#101c3a', cardMid: '#20366c', cardTrim: '#f5c838' },
+  { d: '#542a9e', m: '#9268ff', h: '#e0d4ff', a: '#ff5488', b: '#ffffff', cardBg: '#1e1038', cardMid: '#3a2068', cardTrim: '#ffe048' },
+  { d: '#8c7e6c', m: '#ece2d0', h: '#ffffff', a: '#ff5c28', b: '#ffe868', cardBg: '#2c1216', cardMid: '#542228', cardTrim: '#f5c838' },
+  { d: '#847868', m: '#e4dac6', h: '#ffffff', a: '#58ff70', b: '#dcffe0', cardBg: '#16241c', cardMid: '#2c4634', cardTrim: '#ffe048' },
+  { d: '#1e782c', m: '#4ce05c', h: '#bcffc0', a: '#ec3044', b: '#ffffff', cardBg: '#102616', cardMid: '#204a2a', cardTrim: '#f5c838' },
+  { d: '#227a2e', m: '#58e864', h: '#c8ffca', a: '#ff385c', b: '#ffe868', cardBg: '#241020', cardMid: '#441e3c', cardTrim: '#ffe048' },
+  { d: '#9e6c12', m: '#f5c838', h: '#fff8b0', a: '#ffffff', b: '#ffec78', cardBg: '#221830', cardMid: '#422e5a', cardTrim: '#f5c838' },
+  { d: '#207a32', m: '#4ce064', h: '#c8ffd0', a: '#f5c838', b: '#ffffff', cardBg: '#122618', cardMid: '#244a2e', cardTrim: '#ffe048' },
+  { d: '#546274', m: '#9cb0c8', h: '#e8f2fc', a: '#ff9834', b: '#fff698', cardBg: '#201c2c', cardMid: '#3c3452', cardTrim: '#f5c838' },
+  { d: '#8a581a', m: '#e8b438', h: '#fff298', a: '#58ff70', b: '#ff4454', cardBg: '#281c12', cardMid: '#4c3420', cardTrim: '#ffe048' },
+  { d: '#4e6070', m: '#9ab4c8', h: '#e4f2fc', a: '#f5c838', b: '#58ff78', cardBg: '#12222c', cardMid: '#224052', cardTrim: '#f5c838' },
+  { d: '#485a68', m: '#8ea4b4', h: '#d8e8f4', a: '#58ff78', b: '#ffe048', cardBg: '#142422', cardMid: '#264440', cardTrim: '#ffe048' },
+  { d: '#9e1c26', m: '#f03440', h: '#ff969e', a: '#ffb028', b: '#fff8a8', cardBg: '#301214', cardMid: '#5a2024', cardTrim: '#f5c838' },
+  { d: '#546880', m: '#b8cee8', h: '#ffffff', a: '#5ce8ff', b: '#ff4858', cardBg: '#141e2e', cardMid: '#263a58', cardTrim: '#ffe048' },
+  { d: '#4c6448', m: '#90ae8a', h: '#d8ecd4', a: '#f5c838', b: '#ffffff', cardBg: '#1a261a', cardMid: '#324832', cardTrim: '#f5c838' },
+  { d: '#785e42', m: '#caaa7e', h: '#faecd4', a: '#ff5448', b: '#ffe868', cardBg: '#2c161a', cardMid: '#522830', cardTrim: '#ffe048' },
+  { d: '#18822c', m: '#4eff68', h: '#d8ffdc', a: '#d8ff48', b: '#ffffff', cardBg: '#0c2612', cardMid: '#184c22', cardTrim: '#f5c838' },
+  { d: '#5e24a8', m: '#ba60ff', h: '#f0ccff', a: '#4eff78', b: '#ffffff', cardBg: '#1c1030', cardMid: '#361e5c', cardTrim: '#ffe048' },
+  { d: '#1e54be', m: '#4ea6ff', h: '#c8f4ff', a: '#ffe048', b: '#ffffff', cardBg: '#0e1c3a', cardMid: '#1c366e', cardTrim: '#f5c838' },
+  { d: '#2c5ea8', m: '#6cb8ff', h: '#e8f8ff', a: '#6ef6ff', b: '#ffffff', cardBg: '#102234', cardMid: '#204264', cardTrim: '#ffe048' },
 ];
 
 const ULTRA_GRIDS_14: readonly (readonly string[])[] = [
@@ -398,7 +401,7 @@ function paintEmblem1x(
     '4': pal.a,
     '5': pal.b,
     w: '#ffffff',
-    k: INK,
+    k: HUD_INK,
   };
   const gh = grid.length;
   const gw = grid[0]!.length;
@@ -415,7 +418,7 @@ function paintEmblem1x(
       if (col) emb.set(startX + gx, startY + gy, col);
     }
   }
-  emb.outline(INK);
+  emb.outline(HUD_INK);
   for (let y = 0; y < dst.h; y++) {
     for (let x = 0; x < dst.w; x++) {
       const c = emb.get(x, y);
@@ -424,37 +427,592 @@ function paintEmblem1x(
   }
 }
 
-function paintCardFrame1x(p: PxCanvas, bg: string, trim: string, isUltra: boolean): void {
+function compositeLayer(dst: PxCanvas, fg: PxCanvas): void {
+  for (let y = 0; y < dst.h; y++) {
+    for (let x = 0; x < dst.w; x++) {
+      const c = fg.get(x, y);
+      if (c) dst.set(x, y, c);
+    }
+  }
+}
+
+/**
+ * Full-bleed edge-to-edge 24x32 comic illustration backdrop (ZERO empty inner box!).
+ * Matches the rich full-bleed Nuclear Throne Level Up portrait cards in 11a_levelup.png!
+ */
+function paintFullBleedBackdrop(p: PxCanvas, pal: IconPalette, mode: 'radial' | 'diag' | 'vertical' | 'burst'): void {
   const w = p.w;
   const h = p.h;
-  p.rect(1, 1, w - 2, h - 2, bg);
-  p.rect(2, 2, w - 4, 2, trim);
-  p.rect(2, h - 4, w - 4, 2, isUltra ? '#8a5c10' : '#121614');
-  p.rect(1, 1, 1, h - 2, trim);
-  p.rect(w - 2, 1, 1, h - 2, isUltra ? '#8a5c10' : '#121614');
-  // Outer 1px crisp black ink border
-  for (let x = 0; x < w; x++) {
-    p.set(x, 0, INK);
-    p.set(x, h - 1, INK);
+  p.rect(0, 0, w, h, pal.cardBg);
+  if (mode === 'radial') {
+    p.ellipse(12, 15, 13, 15, pal.cardMid);
+    p.ellipse(11, 13, 7, 8, pal.d);
+  } else if (mode === 'diag') {
+    p.poly([[0, 0], [w, 0], [w, 16], [0, 24]], pal.cardMid);
+    p.line(-2, 22, 25, 4, pal.cardTrim, 2);
+  } else if (mode === 'burst') {
+    p.ellipse(12, 16, 12, 14, pal.cardMid);
+    p.line(12, 16, 0, 0, pal.cardTrim, 1);
+    p.line(12, 16, 23, 0, pal.cardTrim, 1);
+    p.line(12, 16, 0, 31, pal.cardTrim, 1);
+    p.line(12, 16, 23, 31, pal.cardTrim, 1);
+    p.line(12, 16, 12, 0, pal.cardTrim, 1);
+  } else {
+    p.rect(0, 0, w, 18, pal.cardMid);
+    p.rect(0, 0, w, 6, pal.d);
   }
-  for (let y = 0; y < h; y++) {
+}
+
+/**
+ * Draws a FULL-BLEED 24x32 bespoke comic pixel-art mutation card (NO small icon in dark box!).
+ * Every single mutation 0..29 fills the 24x32 canvas edge-to-edge with bold #0d0a10 ink & cel shading!
+ */
+function drawFullBleedMutationCard1x(p: PxCanvas, idx: number, pal: IconPalette): void {
+  const fg = new PxCanvas(p.w, p.h);
+
+  switch (idx) {
+    case 1: {
+      // RHINO SKIN: Huge charging armored gray-olive rhino head + curved ivory horn filling card!
+      paintFullBleedBackdrop(p, pal, 'diag');
+      fg.poly([[0, 12], [16, 9], [20, 22], [14, 31], [0, 31]], '#7c8a86');
+      fg.poly([[0, 13], [14, 10], [16, 17], [0, 20]], '#b4c4be');
+      fg.poly([[0, 21], [15, 20], [14, 31], [0, 31]], '#4a5652');
+      // Armored neck plates & fierce squinting eye
+      fg.line(4, 12, 4, 30, INK, 1);
+      fg.rect(7, 16, 4, 3, INK);
+      fg.rect(8, 17, 2, 1, '#ffe848');
+      // Towering curved ivory rhino horn!
+      fg.poly([[12, 19], [22, 2], [23, 16], [16, 25]], '#f2ead4');
+      fg.poly([[14, 17], [21, 4], [21, 12], [16, 20]], '#ffffff');
+      fg.poly([[16, 22], [23, 14], [21, 25]], '#c4b89c');
+      break;
+    }
+    case 2: {
+      // EXTRA FEET: Dynamic sprinting buff mutated green feet & legs tearing across speed streaks!
+      paintFullBleedBackdrop(p, pal, 'diag');
+      p.line(0, 8, 20, 4, '#ffe048', 1);
+      p.line(0, 16, 18, 12, '#ffe048', 1);
+      p.line(0, 25, 16, 22, '#62ec48', 1);
+      // Back sprinting leg + front huge mutated green foot!
+      fg.poly([[6, 0], [14, 0], [11, 16], [4, 15]], pal.d);
+      fg.poly([[12, 2], [21, 4], [16, 22], [8, 20]], pal.m);
+      fg.poly([[13, 3], [18, 4], [14, 17], [10, 16]], pal.h);
+      // Chunky front foot & toes slamming forward
+      fg.ellipse(14, 24, 9, 5, pal.m);
+      fg.rect(9, 21, 11, 3, pal.h);
+      fg.rect(19, 23, 4, 4, pal.h);
+      fg.rect(5, 26, 15, 3, pal.d);
+      break;
+    }
+    case 3: {
+      // PLUTONIUM HUNGER: Blazing radioactive rad core pulling swirling green energy orbs inward!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      fg.ellipse(12, 16, 9, 9, pal.d);
+      fg.ellipse(12, 16, 7, 7, pal.m);
+      fg.ellipse(11, 15, 4.5, 4.5, pal.h);
+      fg.ellipse(10, 14, 2.5, 2.5, '#ffffff');
+      // Orbiting attracted rad chunks flying in from corners!
+      for (const [rx, ry] of [[3, 5], [20, 6], [4, 26], [19, 25], [12, 3], [12, 29]] as const) {
+        fg.ellipse(rx, ry, 2.2, 2.2, pal.m);
+        fg.set(rx - 1, ry - 1, '#ffffff');
+      }
+      break;
+    }
+    case 4: {
+      // RABBIT PAW: Big fluffy bone-white lucky paw hanging from golden keyring filling the card!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      // Golden key ring at top
+      fg.ellipse(12, 5, 5, 4, '#ffd438');
+      fg.ellipse(12, 5, 2.5, 2, pal.cardBg);
+      fg.rect(10, 8, 4, 3, '#b88218');
+      // Big chunky white rabbit paw + soft pads & green glow flecks
+      fg.ellipse(12, 19, 8, 10, '#f4f0e6');
+      fg.ellipse(10, 15, 5, 6, '#ffffff');
+      fg.ellipse(14, 23, 6, 5, '#cfc6b6');
+      fg.ellipse(7, 25, 3, 4, '#f4f0e6');
+      fg.ellipse(12, 27, 3, 4, '#ffffff');
+      fg.ellipse(17, 25, 3, 4, '#dfd8c8');
+      fg.rect(9, 17, 6, 5, '#e8909c'); // pink paw pad
+      break;
+    }
+    case 5: {
+      // THRONE BUTT: Iconic monumental dark-iron & glowing neon-green Nuclear Throne crest!
+      paintFullBleedBackdrop(p, pal, 'vertical');
+      // Twin glowing green rad canisters flanking crimson/iron seat!
+      fg.rect(1, 3, 6, 26, '#5c6674');
+      fg.rect(2, 6, 4, 20, pal.m);
+      fg.rect(3, 7, 2, 18, pal.h);
+      fg.rect(17, 3, 6, 26, '#5c6674');
+      fg.rect(18, 6, 4, 20, pal.m);
+      fg.rect(19, 7, 2, 18, pal.h);
+      // Central iron throne spire & blazing core
+      fg.rect(7, 8, 10, 22, '#6c3430');
+      fg.rect(9, 12, 6, 14, '#a82232');
+      fg.ellipse(12, 24, 4, 4, '#2c3038');
+      fg.ellipse(12, 24, 2, 2, pal.h);
+      break;
+    }
+    case 6: {
+      // LUCKY SHOT: Huge vivid emerald 4-leaf clover pierced diagonally by a giant gleaming gold bullet!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(8, 11, 6, 6, pal.m);
+      fg.ellipse(16, 11, 6, 6, pal.m);
+      fg.ellipse(8, 21, 6, 6, pal.d);
+      fg.ellipse(16, 21, 6, 6, pal.m);
+      fg.ellipse(7, 10, 3, 3, pal.h);
+      fg.ellipse(15, 10, 3, 3, pal.h);
+      fg.line(12, 21, 10, 31, pal.d, 2);
+      // Giant gleaming gold bullet blasting diagonally across clover!
+      fg.line(3, 27, 20, 6, '#b87c14', 6);
+      fg.line(3, 26, 19, 6, '#ffd438', 4);
+      fg.line(5, 24, 18, 8, '#fff8b0', 2);
+      break;
+    }
+    case 7: {
+      // BLOODLUST: Huge pulsing glossy crimson heart dripping vivid blood drops edge-to-edge!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(8, 12, 7, 7, pal.m);
+      fg.ellipse(16, 12, 7, 7, pal.m);
+      fg.poly([[1, 14], [23, 14], [12, 29]], pal.m);
+      fg.ellipse(6, 10, 3.5, 3, pal.h);
+      fg.rect(5, 9, 2, 2, '#ffffff');
+      fg.poly([[14, 14], [22, 14], [12, 28]], pal.d);
+      // Blood drips falling below
+      fg.rect(5, 26, 2, 5, pal.m);
+      fg.rect(18, 24, 2, 6, pal.d);
+      break;
+    }
+    case 8: {
+      // GAMMA GUTS: Glowing neon-green coiled radioactive mutant belly filling the frame!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(12, 16, 11, 13, pal.d);
+      fg.ellipse(12, 16, 9, 11, pal.m);
+      // Thick glowing coiled radioactive intestinal folds!
+      for (const gy of [9, 15, 21]) {
+        fg.ellipse(12, gy, 8, 3.2, pal.h);
+        fg.line(5, gy + 2, 19, gy + 2, pal.d, 1);
+      }
+      fg.ellipse(12, 15, 4, 4, '#ffe848');
+      fg.ellipse(11, 14, 2, 2, '#ffffff');
+      break;
+    }
+    case 9: {
+      // SECOND STOMACH: Chunky mutated green torso cradling a glowing crimson-and-white medkit!
+      paintFullBleedBackdrop(p, pal, 'vertical');
+      fg.ellipse(12, 18, 11, 13, pal.m);
+      fg.ellipse(9, 13, 7, 7, pal.h);
+      fg.ellipse(14, 23, 8, 8, pal.d);
+      // Bold glossy white & crimson medkit cross centerpiece
+      fg.rect(4, 11, 16, 12, '#ffffff');
+      fg.rect(10, 12, 4, 10, '#f02e3a');
+      fg.rect(6, 15, 12, 4, '#f02e3a');
+      break;
+    }
+    case 10: {
+      // BACK MUSCLE: Hulking flexed tan shoulders & lat muscles strapped with gleaming gold ammo bandolier!
+      paintFullBleedBackdrop(p, pal, 'vertical');
+      fg.ellipse(12, 20, 12, 12, pal.m);
+      fg.ellipse(5, 13, 7, 7, pal.h);
+      fg.ellipse(19, 13, 7, 7, pal.m);
+      fg.ellipse(12, 7, 6, 5, pal.m); // head/neck crest
+      fg.line(12, 12, 12, 31, pal.d, 2); // spine crease
+      // Diagonal heavy leather & gold bullet bandolier!
+      fg.line(2, 6, 22, 28, '#4a2c18', 5);
+      for (let i = 0; i < 6; i++) {
+        fg.rect(3 + i * 3, 7 + i * 3, 3, 3, '#ffd438');
+        fg.set(3 + i * 3, 7 + i * 3, '#ffffff');
+      }
+      break;
+    }
+    case 11: {
+      // SCARIER FACE: Massive terrifying fanged horned neon-green/bone monster face filling 24x32!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      // Jagged curved horns
+      fg.poly([[1, 2], [9, 8], [4, 14]], '#f4f8ee');
+      fg.poly([[23, 2], [15, 8], [20, 14]], '#f4f8ee');
+      // Huge menacing skull face
+      fg.ellipse(12, 16, 10, 12, pal.m);
+      fg.ellipse(10, 11, 7, 6, pal.h);
+      fg.ellipse(12, 22, 8, 7, pal.d);
+      // Deep fierce dark eye sockets with blazing crimson pupils!
+      fg.poly([[3, 11], [10, 14], [9, 19], [4, 17]], INK);
+      fg.poly([[21, 11], [14, 14], [15, 19], [20, 17]], INK);
+      fg.rect(6, 14, 2, 2, '#ff3c44');
+      fg.rect(16, 14, 2, 2, '#ff3c44');
+      // Snarling jagged white teeth grin across bottom!
+      fg.rect(4, 21, 16, 7, INK);
+      for (let t = 5; t <= 17; t += 3) {
+        fg.rect(t, 21, 2, 3, '#ffffff');
+        fg.rect(t + 1, 25, 2, 3, '#e4e8dc');
+      }
+      break;
+    }
+    case 12: {
+      // EUPHORIA: Giant hypnotic swirling psychic eye radiating green/violet rings!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(12, 16, 11, 10, '#ffffff');
+      fg.ellipse(12, 16, 8, 8, pal.m);
+      fg.ellipse(12, 16, 6, 6, '#b878ff');
+      fg.ellipse(12, 16, 4, 4, pal.h);
+      fg.ellipse(12, 16, 2, 2, INK);
+      fg.set(10, 13, '#ffffff');
+      // Floating psychic eyelids top & bottom
+      fg.poly([[0, 6], [12, 1], [23, 6], [23, 0], [0, 0]], pal.d);
+      fg.poly([[0, 26], [12, 31], [23, 26], [23, 31], [0, 31]], pal.d);
+      break;
+    }
+    case 13: {
+      // LONG ARMS: Giant muscular green mutated arm sweeping a massive steel broadsword corner-to-corner!
+      paintFullBleedBackdrop(p, pal, 'diag');
+      // Massive diagonal gleaming sword blade!
+      fg.poly([[9, 18], [22, 1], [23, 6], [13, 21]], '#dce8f4');
+      fg.line(11, 17, 22, 2, '#ffffff', 1);
+      fg.line(8, 15, 15, 22, '#ffd438', 2); // crossguard
+      // Huge outstretched mutated lime-green arm & clenched fist!
+      fg.line(0, 30, 10, 20, pal.d, 8);
+      fg.line(0, 28, 9, 19, pal.m, 6);
+      fg.line(1, 26, 8, 19, pal.h, 2);
+      fg.ellipse(10, 20, 4, 4, pal.h);
+      break;
+    }
+    case 14: {
+      // BOILING VEINS: Roaring volcanic orange-yellow flames erupting off a pulsing crimson forearm!
+      paintFullBleedBackdrop(p, pal, 'vertical');
+      // Towering roaring tongues of fire filling top 2/3!
+      fg.poly([[1, 20], [5, 4], [10, 14], [13, 1], [18, 13], [22, 5], [23, 22]], '#f44022');
+      fg.poly([[4, 22], [8, 9], [12, 15], [14, 6], [19, 18]], '#ff9628');
+      fg.poly([[7, 23], [12, 12], [16, 22]], '#fff048');
+      // Pulsing arm & glowing white-hot veins at base
+      fg.rect(2, 20, 20, 12, '#881818');
+      fg.line(4, 28, 12, 22, '#fff048', 2);
+      fg.line(12, 22, 20, 27, '#ff9628', 2);
+      break;
+    }
+    case 15: {
+      // SHOTGUN SHOULDERS: Twin huge glossy red-and-brass shotgun shells mounted on armored mutant shoulders!
+      paintFullBleedBackdrop(p, pal, 'vertical');
+      // Broad mutant shoulders across bottom
+      fg.ellipse(12, 28, 13, 8, pal.m);
+      fg.ellipse(12, 26, 9, 5, pal.h);
+      // Twin massive vertical crimson shells with bright brass rims!
+      for (const sx of [3, 13]) {
+        fg.rect(sx, 3, 8, 16, '#f03428');
+        fg.rect(sx + 1, 4, 2, 14, '#ff9488');
+        fg.rect(sx + 6, 4, 2, 14, '#9a1814');
+        fg.rect(sx, 19, 8, 6, '#ffd838');
+        fg.rect(sx + 1, 20, 2, 4, '#ffffff');
+      }
+      break;
+    }
+    case 16: {
+      // RECYCLE GLAND: Giant glowing neon-green mutant recycle loop circling a huge golden cartridge!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(12, 16, 10, 12, pal.m);
+      fg.ellipse(12, 16, 6, 8, pal.cardBg);
+      // Bold recycle arrowheads
+      fg.poly([[12, 1], [19, 6], [12, 10]], pal.h);
+      fg.poly([[12, 31], [5, 26], [12, 22]], pal.h);
+      // Gleaming central golden bullet
+      fg.rect(9, 10, 6, 12, '#ffd438');
+      fg.ellipse(12, 10, 3, 3, '#fff8a0');
+      fg.rect(10, 11, 2, 10, '#ffffff');
+      break;
+    }
+    case 17: {
+      // LASER BRAIN: Huge exposed glowing neon-green wrinkled brain blasting a diagonal white-lime laser!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      // Blazing diagonal laser beam slicing across bottom-right!
+      fg.line(10, 16, 24, 28, '#68f848', 7);
+      fg.line(10, 16, 24, 28, '#ffffff', 3);
+      // Huge bulging neon-green wrinkled brain filling top-left!
+      fg.ellipse(10, 13, 9, 9, pal.m);
+      fg.ellipse(8, 10, 6, 5, pal.h);
+      fg.line(5, 11, 13, 9, pal.d, 1);
+      fg.line(4, 15, 14, 14, pal.d, 1);
+      fg.line(8, 6, 9, 18, pal.d, 1);
+      fg.ellipse(12, 16, 3, 3, '#ffffff');
+      break;
+    }
+    case 18: {
+      // LAST WISH: Radiant blooming golden wasteland flower bathed in sunlit rays!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      fg.line(12, 18, 12, 31, '#58ec48', 3);
+      fg.ellipse(7, 25, 4, 2, '#58ec48');
+      fg.ellipse(17, 24, 4, 2, '#34a828');
+      // Radiant golden star petals filling upper card!
+      for (const [px, py] of [[12, 5], [19, 10], [17, 18], [7, 18], [5, 10]] as const) {
+        fg.ellipse(px, py, 5, 5, '#ffd438');
+        fg.ellipse(px, py - 1, 2.5, 2.5, '#fff8a0');
+      }
+      fg.ellipse(12, 12, 4.5, 4.5, '#ff6838');
+      fg.ellipse(11, 11, 2, 2, '#ffffff');
+      break;
+    }
+    case 19: {
+      // EAGLE EYES: Intense fierce golden-feathered eagle eye locked inside a bright crimson sniper reticle!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      // Fierce brow & curved golden-green beak/feathers
+      fg.poly([[0, 2], [23, 2], [23, 14], [12, 11], [0, 14]], pal.m);
+      fg.poly([[0, 2], [18, 2], [12, 8], [0, 9]], pal.h);
+      // Giant piercing golden eagle eye
+      fg.ellipse(12, 17, 9, 7, '#ffd838');
+      fg.ellipse(12, 17, 5, 5, '#fff8a8');
+      fg.ellipse(12, 17, 3, 3, INK);
+      fg.set(10, 15, '#ffffff');
+      // Crisp bright crimson crosshair overlaid
+      fg.line(12, 6, 12, 28, '#f4343c', 1);
+      fg.line(1, 17, 22, 17, '#f4343c', 1);
+      break;
+    }
+    case 20: {
+      // IMPACT WRISTS: Massive clenched mutated fist punching forward with fiery white-orange shockwaves!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      // Fiery impact starburst on right
+      fg.poly([[16, 16], [23, 3], [21, 14], [23, 28], [15, 20]], '#ff7c24');
+      fg.poly([[15, 16], [21, 9], [19, 16], [21, 23]], '#ffffff');
+      // Huge muscular fist & forearm slamming from left!
+      fg.rect(0, 11, 14, 11, pal.m);
+      fg.rect(0, 11, 12, 4, pal.h);
+      fg.ellipse(13, 16, 6, 7, pal.m);
+      fg.rect(11, 10, 6, 4, pal.h);
+      // Knuckle ink ridges
+      for (const ky of [12, 15, 18]) {
+        fg.rect(15, ky, 3, 1, INK);
+      }
+      break;
+    }
+    case 21: {
+      // BOLT MARROW: Giant blazing neon-green bone-tipped crossbow bolt streaking across homing arcs!
+      paintFullBleedBackdrop(p, pal, 'diag');
+      p.ellipse(12, 16, 10, 10, pal.cardMid);
+      // Sweeping glowing homing arc trail
+      fg.bezier(2, 29, 4, 12, 20, 6, pal.m, 4);
+      fg.bezier(2, 28, 5, 12, 19, 6, pal.h, 2);
+      // Huge razor bone/emerald arrowhead at top-right!
+      fg.poly([[13, 4], [23, 2], [20, 13]], '#f4eedc');
+      fg.poly([[15, 5], [22, 3], [19, 10]], '#ffffff');
+      break;
+    }
+    case 22: {
+      // STRESS: Hyper-tense close-up sweating neon-green face with bloodshot wide eyes & pulsing red vein!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(12, 17, 11, 13, pal.m);
+      fg.ellipse(9, 11, 7, 6, pal.h);
+      // Wide manic white eyes with tiny pinned pupils!
+      fg.ellipse(7, 14, 4, 4.5, '#ffffff');
+      fg.ellipse(17, 14, 4, 4.5, '#ffffff');
+      fg.rect(7, 14, 2, 2, INK);
+      fg.rect(16, 14, 2, 2, INK);
+      // Pulsing crimson forehead anger vein + cyan sweat drop!
+      fg.line(15, 5, 19, 9, '#f42c38', 2);
+      fg.line(19, 5, 15, 9, '#f42c38', 2);
+      fg.poly([[3, 6], [5, 10], [2, 10]], '#68ecff');
+      // Gritting clenched teeth!
+      fg.rect(5, 22, 14, 5, '#ffffff');
+      fg.line(5, 24, 19, 24, INK, 1);
+      for (const tx of [8, 12, 16]) fg.line(tx, 22, tx, 26, INK, 1);
+      break;
+    }
+    case 23: {
+      // TRIGGER FINGERS: Close-up heavy dark-iron gun receiver, glowing lime finger squeezing trigger + orange muzzle blast!
+      paintFullBleedBackdrop(p, pal, 'diag');
+      // Bright yellow-orange muzzle spark burst on right!
+      fg.poly([[17, 10], [23, 3], [22, 11], [23, 17], [17, 13]], '#ffa028');
+      fg.rect(18, 9, 4, 4, '#ffffff');
+      // Heavy gun frame & trigger guard
+      fg.rect(0, 4, 19, 9, '#6c7684');
+      fg.rect(0, 5, 18, 3, '#b0bcc8');
+      fg.rect(0, 13, 8, 18, '#464e5a');
+      fg.rect(8, 18, 10, 3, '#6c7684'); // trigger guard bottom
+      fg.rect(16, 13, 3, 8, '#6c7684');
+      // Curved mutated neon-green finger squeezing the trigger!
+      fg.ellipse(11, 16, 5, 3, pal.m);
+      fg.rect(9, 14, 4, 2, pal.h);
+      break;
+    }
+    case 24: {
+      // SHARP TEETH: Terrifying gaping crimson monster jaws lined with giant razor-sharp white fangs!
+      paintFullBleedBackdrop(p, pal, 'vertical');
+      p.rect(0, 0, 24, 32, '#14060a');
+      // Upper & lower crimson gums filling top and bottom edges!
+      fg.rect(0, 0, 24, 9, pal.m);
+      fg.rect(0, 0, 24, 4, pal.h);
+      fg.rect(0, 23, 24, 9, pal.m);
+      fg.rect(0, 27, 24, 5, pal.d);
+      // Giant interlocking razor white fangs!
+      for (const fx of [1, 7, 13, 19]) {
+        fg.poly([[fx, 8], [fx + 4, 8], [fx + 2, 18]], '#ffffff');
+        fg.poly([[fx + 1, 24], [fx + 5, 24], [fx + 3, 14]], '#f0eae0');
+      }
+      break;
+    }
+    case 25: {
+      // PATIENCE: Iconic glowing neon-green wasteland clock dial filling the entire 24x32 portrait!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(12, 16, 11, 11, pal.d);
+      fg.ellipse(12, 16, 9.5, 9.5, pal.m);
+      fg.ellipse(12, 16, 7.5, 7.5, pal.h);
+      // Bold clock rim ticks & crisp dark hands (12 & 3 o'clock!)
+      fg.rect(11, 7, 2, 2, INK);
+      fg.rect(11, 23, 2, 2, INK);
+      fg.rect(4, 15, 2, 2, INK);
+      fg.rect(18, 15, 2, 2, INK);
+      fg.rect(11, 9, 2, 8, INK);
+      fg.rect(11, 15, 7, 2, INK);
+      fg.set(11, 15, '#ffffff');
+      break;
+    }
+    case 26: {
+      // HAMMERHEAD: Armored green-gray hammerhead brow smashing cleanly through brick wall rubble!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      // Shattering brick chunks flying out at bottom!
+      fg.rect(1, 22, 6, 5, '#9c4e38');
+      fg.rect(17, 21, 6, 6, '#9c4e38');
+      fg.rect(8, 25, 7, 5, '#c46c4c');
+      fg.poly([[12, 19], [6, 25], [18, 25]], '#ff9028');
+      // Massive T-shaped armored lime-green hammerhead skull driving downward!
+      fg.rect(1, 4, 22, 11, pal.m);
+      fg.rect(2, 4, 20, 4, pal.h);
+      fg.rect(6, 14, 12, 7, pal.d);
+      fg.rect(3, 9, 3, 3, '#fff490');
+      fg.rect(18, 9, 3, 3, '#fff490');
+      break;
+    }
+    case 27: {
+      // STRONG SPIRIT: Silhouetted mutant head bathed in a blazing glowing white-cyan halo & heaven rays!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      // Radiant pure-white glowing halo floating at top!
+      fg.ellipse(12, 7, 10, 4, '#ffffff');
+      fg.ellipse(12, 7, 6, 2, pal.cardMid);
+      // Glowing lime-green uplifted mutant bust below!
+      fg.ellipse(12, 20, 8, 8, pal.m);
+      fg.ellipse(10, 17, 5, 4, pal.h);
+      fg.ellipse(12, 30, 11, 6, pal.d);
+      fg.rect(8, 18, 3, 3, '#ffffff');
+      fg.rect(14, 18, 3, 3, '#ffffff');
+      break;
+    }
+    case 28: {
+      // OPEN MIND: Cracked skull bursting wide open with brilliant golden treasure sunbeams!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      // Radiant golden beam erupting out top of cracked cranium!
+      fg.poly([[12, 14], [2, 0], [22, 0]], '#ffd438');
+      fg.poly([[12, 14], [7, 0], [17, 0]], '#ffffff');
+      // Cracked bone-lime skull halves below!
+      fg.ellipse(12, 20, 10, 10, '#dcecd2');
+      fg.poly([[12, 15], [7, 8], [17, 8]], '#ffd438');
+      fg.rect(6, 19, 4, 4, INK);
+      fg.rect(14, 19, 4, 4, INK);
+      fg.rect(8, 26, 8, 3, INK);
+      break;
+    }
+    case 29: {
+      // HEAVY HEART: Massive riveted dark-iron & crimson armored heart studded with gleaming gold bullets!
+      paintFullBleedBackdrop(p, pal, 'radial');
+      fg.ellipse(8, 12, 7, 7, pal.m);
+      fg.ellipse(16, 12, 7, 7, pal.m);
+      fg.poly([[1, 14], [23, 14], [12, 29]], pal.m);
+      fg.ellipse(7, 10, 3, 3, pal.h);
+      // Heavy steel armor belt + 3 gleaming golden bullets strapped across center!
+      fg.rect(2, 13, 20, 7, '#586472');
+      fg.rect(2, 13, 20, 2, '#9ca8b8');
+      for (const bx of [5, 11, 17]) {
+        fg.rect(bx, 11, 3, 10, '#ffd438');
+        fg.set(bx + 1, 11, '#ffffff');
+      }
+      break;
+    }
+    default: {
+      // 0: Fallback Rad — huge glowing nuclear rad trefoil filling 24x32!
+      paintFullBleedBackdrop(p, pal, 'burst');
+      fg.ellipse(12, 16, 10, 10, pal.m);
+      fg.ellipse(12, 16, 6, 6, pal.h);
+      fg.ellipse(12, 16, 3, 3, '#ffffff');
+      break;
+    }
+  }
+
+  fg.outline(INK);
+  compositeLayer(p, fg);
+  // Crisp 1px outer card edge frame so cards separate cleanly on Level Up without ANY empty padding!
+  for (let x = 0; x < p.w; x++) {
+    p.set(x, 0, INK);
+    p.set(x, p.h - 1, INK);
+  }
+  for (let y = 0; y < p.h; y++) {
     p.set(0, y, INK);
-    p.set(w - 1, y, INK);
+    p.set(p.w - 1, y, INK);
+  }
+}
+
+/**
+ * Full-bleed 24x32 Ultra Mutation card: radiant cosmic/golden backlit illustration (ZERO dark empty box!).
+ */
+function drawFullBleedUltraCard1x(p: PxCanvas, grid: readonly string[], pal: IconPalette, isAlt: boolean): void {
+  paintFullBleedBackdrop(p, pal, 'radial');
+  // Radiant golden/cosmic vertical glow bands & top/bottom metallic sheen (NO harsh corner X!)
+  p.ellipse(12, 16, 10, 13, pal.cardMid);
+  p.ellipse(12, 15, 6, 8, pal.d);
+  p.rect(1, 1, p.w - 2, 2, isAlt ? '#ffe048' : '#ffd438');
+  p.rect(1, p.h - 3, p.w - 2, 2, '#9a6412');
+  p.set(3, 4, '#fff498');
+  p.set(p.w - 4, 4, '#fff498');
+  p.set(3, p.h - 5, '#ffd438');
+  p.set(p.w - 4, p.h - 5, '#ffd438');
+
+  // Scale the 14x14 bespoke Ultra emblem boldly into full 24x32 portrait canvas (1.5x crisp pixel fill)!
+  const map: Record<string, string> = {
+    '1': pal.d,
+    '2': pal.m,
+    '3': pal.h,
+    '4': pal.a,
+    '5': pal.b,
+    w: '#ffffff',
+    k: INK,
+  };
+  const gh = grid.length;
+  const gw = grid[0]!.length;
+  const emb = new PxCanvas(p.w, p.h);
+  const scaleX = 1.5;
+  const scaleY = 2.0;
+  const drawW = Math.round(gw * scaleX);
+  const drawH = Math.round(gh * scaleY);
+  const ox = Math.floor((p.w - drawW) * 0.5);
+  const oy = Math.floor((p.h - drawH) * 0.5);
+
+  for (let y = 0; y < drawH; y++) {
+    const gy = Math.min(gh - 1, Math.floor(y / scaleY));
+    const row = grid[gy]!;
+    for (let x = 0; x < drawW; x++) {
+      const gx = Math.min(gw - 1, Math.floor(x / scaleX));
+      const ch = row[gx]!;
+      if (ch === '.' || ch === ' ') continue;
+      const col = map[ch];
+      if (col) emb.set(ox + x, oy + y, col);
+    }
+  }
+  emb.outline(INK);
+  compositeLayer(p, emb);
+  for (let x = 0; x < p.w; x++) {
+    p.set(x, 0, INK);
+    p.set(x, p.h - 1, INK);
+  }
+  for (let y = 0; y < p.h; y++) {
+    p.set(0, y, INK);
+    p.set(p.w - 1, y, INK);
   }
 }
 
 function registerSkillAndCrownSprites(b: FallbackAtlasBuilder): void {
-  // 29 Bespoke Mutation Cards (24x32, 30 frames) + SHAPED Transparent-Background HUD Icons (16x16, 30 frames)!
+  // 29 FULL-BLEED Bespoke Illustrated Mutation Cards (24x32, 30 frames) + Vibrant Lime HUD Icons (16x16, 30 frames)!
   b.addSprite('sprSkillIcon', 24, 32, 12, 16, 30, (ctx, ox, oy, w, h, f) => {
     const pal = MUTATION_PALETTES[f % MUTATION_PALETTES.length]!;
     const p = new PxCanvas(w, h);
-    paintCardFrame1x(p, pal.cardBg, pal.cardTrim, false);
-    const grid = MUTATION_GRIDS_14[f % MUTATION_GRIDS_14.length] ?? MUTATION_GRIDS_14[0]!;
-    paintEmblem1x(p, grid, pal);
+    drawFullBleedMutationCard1x(p, f % MUTATION_PALETTES.length, pal);
     p.flush(ctx, ox, oy);
   });
 
-  // SHAPED transparent-background crisp 16x16 HUD mutation icons (exact match to 13_frozen_5_3.png & 15_palace_7_1.png!)
+  // SHAPED transparent-background crisp 16x16 HUD mutation icons (vibrant lime-green & pure black outline!)
   b.addSprite('sprSkillIconHUD', 16, 16, 8, 8, 30, (ctx, ox, oy, w, h, f) => {
     const pal = MUTATION_PALETTES[f % MUTATION_PALETTES.length]!;
     const p = new PxCanvas(w, h);
@@ -463,13 +1021,12 @@ function registerSkillAndCrownSprites(b: FallbackAtlasBuilder): void {
     p.flush(ctx, ox, oy);
   });
 
-  // 24 Bespoke Ultra Cards (24x32, 24 frames) + SHAPED Transparent-Background HUD Icons (16x16, 24 frames)!
+  // 24 FULL-BLEED Ultra Cards (24x32, 24 frames) + SHAPED Transparent-Background HUD Icons (16x16, 24 frames)!
   b.addSprite('sprEGSkillIcon', 24, 32, 12, 16, 24, (ctx, ox, oy, w, h, f) => {
     const pal = ULTRA_PALETTES_24[f % ULTRA_PALETTES_24.length]!;
     const p = new PxCanvas(w, h);
-    paintCardFrame1x(p, pal.cardBg, f % 2 === 1 ? '#f5b836' : '#ffe048', true);
     const grid = ULTRA_GRIDS_14[f % ULTRA_GRIDS_14.length] ?? ULTRA_GRIDS_14[0]!;
-    paintEmblem1x(p, grid, pal);
+    drawFullBleedUltraCard1x(p, grid, pal, f % 2 === 1);
     p.flush(ctx, ox, oy);
   });
 
@@ -698,84 +1255,92 @@ function registerHudSprites(b: FallbackAtlasBuilder): void {
     p.flush(ctx, ox, oy);
   });
 
-  // 5 Crisp 1x Draining 8-Frame Ammo Icons (10x10, orig 5,5):
-  // frame 0 = FULL BRIGHT -> frame 7 = DARK EMPTY (top-to-bottom pixel drain!)
+  // 5 Crisp 1x Draining 8-Frame Ammo Icons at EXACT 8x9 (orig 4,4) matching hud.ts 1:1!
+  // ZERO fractional downscaling blur! Pure #000000 1px outer outline, vivid colors f0 -> dark empty f7!
   const applyDrain1x = (p: PxCanvas, f: number): void => {
     if (f <= 0) return;
     const drainRows = Math.min(p.h - 2, Math.ceil((f / 7) * (p.h - 2)));
     for (let y = 1; y < 1 + drainRows; y++) {
       for (let x = 1; x < p.w - 1; x++) {
         const cur = p.get(x, y);
-        if (cur && cur !== INK) {
-          p.set(x, y, f >= 7 ? '#2c2832' : '#423c4a');
+        if (cur && cur !== HUD_INK) {
+          p.set(x, y, f >= 7 ? '#24202a' : '#3a3442');
         }
       }
     }
   };
 
-  // Bullet icon: twin vertical gold bullets (matching 04_desert_1_1.png!)
-  b.addSprite('sprBulletIcon', 10, 10, 5, 5, 8, (ctx, ox, oy, w, h, f) => {
+  // Bullet icon (8x9): twin vertical gold bullets with pure #000000 outline (exact match to 15_palace_7_1.png!)
+  b.addSprite('sprBulletIcon', 8, 9, 4, 4, 8, (ctx, ox, oy, w, h, f) => {
     const p = new PxCanvas(w, h);
-    p.rect(2, 2, 2, 6, '#f5cc38');
-    p.set(2, 2, '#fff6a8');
-    p.rect(2, 7, 2, 1, '#b87c18');
-    p.rect(6, 2, 2, 6, '#f5cc38');
-    p.set(6, 2, '#fff6a8');
-    p.rect(6, 7, 2, 1, '#b87c18');
+    // Left gold bullet (x=1..2, y=1..7)
+    p.rect(1, 1, 2, 7, '#f8d034');
+    p.set(1, 1, '#fff8b0');
+    p.rect(1, 2, 1, 4, '#ffe668');
+    p.rect(1, 7, 2, 1, '#b87c18');
+    // Right gold bullet (x=5..6, y=1..7)
+    p.rect(5, 1, 2, 7, '#f8d034');
+    p.set(5, 1, '#fff8b0');
+    p.rect(5, 2, 1, 4, '#ffe668');
+    p.rect(5, 7, 2, 1, '#b87c18');
     applyDrain1x(p, f);
-    p.outline(INK);
+    p.outline(HUD_INK);
     p.flush(ctx, ox, oy);
   });
 
-  // Shot / Shell icon: red shotgun shell + gold brass base!
-  b.addSprite('sprShotIcon', 10, 10, 5, 5, 8, (ctx, ox, oy, w, h, f) => {
+  // Shot / Shell icon (8x9): bright red shotgun shell + gleaming gold brass rim!
+  b.addSprite('sprShotIcon', 8, 9, 4, 4, 8, (ctx, ox, oy, w, h, f) => {
     const p = new PxCanvas(w, h);
-    p.rect(3, 2, 4, 4, '#e83428');
-    p.rect(4, 2, 1, 3, '#ff8070');
-    p.rect(3, 6, 4, 2, '#f5cc38');
-    p.set(4, 6, '#fff8a8');
+    p.rect(2, 1, 4, 5, '#f03428');
+    p.rect(2, 1, 2, 4, '#ff7464');
+    p.set(2, 1, '#ffd0c8');
+    p.rect(2, 6, 4, 2, '#f8d438');
+    p.rect(2, 6, 2, 1, '#fff8b0');
     applyDrain1x(p, f);
-    p.outline(INK);
+    p.outline(HUD_INK);
     p.flush(ctx, ox, oy);
   });
   b.addAlias('sprShellIcon', 'sprShotIcon');
 
-  // Bolt icon: crisp upward-pointing green/gold crossbow arrow bolt!
-  b.addSprite('sprBoltIcon', 10, 10, 5, 5, 8, (ctx, ox, oy, w, h, f) => {
+  // Bolt icon (8x9): crisp upward-pointing golden-orange/lime crossbow arrow bolt!
+  b.addSprite('sprBoltIcon', 8, 9, 4, 4, 8, (ctx, ox, oy, w, h, f) => {
     const p = new PxCanvas(w, h);
-    p.set(5, 1, '#ffffff');
-    p.rect(4, 2, 3, 2, '#58e850');
-    p.rect(3, 3, 5, 1, '#34a830');
-    p.rect(5, 4, 1, 5, '#e0b048');
-    p.rect(4, 7, 3, 1, '#a87c2c');
+    p.rect(3, 1, 2, 1, '#ffffff');
+    p.rect(2, 2, 4, 2, '#f8a828');
+    p.rect(1, 3, 6, 1, '#e07c18');
+    p.rect(3, 4, 2, 4, '#f8d048');
+    p.rect(2, 7, 4, 1, '#c48024');
     applyDrain1x(p, f);
-    p.outline(INK);
+    p.outline(HUD_INK);
     p.flush(ctx, ox, oy);
   });
 
-  // Explo icon: orange-gold round grenade/bomb with lit white fuse!
-  b.addSprite('sprExploIcon', 10, 10, 5, 5, 8, (ctx, ox, oy, w, h, f) => {
+  // Explo icon (8x9): vivid round orange-gold bomb with metallic collar & bright lit fuse spark!
+  b.addSprite('sprExploIcon', 8, 9, 4, 4, 8, (ctx, ox, oy, w, h, f) => {
     const p = new PxCanvas(w, h);
-    p.ellipse(5, 6, 3, 2.8, '#f08c28');
-    p.rect(3, 4, 2, 2, '#ffd068');
-    p.rect(4, 2, 2, 2, '#7c8894');
-    p.set(6, 1, '#ffe448');
-    p.set(7, 1, '#ffffff');
+    p.rect(2, 3, 4, 5, '#f88c20');
+    p.rect(1, 4, 6, 3, '#f88c20');
+    p.rect(2, 4, 2, 2, '#ffe068');
+    p.set(2, 4, '#ffffff');
+    p.rect(3, 2, 2, 1, '#909ca8'); // metallic cap
+    p.set(5, 1, '#ffe848'); // fuse spark
+    p.set(6, 1, '#ffffff');
     applyDrain1x(p, f);
-    p.outline(INK);
+    p.outline(HUD_INK);
     p.flush(ctx, ox, oy);
   });
 
-  // Energy icon: crisp bright yellow/white lightning bolt cell!
-  b.addSprite('sprEnergyIcon', 10, 10, 5, 5, 8, (ctx, ox, oy, w, h, f) => {
+  // Energy icon (8x9): crisp jagged electric yellow/white lightning bolt (exact match to 15_palace_7_1.png!)
+  b.addSprite('sprEnergyIcon', 8, 9, 4, 4, 8, (ctx, ox, oy, w, h, f) => {
     const p = new PxCanvas(w, h);
-    p.rect(5, 1, 2, 2, '#ffe848');
-    p.rect(4, 3, 2, 2, '#ffffff');
-    p.rect(3, 4, 5, 2, '#ffe848');
-    p.rect(5, 6, 2, 2, '#68ecff');
-    p.set(4, 8, '#ffffff');
+    p.rect(4, 1, 2, 2, '#ffe838');
+    p.rect(3, 2, 2, 2, '#ffffff');
+    p.rect(1, 4, 5, 2, '#ffe838');
+    p.rect(2, 4, 3, 1, '#ffffff');
+    p.rect(3, 6, 2, 2, '#ffd028');
+    p.set(2, 7, '#ffffff');
     applyDrain1x(p, f);
-    p.outline(INK);
+    p.outline(HUD_INK);
     p.flush(ctx, ox, oy);
   });
 

@@ -46,8 +46,8 @@ const BUST_PALETTES_24: readonly BustPalette[] = [
   { bgDeep: '#1c1430', bgMid: '#443070', skin: '#f4f2f8', skinHi: '#ffffff', skinDark: '#b6bac8', gear: '#f5c838', gearHi: '#fff494', gearDark: '#a87c14', eye: '#ffffff', accent: '#58f068', isB: false },
   { bgDeep: '#281020', bgMid: '#602248', skin: '#f5c838', skinHi: '#fff494', skinDark: '#b08014', gear: '#dc283c', gearHi: '#ff6c7c', gearDark: '#801420', eye: '#ff3c50', accent: '#58f068', isB: true },
   // 12: Steroids A (bald muscular + glasses + raised revolver), 13: Steroids B (cowboy hat + flexing + revolver like 21_paused.png!)
-  { bgDeep: '#241810', bgMid: '#583822', skin: '#e0a470', skinHi: '#f8d2a4', skinDark: '#b27044', gear: '#3a4c6e', gearHi: '#647ca8', gearDark: '#202c44', eye: '#ffffff', accent: '#f5c838', isB: false },
-  { bgDeep: '#20140e', bgMid: '#4c3020', skin: '#e0a470', skinHi: '#f8d2a4', skinDark: '#b27044', gear: '#7c5234', gearHi: '#aa7850', gearDark: '#4a2e1a', eye: '#18141c', accent: '#f5c838', isB: true },
+  { bgDeep: '#182434', bgMid: '#2c4460', skin: '#e0a470', skinHi: '#f8d2a4', skinDark: '#b27044', gear: '#3a4c6e', gearHi: '#647ca8', gearDark: '#202c44', eye: '#ffffff', accent: '#f5c838', isB: false },
+  { bgDeep: '#18202c', bgMid: '#2a3c54', skin: '#e0a470', skinHi: '#f8d2a4', skinDark: '#b27044', gear: '#7c5234', gearHi: '#aa7850', gearDark: '#4a2e1a', eye: '#18141c', accent: '#f5c838', isB: true },
   // 14: Robot A, 15: Robot B
   { bgDeep: '#102028', bgMid: '#244c5e', skin: '#7c8894', skinHi: '#b4c2ce', skinDark: '#4a5460', gear: '#424c58', gearHi: '#6c7a88', gearDark: '#242a32', eye: '#48e8ff', accent: '#e83c34', isB: false },
   { bgDeep: '#101830', bgMid: '#243c70', skin: '#3c72cc', skinHi: '#74a8f8', skinDark: '#204486', gear: '#ebb834', gearHi: '#ffe878', gearDark: '#9e7414', eye: '#68f4ff', accent: '#ff4858', isB: true },
@@ -247,108 +247,165 @@ export function drawMutantBigPortraitHiBit(
     }
 
     case 6: {
-      // STEROIDS — ICONIC HERO PORTRAIT MATCHING 21_paused.png!!
-      // Huge flexing muscular bare tan chest & biceps, blue jeans + gold crown belt buckle,
-      // gritting fierce smirk, raising a chunky dark-steel REVOLVER in his fist!
-      // Blue jeans & gold crown belt buckle along bottom edge
-      p.rect(cx - 24, 65, 44, 15, '#34589c');
-      p.rect(cx - 22, 66, 18, 13, '#527cc8');
-      p.line(cx - 10, 68, cx - 22, 74, '#203868', 2);
-      p.rect(cx - 24, 63, 44, 4, '#4c301c');
-      // Gold crown belt buckle
-      p.rect(cx - 6, 60, 12, 8, pal.accent);
-      p.rect(cx - 5, 61, 9, 3, '#fff498');
-      p.poly([[cx - 6, 60], [cx - 5, 57], [cx - 2, 60]], pal.accent);
-      p.poly([[cx - 2, 60], [cx, 56], [cx + 2, 60]], '#fff498');
-      p.poly([[cx + 2, 60], [cx + 5, 57], [cx + 6, 60]], pal.accent);
+      // STEROIDS — GRITTY NUCLEAR THRONE COMIC PORTRAIT MATCHING 21_paused.png!!
+      // Massive sloped traps/deltoids rising behind head, 4-tone warm ochre cel-shading,
+      // heavy internal comic ink contour lines, gold crown belt buckle, blue denim jeans,
+      // compact spectacles (A) or tilted battered cowboy hat (B), and chunky dark-iron REVOLVER!
+      const skinHi = '#f6c896';
+      const skinMid = '#e09a62';
+      const skinShade = '#ac6234';
+      const skinDeep = '#6e3a1c';
+      const scx = cx - 4; // shift bust slightly left so the raised revolver gets generous comic framing!
 
-      // Massive flexing bare tan torso, sculpted curved pecs & shadowed 6-pack abs!
-      p.ellipse(cx - 2, 46, 24, 20, pal.skin);
-      // Warm deep under-chest & side muscle cel-shading (ZERO stiff '+' lines!)
-      p.ellipse(cx + 9, 49, 13, 13, pal.skinDark);
-      p.ellipse(cx - 2, 56, 17, 9, pal.skinDark);
-      // Sculpted rounded pectoral muscles
-      p.ellipse(cx - 12, 41, 12, 9, pal.skin);
-      p.ellipse(cx - 14, 38, 8, 5, pal.skinHi);
-      p.ellipse(cx + 7, 41, 11, 9, pal.skin);
-      p.ellipse(cx + 4, 38, 7, 5, pal.skinHi);
-      // Curved under-pec shadow & subtle muscle ink creases
-      p.bezier(cx - 22, 47, cx - 12, 51, cx - 2, 48, pal.skinDark, 3);
-      p.bezier(cx - 1, 48, cx + 8, 51, cx + 17, 47, pal.skinDark, 3);
-      p.bezier(cx - 20, 48, cx - 12, 51, cx - 2, 49, INK, 1);
-      p.bezier(cx, 49, cx + 8, 51, cx + 15, 48, INK, 1);
-      // Sculpted ab blocks
-      p.ellipse(cx - 7, 54, 5, 3, pal.skin);
-      p.ellipse(cx + 4, 54, 5, 3, pal.skin);
-      p.ellipse(cx - 6, 59, 5, 3, pal.skin);
-      p.ellipse(cx + 4, 59, 4, 3, pal.skin);
-      p.line(cx - 1, 51, cx - 1, 61, pal.skinDark, 1);
+      // 1. Blue denim jeans + dark leather belt along bottom edge
+      p.poly([[scx - 24, 65], [scx + 19, 64], [scx + 21, h - 2], [scx - 28, h - 2]], '#2c509e');
+      p.poly([[scx - 22, 66], [scx - 4, 66], [scx - 8, h - 2], [scx - 25, h - 2]], '#4a76cc');
+      p.poly([[scx + 6, 66], [scx + 19, 65], [scx + 20, h - 2], [scx + 6, h - 2]], '#1c3266');
+      p.line(scx - 10, 68, scx - 23, 76, INK, 2); // denim crease ink
+      p.line(scx + 8, 69, scx + 16, 76, INK, 2);
 
-      // Huge flexing left shoulder & raised right bicep holding REVOLVER!
-      p.ellipse(cx - 28, 41, 13, 14, pal.skin);
-      p.ellipse(cx - 31, 36, 7, 7, pal.skinHi);
-      p.ellipse(cx - 25, 48, 10, 6, pal.skinDark);
-      p.ellipse(cx + 21, 39, 11, 11, pal.skin);
-      p.ellipse(cx + 23, 35, 6, 6, pal.skinHi);
-      // Muscular forearm & clenched fist raising the chunky revolver on right!
-      p.line(cx + 23, 45, cx + 33, 33, pal.skinDark, 10);
-      p.line(cx + 23, 44, cx + 32, 33, pal.skin, 7);
-      p.ellipse(cx + 34, 33, 6, 6, pal.skin);
-      p.rect(cx + 31, 29, 4, 5, pal.skinHi);
+      // 2. Massive towering sloped trapezius & shoulder mass rising BEHIND head/neck!
+      p.poly([[scx - 33, 56], [scx - 32, 30], [scx - 14, 18], [scx + 16, 20], [scx + 26, 34], [scx + 20, 62], [scx - 24, 62]], skinMid);
+      p.ellipse(scx - 16, 26, 13, 8, skinHi); // sunlit left trap ridge
+      p.ellipse(scx + 14, 29, 10, 7, skinShade); // shadowed right trap ridge
 
-      // CHUNKY REVOLVER HELD HIGH (just like 21_paused.png!)
-      p.poly([[cx + 26, 23], [cx + 49, 15], [cx + 51, 22], [cx + 30, 30]], '#56606e');
-      p.poly([[cx + 28, 23], [cx + 48, 16], [cx + 49, 18], [cx + 29, 25]], '#a4b0c0');
-      p.ellipse(cx + 49, 19, 2, 3, INK); // dark barrel bore
-      p.rect(cx + 32, 23, 8, 7, '#343a44'); // fluted cylinder
-      p.rect(cx + 34, 24, 2, 5, '#8c96a4');
-      p.rect(cx + 37, 24, 2, 5, '#727c8a');
-      p.rect(cx + 33, 30, 5, 8, '#6c3c20'); // brown grip in fist
-      p.rect(cx + 34, 31, 2, 5, '#965c36');
+      // 3. Sculpted 4-tone rounded pectoral muscles & abdominal blocks with comic ink seams!
+      // Deep ribcage / under-torso warm shadow
+      p.ellipse(scx - 1, 51, 21, 13, skinShade);
+      p.ellipse(scx + 11, 51, 11, 11, skinDeep);
+      // Huge bulging left & right pecs (matching 21_paused.png proportions!)
+      p.ellipse(scx - 11, 41, 13, 10, skinMid);
+      p.ellipse(scx - 14, 37, 9, 5.5, skinHi);
+      p.ellipse(scx - 8, 47, 10, 4, skinShade);
+      p.ellipse(scx + 9, 41, 12, 10, skinMid);
+      p.ellipse(scx + 6, 37, 8, 5, skinHi);
+      p.ellipse(scx + 11, 47, 9, 4, skinShade);
+      // Heavy comic ink under-pec contour & central sternum cleft!
+      p.bezier(scx - 23, 47, scx - 12, 53, scx - 1, 49, INK, 2);
+      p.bezier(scx - 1, 49, scx + 10, 53, scx + 20, 46, INK, 2);
+      p.line(scx - 1, 35, scx - 1, 50, INK, 2);
+      // Sculpted 4-pack abs tucked neatly above belt buckle
+      p.ellipse(scx - 8, 55, 6, 3.8, skinMid);
+      p.ellipse(scx - 9, 54, 3.5, 2, skinHi);
+      p.ellipse(scx + 6, 55, 6, 3.8, skinMid);
+      p.ellipse(scx + 5, 54, 3.5, 2, skinHi);
+      p.ellipse(scx - 7, 60, 5, 3, skinShade);
+      p.ellipse(scx + 5, 60, 5, 3, skinShade);
+      p.line(scx - 1, 51, scx - 1, 61, INK, 1);
+      p.line(scx - 14, 58, scx + 12, 58, skinDeep, 1);
 
-      // Strong square jaw & gritting fierce teeth!
-      p.ellipse(cx - 2, 25, 15, 13, pal.skin);
-      p.ellipse(cx - 6, 21, 9, 7, pal.skinHi);
-      p.ellipse(cx + 6, 29, 8, 6, pal.skinDark);
-      p.bezier(cx - 12, 29, cx - 2, 32, cx + 8, 29, INK, 4);
-      p.bezier(cx - 11, 29, cx - 2, 31, cx + 7, 29, CREAM, 2);
-      for (let t = -7; t <= 4; t += 4) p.set(cx + t, 30, INK);
+      // Leather belt & iconic 3-point GOLD CROWN BELT BUCKLE drawn OVER abs so spikes pop cleanly!
+      p.rect(scx - 23, 62, 42, 5, '#4c2e1c');
+      p.line(scx - 23, 62, scx + 19, 62, INK, 1);
+      p.line(scx - 23, 67, scx + 19, 67, INK, 1);
+      p.poly([[scx - 8, 67], [scx - 9, 58], [scx - 4, 62], [scx, 56], [scx + 4, 62], [scx + 9, 58], [scx + 8, 67]], INK);
+      p.poly([[scx - 7, 66], [scx - 7, 60], [scx - 3, 63], [scx, 58], [scx + 3, 63], [scx + 7, 60], [scx + 7, 66]], '#f0bc2c');
+      p.poly([[scx - 6, 63], [scx - 6, 60], [scx - 2, 63], [scx, 58], [scx + 2, 63]], '#fff498');
+
+      // 4. Huge bulging left shoulder/bicep + flexed right arm holding REVOLVER!
+      p.ellipse(scx - 28, 43, 12, 15, skinMid);
+      p.ellipse(scx - 31, 37, 7, 8, skinHi);
+      p.ellipse(scx - 25, 52, 9, 7, skinShade);
+      p.bezier(scx - 24, 32, scx - 19, 42, scx - 22, 54, INK, 2); // left deltoid comic crease
+      // Right flexing shoulder, thick bent forearm & clenched fist!
+      p.ellipse(scx + 23, 39, 10, 11, skinMid);
+      p.ellipse(scx + 22, 35, 5.5, 5, skinHi);
+      p.ellipse(scx + 26, 44, 8, 6, skinShade);
+      p.line(scx + 25, 45, scx + 35, 34, skinDeep, 13);
+      p.line(scx + 24, 44, scx + 34, 34, skinMid, 10);
+      p.line(scx + 23, 42, scx + 32, 34, skinHi, 4);
+      p.bezier(scx + 19, 43, scx + 25, 48, scx + 33, 42, INK, 2); // bicep/forearm comic ink crease
+
+      // 5. CHUNKY HEAVY-INKED STEEL REVOLVER HELD HIGH (exact silhouette from 21_paused.png!)
+      // Angled wood grip + trigger guard
+      p.poly([[scx + 34, 30], [scx + 41, 30], [scx + 43, 42], [scx + 36, 42]], '#5c3218');
+      p.poly([[scx + 35, 31], [scx + 38, 31], [scx + 39, 40], [scx + 36, 40]], '#8c522c');
+      p.line(scx + 34, 30, scx + 36, 42, INK, 1);
+      // Heavy steel receiver + hammer spur + fluted cylinder
+      p.poly([[scx + 26, 25], [scx + 52, 15], [scx + 55, 22], [scx + 31, 32]], '#4e5866');
+      p.poly([[scx + 28, 24], [scx + 51, 16], [scx + 52, 18], [scx + 29, 26]], '#9aa6b8');
+      p.poly([[scx + 31, 29], [scx + 54, 20], [scx + 55, 22], [scx + 32, 32]], '#2c323c');
+      p.line(scx + 26, 25, scx + 52, 15, INK, 2);
+      p.line(scx + 31, 32, scx + 55, 22, INK, 2);
+      // Open dark barrel bore on muzzle tip
+      p.ellipse(scx + 53, 18, 2.5, 3.5, '#2a303a');
+      p.ellipse(scx + 53, 18, 1.4, 2.2, INK);
+      // Fluted dark iron cylinder with metallic highlights
+      p.rect(scx + 32, 23, 9, 8, '#2c323c');
+      p.rect(scx + 33, 24, 2, 6, '#7c8898');
+      p.rect(scx + 37, 24, 2, 6, '#626c7a');
+      p.rect(scx + 32, 23, 9, 1, INK);
+      p.rect(scx + 32, 30, 9, 1, INK);
+      // Big clenched tan fist & thumb wrapping the grip!
+      p.ellipse(scx + 37, 35, 6, 6, skinMid);
+      p.ellipse(scx + 35, 33, 3.5, 3, skinHi);
+      p.ellipse(scx + 39, 38, 4, 3, skinShade);
+      p.line(scx + 33, 33, scx + 41, 33, INK, 1);
+      p.line(scx + 34, 36, scx + 42, 36, INK, 1);
+
+      // 6. Strong square jaw, rugged cheekbones & fierce gritting teeth!
+      p.ellipse(scx - 1, 24, 15, 12, skinMid);
+      p.ellipse(scx - 6, 19, 9, 6, skinHi);
+      p.ellipse(scx + 7, 27, 8, 6, skinShade);
+      p.bezier(scx - 14, 28, scx - 1, 36, scx + 12, 28, INK, 2); // strong jaw comic line
+      // Tight fierce clenched teeth smirk (NO giant blocky rectangle!)
+      p.bezier(scx - 10, 28, scx - 1, 31, scx + 8, 28, INK, 4);
+      p.bezier(scx - 9, 28, scx - 1, 30, scx + 7, 28, CREAM, 2);
+      p.set(scx - 5, 29, INK);
+      p.set(scx - 1, 29, INK);
+      p.set(scx + 3, 29, INK);
 
       if (pal.isB) {
-        // B-SKIN: Iconic wide-brimmed brown cowboy hat pulled low over fierce squinting eyes (21_paused.png!)
-        p.line(cx - 10, 23, cx - 2, 25, INK, 2);
-        p.line(cx + 9, 23, cx + 2, 25, INK, 2);
-        p.poly([[cx - 30, 17], [cx - 14, 10], [cx + 14, 11], [cx + 24, 19], [cx + 12, 25], [cx - 22, 23]], pal.gear);
-        p.poly([[cx - 20, 16], [cx - 13, 3], [cx + 2, 6], [cx + 12, 4], [cx + 15, 17]], pal.gear);
-        p.poly([[cx - 17, 14], [cx - 11, 5], [cx + 1, 7], [cx, 15]], pal.gearHi);
-        p.bezier(cx - 26, 19, cx - 6, 24, cx + 18, 21, INK, 2);
+        // B-SKIN: Iconic wide-brimmed worn brown cowboy hat pulled low over squinting fierce eyes (21_paused.png!)
+        p.line(scx - 10, 22, scx - 3, 25, INK, 2);
+        p.line(scx + 9, 22, scx + 2, 25, INK, 2);
+        p.poly([[scx - 28, 18], [scx - 14, 11], [scx + 14, 12], [scx + 24, 19], [scx + 11, 25], [scx - 21, 24]], '#7a5234');
+        p.poly([[scx - 18, 17], [scx - 12, 4], [scx + 1, 7], [scx + 12, 5], [scx + 15, 18]], '#7a5234');
+        p.poly([[scx - 16, 15], [scx - 10, 6], [scx, 8], [scx - 1, 16]], '#a6764c');
+        p.poly([[scx + 4, 7], [scx + 12, 6], [scx + 14, 17], [scx + 4, 17]], '#4e301c');
+        p.bezier(scx - 25, 20, scx - 4, 25, scx + 19, 21, INK, 2);
+        p.bezier(scx - 16, 16, scx, 19, scx + 14, 16, INK, 2);
       } else {
-        // A-SKIN: Classic bald scientist brow + bold gleaming round white/black glasses!
-        p.line(cx - 14, 17, cx + 12, 17, INK, 2);
-        p.ellipse(cx - 7, 21, 7, 6.5, INK);
-        p.ellipse(cx + 6, 21, 7, 6.5, INK);
-        p.ellipse(cx - 7, 21, 5, 4.5, WHITE);
-        p.ellipse(cx + 6, 21, 5, 4.5, WHITE);
-        p.rect(cx - 6, 20, 2, 2, INK);
-        p.rect(cx + 7, 20, 2, 2, INK);
-        p.set(cx - 9, 19, '#a8ecff');
-        p.set(cx + 4, 19, '#a8ecff');
+        // A-SKIN: Bald sunlit dome + furrowed angry brow + COMPACT dark-rimmed scientist spectacles!
+        p.ellipse(scx - 2, 16, 13, 8, skinMid);
+        p.ellipse(scx - 6, 13, 8, 4, skinHi);
+        p.set(scx - 8, 12, WHITE);
+        // Heavy stern comic brow ridge overhanging compact spectacles!
+        p.bezier(scx - 12, 18, scx - 1, 21, scx + 10, 18, skinDeep, 3);
+        p.bezier(scx - 12, 18, scx - 1, 21, scx + 10, 18, INK, 2);
+        // Compact dark-rimmed round glasses (radius 4.5 — NOT giant cartoon white saucers!)
+        p.ellipse(scx - 6, 22, 4.8, 4.2, INK);
+        p.ellipse(scx + 5, 22, 4.8, 4.2, INK);
+        p.rect(scx - 2, 21, 3, 2, INK); // sturdy glasses bridge
+        p.ellipse(scx - 6, 22, 3.2, 2.8, '#cdeaf6');
+        p.ellipse(scx + 5, 22, 3.2, 2.8, '#cdeaf6');
+        p.rect(scx - 6, 22, 2, 2, INK); // intense focused eyes behind glass
+        p.rect(scx + 5, 22, 2, 2, INK);
+        p.set(scx - 8, 20, WHITE); // subtle specular glint
+        p.set(scx + 3, 20, WHITE);
       }
       break;
     }
 
     case 7: {
-      // ROBOT — chunky boxy gunmetal CRT bot + antenna + glowing cyan visor!
-      p.rect(cx - 30, 56, 60, 24, pal.gear);
-      p.rect(cx - 26, 58, 52, 20, pal.skin);
+      // ROBOT — chunky rounded steel CRT bot + bolts + antenna + glowing cyan visor!
+      p.poly([[cx - 32, h - 1], [cx - 28, 54], [cx + 28, 54], [cx + 32, h - 1]], pal.gear);
+      p.poly([[cx - 26, h - 1], [cx - 24, 57], [cx + 24, 57], [cx + 26, h - 1]], pal.skin);
+      p.rect(cx - 24, 57, 48, 3, pal.skinHi);
       p.rect(cx - 14, 62, 28, 12, INK);
       for (let g = 0; g < 4; g++) p.rect(cx - 11 + g * 6, 64, 4, 8, pal.accent);
+      p.line(cx - 16, 58, cx - 16, 76, INK, 1);
+      p.line(cx + 16, 58, cx + 16, 76, INK, 1);
       p.line(cx + 12, 18, cx + 18, 5, pal.skinHi, 2);
-      p.ellipse(cx + 18, 5, 3, 3, pal.accent);
+      p.ellipse(cx + 18, 5, 3.5, 3.5, pal.accent);
+      // Chunky beveled CRT head + side ear-bolts
+      p.rect(cx - 26, 28, 5, 12, pal.gear);
+      p.rect(cx + 21, 28, 5, 12, pal.gearDark);
       p.rect(cx - 22, 16, 44, 38, pal.skin);
-      p.rect(cx - 22, 16, 44, 4, pal.skinHi);
-      p.rect(cx - 22, 50, 44, 4, pal.skinDark);
-      p.rect(cx - 17, 22, 34, 22, INK);
+      p.rect(cx - 22, 16, 44, 5, pal.skinHi);
+      p.rect(cx - 22, 49, 44, 5, pal.skinDark);
+      p.rect(cx - 17, 22, 34, 23, INK);
+      p.rect(cx - 15, 24, 30, 19, '#12222c');
       p.rect(cx - 12, 28, 9, 8, pal.eye);
       p.rect(cx + 3, 28, 9, 8, pal.eye);
       p.rect(cx - 11, 29, 5, 3, WHITE);
@@ -360,36 +417,48 @@ export function drawMutantBigPortraitHiBit(
       // CHICKEN — fierce martial rooster with crimson comb, yellow beak, headband & katana!
       p.line(cx + 10, 50, cx + 34, 12, '#4a5260', 5);
       p.line(cx + 11, 49, cx + 33, 13, pal.gear, 3);
-      p.ellipse(cx, 70, 28, 16, pal.skin);
-      p.poly([[cx - 22, 60], [cx, 72], [cx + 22, 60], [cx + 18, h - 1], [cx - 18, h - 1]], pal.gearDark);
+      // Solid connected feathered neck & martial tunic shoulders (zero neck gap!)
+      p.rect(cx - 11, 44, 22, 16, pal.skin);
+      p.ellipse(cx, 69, 29, 17, pal.skin);
+      p.ellipse(cx - 6, 65, 16, 9, pal.skinHi);
+      p.poly([[cx - 22, 58], [cx, 72], [cx + 22, 58], [cx + 18, h - 1], [cx - 18, h - 1]], pal.gearDark);
+      p.line(cx - 21, 58, cx, 71, INK, 2);
+      p.line(cx + 21, 58, cx, 71, INK, 2);
       // Towering crimson comb
       p.poly([[cx - 10, 22], [cx - 12, 7], [cx - 4, 15], [cx, 5], [cx + 6, 14], [cx + 12, 8], [cx + 10, 22]], pal.gear);
-      p.ellipse(cx, 34, 17, 16, pal.skin);
+      p.ellipse(cx, 35, 17, 16, pal.skin);
       p.ellipse(cx - 4, 30, 10, 9, pal.skinHi);
+      p.ellipse(cx + 6, 42, 10, 7, pal.skinDark);
       // Crimson headband & trailing tails
       p.rect(cx - 18, 24, 36, 7, pal.gear);
       p.rect(cx - 16, 25, 32, 2, pal.gearHi);
+      p.line(cx - 18, 31, cx + 18, 31, INK, 1);
       p.poly([[cx + 16, 25], [cx + 36, 18], [cx + 38, 25], [cx + 16, 30]], pal.gear);
-      // Hooked golden beak
+      // Hooked golden beak & wattle
+      p.ellipse(cx - 10, 44, 4, 4, pal.gear);
       p.poly([[cx - 6, 34], [cx - 25, 39], [cx - 14, 44], [cx - 5, 42]], pal.accent);
       p.poly([[cx - 6, 34], [cx - 23, 39], [cx - 6, 38]], '#fff498');
+      p.line(cx - 22, 40, cx - 6, 40, INK, 1);
       p.rect(cx - 7, 32, 5, 4, INK);
       p.set(cx - 5, 33, pal.isB ? pal.accent : WHITE);
       break;
     }
 
     case 9: {
-      // REBEL — shadowed slate-blue hood, warm scarf & piercing bright eyes!
+      // REBEL — shadowed slate-blue hood, layered draped scarf folds & piercing bright eyes!
       p.poly([[cx - 34, h - 1], [cx - 26, 52], [cx + 26, 52], [cx + 34, h - 1]], pal.skin);
       p.poly([[cx - 32, h - 1], [cx - 24, 54], [cx - 4, 54], [cx - 8, h - 1]], pal.skinHi);
-      p.poly([[cx, 6], [cx + 20, 16], [cx + 24, 52], [cx - 24, 52], [cx - 20, 16]], pal.skin);
+      p.poly([[cx + 6, 54], [cx + 25, 54], [cx + 32, h - 1], [cx + 10, h - 1]], pal.skinDark);
+      p.poly([[cx, 6], [cx + 21, 16], [cx + 25, 52], [cx - 25, 52], [cx - 21, 16]], pal.skin);
       p.poly([[cx, 7], [cx - 19, 17], [cx - 22, 44], [cx - 8, 36]], pal.skinHi);
       p.ellipse(cx, 33, 15, 16, INK);
-      // Warm draped scarf
-      p.rect(cx - 18, 40, 36, 15, pal.gear);
-      p.rect(cx - 16, 41, 30, 4, pal.gearHi);
-      p.line(cx - 16, 48, cx + 16, 46, pal.gearDark, 2);
-      // Piercing glowing white eyes
+      // Draped layered scarf with hanging tail & comic fold ink lines
+      p.poly([[cx - 21, 41], [cx + 21, 39], [cx + 23, 56], [cx - 19, 58]], pal.gear);
+      p.poly([[cx - 20, 42], [cx + 18, 40], [cx + 16, 46], [cx - 18, 47]], pal.gearHi);
+      p.poly([[cx - 12, 54], [cx - 2, 54], [cx - 6, 74], [cx - 18, 71]], pal.gear);
+      p.bezier(cx - 19, 48, cx, 52, cx + 20, 46, INK, 2);
+      p.line(cx - 19, 57, cx + 22, 55, INK, 2);
+      // Piercing glowing eyes
       p.rect(cx - 10, 30, 7, 4, pal.eye);
       p.rect(cx + 3, 30, 7, 4, pal.eye);
       break;
@@ -419,26 +488,35 @@ export function drawMutantBigPortraitHiBit(
     }
 
     default: {
-      // ROGUE — cobalt-blue IDPD armor, yellow stripe, wind-swept hair & fierce cyan visor!
+      // ROGUE — cobalt-blue IDPD armor pauldrons, yellow stripe, wind-swept hair & fierce shaded eyes!
       const hair = pal.isB ? '#d8e0ec' : '#3a2224';
       const hairHi = pal.isB ? WHITE : '#643c40';
-      p.poly([[cx - 34, h - 1], [cx - 26, 54], [cx + 26, 54], [cx + 34, h - 1]], pal.gear);
-      p.poly([[cx - 32, h - 1], [cx - 24, 56], [cx - 8, 56], [cx - 10, h - 1]], pal.gearHi);
-      p.rect(cx - 14, 62, 28, 5, pal.accent);
-      p.rect(cx - 12, 68, 24, 3, pal.eye);
-      // Head & windswept bangs
+      p.poly([[cx - 34, h - 1], [cx - 27, 52], [cx + 27, 52], [cx + 34, h - 1]], pal.gear);
+      p.poly([[cx - 32, h - 1], [cx - 25, 54], [cx - 8, 54], [cx - 10, h - 1]], pal.gearHi);
+      p.poly([[cx + 10, 54], [cx + 26, 54], [cx + 32, h - 1], [cx + 12, h - 1]], pal.gearDark);
+      p.line(cx - 16, 54, cx - 18, 76, INK, 2);
+      p.line(cx + 16, 54, cx + 18, 76, INK, 2);
+      p.rect(cx - 14, 61, 28, 5, pal.accent);
+      p.rect(cx - 12, 67, 24, 3, pal.eye);
+      // Neck collar & head + windswept bangs
+      p.rect(cx - 8, 46, 16, 10, pal.gearDark);
       p.ellipse(cx, 32, 19, 18, hair);
       p.ellipse(cx, 35, 14, 15, pal.skin);
       p.ellipse(cx - 3, 33, 9, 9, pal.skinHi);
-      p.poly([[cx - 17, 28], [cx - 9, 12], [cx + 12, 12], [cx + 19, 26], [cx + 6, 22], [cx - 6, 26]], hair);
-      p.rect(cx - 10, 15, 14, 5, hairHi);
-      // Eyes & comms ear-piece
+      p.ellipse(cx + 6, 40, 7, 7, pal.skinDark);
+      p.poly([[cx - 18, 28], [cx - 9, 11], [cx + 13, 11], [cx + 19, 26], [cx + 6, 22], [cx - 6, 27]], hair);
+      p.rect(cx - 10, 14, 14, 5, hairHi);
+      // Fierce brows, dark-rimmed expressive eyes & glowing IDPD ear-comms!
       p.rect(cx + 12, 31, 5, 9, '#7a8898');
       p.rect(cx + 14, 33, 2, 5, pal.eye);
-      p.rect(cx - 9, 33, 6, 4, WHITE);
-      p.rect(cx + 3, 33, 6, 4, WHITE);
-      p.rect(cx - 7, 34, 3, 3, pal.eye);
-      p.rect(cx + 5, 34, 3, 3, pal.eye);
+      p.line(cx - 10, 30, cx - 2, 32, INK, 2);
+      p.line(cx + 10, 30, cx + 2, 32, INK, 2);
+      p.rect(cx - 9, 32, 6, 4, INK);
+      p.rect(cx + 3, 32, 6, 4, INK);
+      p.rect(cx - 8, 33, 4, 2, WHITE);
+      p.rect(cx + 4, 33, 4, 2, WHITE);
+      p.rect(cx - 6, 33, 2, 2, pal.eye);
+      p.rect(cx + 5, 33, 2, 2, pal.eye);
       p.line(cx - 4, 44, cx + 5, 42, INK, 2);
       break;
     }
@@ -531,15 +609,19 @@ export function drawCharSelectCardHiBit(
         fg.rect(cx, 12, 2, 2, INK);
         fg.rect(cx - 5, 20, 10, 3, pal.gear);
         break;
-      case 6: // Steroids
-        fg.rect(1, 17, 14, 6, pal.skin);
-        fg.rect(2, 19, 12, 4, pal.gear);
-        fg.ellipse(cx, 11, 6, 6, pal.skin);
-        fg.rect(cx - 5, 9, 4, 3, WHITE);
-        fg.rect(cx + 1, 9, 4, 3, WHITE);
-        fg.set(cx - 3, 10, INK);
-        fg.set(cx + 3, 10, INK);
-        fg.rect(cx - 3, 14, 6, 2, WHITE);
+      case 6: // Steroids (muscular tan bust + compact dark-rimmed glasses — NO white owl blobs!)
+        fg.rect(1, 16, 14, 7, '#e09a62');
+        fg.rect(2, 17, 5, 3, '#f6c896');
+        fg.rect(9, 17, 5, 3, '#f6c896');
+        fg.rect(2, 20, 12, 3, pal.gear);
+        fg.rect(cx - 1, 20, 2, 2, pal.accent);
+        fg.ellipse(cx, 11, 5.5, 5.5, '#e09a62');
+        fg.rect(cx - 4, 7, 7, 2, '#f6c896');
+        fg.rect(cx - 4, 9, 3, 3, INK);
+        fg.rect(cx + 1, 9, 3, 3, INK);
+        fg.set(cx - 3, 10, '#cdeaf6');
+        fg.set(cx + 2, 10, '#cdeaf6');
+        fg.rect(cx - 2, 14, 4, 1, INK);
         break;
       case 7: // Robot
         fg.rect(cx + 2, 2, 2, 4, pal.accent);

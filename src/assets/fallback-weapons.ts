@@ -127,218 +127,233 @@ function getWeaponPalette(w: WeaponDef): WeaponPalette {
 }
 
 /**
- * Draws crisp compact native 1x black-outlined horizontal weapons (22x12, orig 6,6).
- * Compact lengths (~11-19px) so guns sit naturally in mutant hands AND cleanly in the HUD!
+ * Draws crisp compact native 1x black-outlined horizontal weapons (20x10, orig 5,5).
+ * Exact <= 20x10 dimensions ensure ZERO fractional downscaling in HUD active (22x10)
+ * and secondary (20x10) weapon boxes, with razor-sharp trigger/barrel silhouettes!
  */
 function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, def: WeaponDef): void {
   const p = new PxCanvas(w, h);
   const shape = classifyWeaponShape(def);
   const pal = getWeaponPalette(def);
-  const my = Math.floor(h / 2); // 6
+  const my = 4; // vertical centerline inside 20x10 (1px outline margin top & bottom: y=1..8)
 
   switch (shape) {
     case 'eggplant': {
-      p.rect(4, my - 2, 3, 4, '#48b848');
-      p.rect(7, my - 3, 9, 6, '#7a32b8');
-      p.rect(8, my - 2, 6, 2, '#a85ce4');
-      p.rect(16, my - 2, 2, 4, '#581e88');
+      p.rect(3, my - 1, 3, 3, '#48b848');
+      p.rect(6, my - 2, 9, 5, '#7a32b8');
+      p.rect(7, my - 2, 6, 2, '#a85ce4');
+      p.rect(15, my - 1, 2, 3, '#581e88');
       break;
     }
     case 'guitar': {
-      p.rect(3, my - 3, 6, 6, pal.metal);
-      p.rect(4, my - 2, 4, 2, pal.metalHi);
-      p.rect(5, my - 1, 2, 2, INK);
-      p.rect(9, my - 1, 9, 2, pal.grip);
-      p.rect(18, my - 2, 2, 4, pal.metalDark);
+      p.rect(2, my - 2, 6, 5, pal.metal);
+      p.rect(3, my - 2, 4, 2, pal.metalHi);
+      p.rect(4, my, 2, 2, INK);
+      p.rect(8, my, 8, 2, pal.grip);
+      p.rect(16, my - 1, 2, 4, pal.metalDark);
       break;
     }
     case 'wrench': {
-      p.rect(3, my - 1, 11, 2, pal.metal);
-      p.rect(4, my - 1, 9, 1, pal.metalHi);
-      p.rect(14, my - 3, 5, 6, pal.metal);
-      p.rect(15, my - 3, 3, 1, pal.metalHi);
-      p.rect(16, my - 1, 3, 2, ''); // C-jaw cutout
+      p.rect(2, my, 10, 2, pal.metal);
+      p.rect(3, my, 8, 1, pal.metalHi);
+      p.rect(12, my - 2, 6, 6, pal.metal);
+      p.rect(13, my - 2, 4, 1, pal.metalHi);
+      p.rect(15, my, 3, 2, ''); // crisp open C-jaw cutout
       break;
     }
     case 'screwdriver': {
       const handleCol = def.id.includes('energy') ? pal.glow : '#e03434';
-      p.rect(3, my - 2, 6, 4, handleCol);
-      p.rect(4, my - 2, 4, 1, '#ffffff');
-      p.rect(9, my - 1, 9, 2, pal.metal);
-      p.rect(10, my - 1, 7, 1, pal.metalHi);
+      p.rect(2, my - 1, 6, 4, handleCol);
+      p.rect(3, my - 1, 4, 1, '#ffffff');
+      p.rect(8, my, 9, 2, pal.metal);
+      p.rect(9, my, 7, 1, pal.metalHi);
       break;
     }
     case 'shovel': {
-      p.rect(3, my - 1, 10, 2, pal.grip);
-      p.rect(13, my - 3, 6, 6, pal.metal);
-      p.rect(14, my - 2, 4, 2, pal.metalHi);
-      p.rect(19, my - 2, 1, 4, pal.metalHi);
+      p.rect(2, my, 10, 2, pal.grip);
+      p.rect(12, my - 2, 5, 6, pal.metal);
+      p.rect(13, my - 2, 3, 2, pal.metalHi);
+      p.rect(17, my - 1, 1, 4, pal.metalHi);
       break;
     }
     case 'sword': {
       const isEnergy = def.id.includes('energy');
       if (isEnergy) {
-        p.rect(3, my - 1, 4, 2, '#4a5464');
-        p.rect(7, my - 3, 2, 6, '#7a8898');
-        p.rect(9, my - 2, 10, 4, '#42f058');
-        p.rect(10, my - 1, 10, 2, '#e4ffe8');
+        p.rect(2, my, 4, 2, '#4a5464');
+        p.rect(6, my - 2, 2, 6, '#7a8898');
+        p.rect(8, my - 1, 9, 4, '#42f058');
+        p.rect(9, my, 9, 2, '#e4ffe8');
       } else {
-        p.rect(3, my - 1, 4, 2, pal.grip);
-        p.rect(7, my - 3, 2, 6, pal.glow);
-        p.rect(9, my - 2, 10, 3, pal.metal);
-        p.rect(9, my - 2, 11, 1, '#ffffff');
+        p.rect(2, my, 4, 2, pal.grip);
+        p.rect(6, my - 2, 2, 6, pal.glow);
+        p.rect(8, my - 1, 9, 3, pal.metal);
+        p.rect(8, my - 1, 10, 1, '#ffffff');
       }
       break;
     }
     case 'hammer': {
-      p.rect(3, my - 1, 10, 2, pal.grip);
-      p.rect(12, my - 4, 7, 8, pal.metal);
-      p.rect(13, my - 4, 5, 2, pal.metalHi);
+      p.rect(2, my, 10, 2, pal.grip);
+      p.rect(12, my - 3, 6, 8, pal.metal);
+      p.rect(13, my - 3, 4, 2, pal.metalHi);
       if (def.ammoType === 'energy') {
-        p.rect(14, my - 2, 3, 4, pal.glow);
-        p.set(15, my - 1, '#ffffff');
+        p.rect(14, my - 1, 2, 4, pal.glow);
+        p.set(14, my, '#ffffff');
       }
       break;
     }
     case 'crossbow': {
-      // Compact bow arms + stock + bright bolt tip
-      p.rect(13, my - 4, 2, 9, pal.metalDark);
-      p.set(12, my - 4, pal.metal);
-      p.set(12, my + 4, pal.metal);
-      p.rect(3, my - 1, 13, 2, pal.metal);
-      p.rect(5, my + 1, 3, 2, pal.grip);
-      p.rect(10, my, 9, 1, pal.glow);
-      p.set(18, my, pal.glowHi);
+      // Unmistakable T-shaped crossbow silhouette with clean bow limbs & bolt tip
+      p.rect(12, 1, 2, 8, pal.metalDark);
+      p.set(11, 1, pal.metal);
+      p.set(11, 8, pal.metal);
+      p.rect(2, my, 13, 2, pal.metal);
+      p.rect(3, my + 2, 3, 2, pal.grip);
+      p.rect(9, my, 9, 1, pal.glow);
+      p.set(17, my, pal.glowHi);
       break;
     }
     case 'disc': {
-      p.rect(4, my - 2, 10, 4, pal.metal);
-      p.rect(5, my - 2, 8, 1, pal.metalHi);
-      p.rect(13, my - 3, 5, 6, pal.glow);
-      p.rect(15, my - 1, 2, 2, '#ffffff');
-      p.rect(6, my + 2, 3, 2, pal.grip);
+      p.rect(3, my - 1, 9, 3, pal.metal);
+      p.rect(4, my - 1, 7, 1, pal.metalHi);
+      p.rect(12, my - 2, 5, 5, pal.glow);
+      p.rect(14, my - 1, 2, 2, '#ffffff');
+      p.rect(4, my + 2, 3, 2, pal.grip);
       break;
     }
     case 'bazooka': {
-      p.rect(2, my - 2, 16, 4, pal.metal);
-      p.rect(3, my - 2, 14, 1, pal.metalHi);
-      p.rect(16, my - 3, 4, 6, pal.glow);
-      p.rect(17, my - 2, 2, 2, pal.glowHi);
-      p.rect(6, my + 2, 3, 2, pal.grip);
-      p.rect(12, my + 2, 2, 2, pal.gripDark);
+      // Flared rocket cone + long launch tube + open grip gap
+      p.rect(2, my - 1, 13, 3, pal.metal);
+      p.rect(3, my - 1, 11, 1, pal.metalHi);
+      p.rect(15, my - 2, 3, 5, pal.glow);
+      p.rect(16, my - 1, 2, 2, pal.glowHi);
+      p.rect(4, my + 2, 2, 2, pal.grip);
+      p.rect(10, my + 2, 2, 2, pal.gripDark);
       break;
     }
     case 'nader': {
-      p.rect(3, my - 1, 4, 3, pal.grip);
-      p.rect(6, my - 2, 12, 4, pal.metal);
-      p.rect(7, my - 2, 10, 1, pal.metalHi);
-      p.rect(9, my + 1, 5, 3, pal.metalDark); // drum cylinder
-      p.rect(10, my + 1, 2, 1, pal.glow);
+      // Grenade launcher: distinct stubby barrel + heavy lower drum + rear stock gap!
+      p.rect(2, my, 4, 3, pal.grip);
+      p.rect(5, my - 2, 12, 3, pal.metal);
+      p.rect(6, my - 2, 10, 1, pal.metalHi);
+      p.rect(8, my + 1, 5, 3, pal.metalDark); // revolving drum
+      p.rect(9, my + 1, 2, 1, pal.glow);
       break;
     }
     case 'minigun': {
-      p.rect(3, my - 3, 7, 6, pal.metalDark);
-      p.rect(5, my - 4, 4, 1, pal.metalHi);
-      p.rect(10, my - 3, 10, 2, pal.metalHi);
-      p.rect(10, my - 1, 10, 2, pal.metal);
-      p.rect(10, my + 1, 10, 2, pal.metalDark);
-      p.rect(15, my - 3, 2, 6, pal.glow);
+      // Heavy rotary housing + top carry handle + 3 crisp parallel barrels!
+      p.rect(2, my - 1, 6, 5, pal.metalDark);
+      p.rect(3, my - 3, 4, 1, pal.metalHi); // carry handle with open cutout underneath
+      p.set(3, my - 2, pal.metal);
+      p.set(6, my - 2, pal.metal);
+      p.rect(8, my - 2, 10, 1, pal.metalHi);
+      p.rect(8, my, 10, 1, pal.metal);
+      p.rect(8, my + 2, 10, 1, pal.metalDark);
+      p.rect(14, my - 2, 2, 5, pal.glow);
       break;
     }
     case 'multi_mg': {
-      p.rect(3, my - 1, 4, 3, pal.grip);
-      p.rect(6, my - 3, 7, 5, pal.metal);
-      p.rect(13, my - 3, 7, 2, pal.metalHi);
-      p.rect(13, my - 1, 7, 2, pal.metal);
-      p.rect(13, my + 1, 7, 2, pal.metalDark);
-      p.rect(9, my + 2, 3, 2, pal.metalDark);
+      p.rect(2, my + 1, 3, 3, pal.grip);
+      p.rect(5, my - 2, 6, 4, pal.metal);
+      p.rect(11, my - 2, 7, 1, pal.metalHi);
+      p.rect(11, my, 7, 1, pal.metal);
+      p.rect(11, my + 2, 7, 1, pal.metalDark);
+      p.rect(8, my + 2, 2, 2, pal.metalDark);
       break;
     }
     case 'double_shotgun':
     case 'flak': {
-      p.rect(3, my, 4, 3, pal.grip);
-      p.rect(6, my - 3, 12, 2, pal.metalHi);
-      p.rect(6, my - 1, 12, 2, pal.metalDark);
+      // Sloped stock + twin stacked barrels + pump forend with open cutout!
+      p.rect(2, my + 1, 4, 3, pal.grip);
+      p.rect(5, my - 2, 12, 2, pal.metalHi);
+      p.rect(5, my, 12, 1, pal.metalDark);
       p.rect(9, my + 1, 5, 2, pal.grip);
       break;
     }
     case 'shotgun': {
-      p.rect(3, my, 4, 3, pal.grip);
-      p.rect(6, my - 2, 12, 3, pal.metal);
-      p.rect(7, my - 2, 10, 1, pal.metalHi);
+      // Iconic slim shotgun silhouette: angled wood stock, long barrel, distinct wooden pump!
+      p.rect(2, my + 1, 4, 3, pal.grip);
+      p.rect(5, my - 1, 13, 2, pal.metal);
+      p.rect(6, my - 1, 11, 1, pal.metalHi);
       p.rect(10, my + 1, 5, 2, pal.grip);
       break;
     }
     case 'flamer': {
-      p.rect(3, my - 2, 13, 4, pal.metal);
-      p.rect(7, my + 1, 6, 3, '#dc3428');
-      p.rect(16, my - 2, 3, 3, pal.glow);
-      p.set(17, my - 1, pal.glowHi);
+      p.rect(2, my - 1, 13, 3, pal.metal);
+      p.rect(7, my + 2, 6, 2, '#dc3428'); // pressurized fuel canister
+      p.rect(15, my - 2, 3, 3, pal.glow);
+      p.set(16, my - 1, pal.glowHi);
       break;
     }
     case 'plasma':
     case 'lightning': {
-      p.rect(4, my - 3, 14, 5, pal.metal);
-      p.rect(5, my - 3, 12, 1, pal.metalHi);
-      p.rect(8, my - 2, 3, 3, pal.glow);
-      p.rect(12, my - 2, 3, 3, pal.glow);
-      p.set(9, my - 1, pal.glowHi);
-      p.set(13, my - 1, pal.glowHi);
-      p.rect(17, my - 2, 2, 3, pal.glow);
-      p.rect(5, my + 2, 3, 2, pal.grip);
+      // Sleek energy cannon: dual bright coils, notched emitter nose, clean grip cutout!
+      p.rect(3, my - 2, 13, 4, pal.metal);
+      p.rect(4, my - 2, 11, 1, pal.metalHi);
+      p.rect(7, my - 1, 3, 2, pal.glow);
+      p.rect(11, my - 1, 3, 2, pal.glow);
+      p.set(8, my - 1, pal.glowHi);
+      p.set(12, my - 1, pal.glowHi);
+      p.rect(16, my - 1, 2, 2, pal.glow);
+      p.rect(3, my + 2, 3, 2, pal.grip);
       break;
     }
     case 'laser_rifle': {
-      p.rect(3, my - 1, 4, 3, pal.grip);
-      p.rect(6, my - 3, 11, 5, pal.metal);
-      p.rect(7, my - 3, 9, 1, pal.metalHi);
-      p.rect(9, my - 2, 5, 2, pal.glow);
-      p.rect(10, my - 2, 3, 1, pal.glowHi);
-      p.rect(17, my - 2, 3, 3, pal.metalDark);
-      p.set(19, my - 1, pal.glow);
+      // Long sleek rifle + exposed neon-green rail + open stock/mag gap
+      p.rect(2, my + 1, 3, 3, pal.grip);
+      p.rect(5, my - 2, 10, 4, pal.metal);
+      p.rect(6, my - 2, 8, 1, pal.metalHi);
+      p.rect(8, my - 1, 5, 2, pal.glow);
+      p.rect(9, my - 1, 3, 1, pal.glowHi);
+      p.rect(15, my - 1, 3, 2, pal.metalDark);
+      p.set(17, my - 1, pal.glow);
       break;
     }
     case 'laser_pistol': {
-      // Compact sleek steel + neon-green Laser Pistol (NOT an oversized purple blaster!)
-      p.rect(5, my - 3, 10, 4, pal.metal);
-      p.rect(6, my - 3, 8, 1, pal.metalHi);
-      p.rect(8, my - 2, 4, 2, pal.glow);
-      p.rect(9, my - 2, 2, 1, pal.glowHi);
-      p.rect(14, my - 2, 2, 2, pal.glow);
-      p.rect(5, my + 1, 3, 3, pal.grip);
+      // Sleek compact Laser Pistol (crisp emitter + green cell + open under-barrel gap!)
+      p.rect(4, my - 2, 10, 3, pal.metal);
+      p.rect(5, my - 2, 8, 1, pal.metalHi);
+      p.rect(7, my - 1, 4, 2, pal.glow);
+      p.rect(8, my - 1, 2, 1, pal.glowHi);
+      p.rect(14, my - 1, 2, 2, pal.glow);
+      p.rect(4, my + 1, 3, 3, pal.grip);
+      p.set(3, my + 3, pal.gripDark);
       break;
     }
     case 'rifle': {
-      p.rect(3, my - 1, 4, 3, pal.grip);
-      p.rect(6, my - 2, 13, 3, pal.metal);
-      p.rect(7, my - 2, 11, 1, pal.metalHi);
-      p.rect(11, my + 1, 3, 3, pal.metalDark); // magazine
-      p.rect(9, my - 3, 4, 1, pal.metalDark); // sight
+      // Classic Assault Rifle: slim barrel, raised sight, sloped stock, distinct protruding mag!
+      p.rect(2, my + 1, 4, 3, pal.grip);
+      p.rect(5, my - 1, 13, 2, pal.metal);
+      p.rect(6, my - 1, 11, 1, pal.metalHi);
+      p.rect(10, my + 1, 2, 3, pal.metalDark); // magazine
+      p.rect(8, my - 2, 4, 1, pal.metalDark); // iron sight
       break;
     }
     case 'smg': {
-      p.rect(5, my - 2, 10, 4, pal.metal);
-      p.rect(6, my - 2, 8, 1, pal.metalHi);
-      p.rect(5, my + 2, 3, 3, pal.grip);
-      p.rect(10, my + 2, 2, 3, pal.metalDark);
-      p.rect(15, my - 1, 2, 2, pal.metalDark);
+      // Compact boxy SMG with crisp separation between rear grip & front magazine!
+      p.rect(4, my - 2, 10, 3, pal.metal);
+      p.rect(5, my - 2, 8, 1, pal.metalHi);
+      p.rect(4, my + 1, 2, 3, pal.grip);
+      p.rect(10, my + 1, 2, 3, pal.metalDark);
+      p.rect(14, my - 1, 3, 2, pal.metalDark);
       break;
     }
     default: {
-      // Compact classic Revolver / Pistol (~11px long!)
-      p.rect(5, my - 2, 11, 3, pal.metal);
-      p.rect(6, my - 2, 9, 1, pal.metalHi);
-      p.rect(8, my - 1, 3, 3, pal.metalDark); // cylinder
-      p.rect(5, my + 1, 3, 3, pal.grip);
-      p.set(5, my + 3, pal.gripDark);
+      // Iconic Revolver / Pistol (exact crisp silhouette matching steam_gens.png HUD!)
+      // Crisp slim barrel + raised cylinder + angled grip + open trigger-guard negative space!
+      p.rect(5, my - 2, 11, 2, pal.metal);     // sleek top barrel
+      p.rect(6, my - 2, 9, 1, pal.metalHi);    // sunlit barrel highlight
+      p.rect(7, my, 3, 2, pal.metalDark);      // revolver cylinder
+      p.set(6, my, pal.metal);                 // hammer/frame joint
+      p.rect(4, my + 1, 3, 3, pal.grip);       // angled brown grip
+      p.set(3, my + 3, pal.gripDark);          // angled butt heel
       break;
     }
   }
 
   if (pal.isGold) {
-    p.set(12, my - 3, '#ffffff');
+    p.set(11, my - 2, '#ffffff');
   } else if (pal.isUltra) {
-    p.rect(9, my - 1, 3, 1, '#58ff70');
+    p.rect(8, my - 1, 3, 1, '#58ff70');
   }
 
   p.outline(INK);
@@ -346,10 +361,10 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
 }
 
 export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
-  // 1. ALL 142 WEAPONS AT CRISP NATIVE 1x (22x12, orig 6,6)
+  // 1. ALL 142 WEAPONS AT CRISP NATIVE 1x (20x10, orig 5,5) — 1:1 integer pixels in HUD!
   for (const def of Object.values(WEAPONS)) {
     if (!b.hasSprite(def.sprite)) {
-      b.addSprite(def.sprite, 22, 12, 6, 6, 1, (ctx, x, y, w, h) => drawWeapon1x(ctx, x, y, w, h, def));
+      b.addSprite(def.sprite, 20, 10, 5, 5, 1, (ctx, x, y, w, h) => drawWeapon1x(ctx, x, y, w, h, def));
     }
   }
 
