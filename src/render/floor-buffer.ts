@@ -20,8 +20,9 @@ type FloorCanvas = HTMLCanvasElement | OffscreenCanvas;
 type FloorCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 /**
- * Exact video-matched solid continuous wall-top roof fill colors for every biome.
- * Eliminates dark outer black voids around rooms in BOTH Steam Pack and Built-In modes.
+ * Exact video-matched solid continuous wall-top roof fill colors for Built-In Art mode.
+ * Caves (#7a4eb4) & Labs (#12333b) match raw unshadowed wall colors and dim cleanly to
+ * #44315e / #0d1919 under the 42% 2-tier darkness veil.
  */
 export const BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   desert: '#9b8568',
@@ -30,19 +31,42 @@ export const BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
   pizza_sewers: '#384434',
   scrapyard: '#828890',
   mansion: '#8a7e6e',
-  caves: '#44315e',
-  cursed_caves: '#3c265a',
+  caves: '#7a4eb4',
+  cursed_caves: '#6a3ca8',
   frozen_city: '#9da4a6',
   jungle: '#438428',
-  labs: '#0d1919',
+  labs: '#12333b',
   palace: '#64282c',
   campfire: '#8c7a5c',
   vault: '#3d4d58',
   hq: '#b8c2cc',
 };
 
-export function getBiomeRoofColor(biome: BiomeId): string {
-  return BIOME_ROOF_COLORS[biome] ?? BIOME_ROOF_COLORS.desert;
+/**
+ * Exact pixel-sampled Steam Pack `sprWall*Top` roof fill colors so Steam perimeter walls
+ * melt into the continuous outer roof mass with ZERO rectangular halo seams!
+ */
+export const STEAM_BIOME_ROOF_COLORS: Readonly<Record<BiomeId, string>> = {
+  desert: '#af8f6a',
+  oasis: '#51d1c8',
+  sewers: '#4c5946',
+  pizza_sewers: '#4c5946',
+  scrapyard: '#8a969e',
+  mansion: '#8a7e6e',
+  caves: '#8152bc',
+  cursed_caves: '#6a3ca8',
+  frozen_city: '#b4bdc5',
+  jungle: '#2a900c',
+  labs: '#12333b',
+  palace: '#703232',
+  campfire: '#9a8262',
+  vault: '#485864',
+  hq: '#b8c2cc',
+};
+
+export function getBiomeRoofColor(biome: BiomeId, isSteam: boolean = false): string {
+  const table = isSteam ? STEAM_BIOME_ROOF_COLORS : BIOME_ROOF_COLORS;
+  return table[biome] ?? table.desert;
 }
 
 function posMod(v: number, m: number): number {
@@ -52,8 +76,8 @@ function posMod(v: number, m: number): number {
 
 /**
  * Paints a seamless, world-aligned solid biome wall-top roof rectangle on the 1x pixel grid.
- * - Oasis: subtle diagonal lighter water-sheen stripes across `#58afa9` matching 05_oasis.png.
- * - Labs: crisp subtle 16px faint teal grid lines (`#142829`) on `#0d1919` matching 14_labs_6_1.png.
+ * - Oasis: subtle diagonal lighter water-sheen stripes across roof mass matching 05_oasis.png.
+ * - Labs: crisp subtle 16px faint teal grid lines (`#1d464f`, dimming to `#142829` in 2-tier dark) matching 14_labs_6_1.png.
  * - All other biomes: pure exact solid roof color extending seamlessly to screen edges.
  */
 export function fillBiomeRoofRect(
@@ -65,6 +89,7 @@ export function fillBiomeRoofRect(
   h: number,
   dstX: number = worldX,
   dstY: number = worldY,
+  isSteam: boolean = false,
 ): void {
   const ix = Math.round(dstX);
   const iy = Math.round(dstY);
@@ -72,7 +97,7 @@ export function fillBiomeRoofRect(
   const ih = Math.round(h);
   if (iw <= 0 || ih <= 0) return;
 
-  ctx.fillStyle = getBiomeRoofColor(biome);
+  ctx.fillStyle = getBiomeRoofColor(biome, isSteam);
   ctx.fillRect(ix, iy, iw, ih);
 
   if (biome === 'oasis') {
@@ -81,7 +106,7 @@ export function fillBiomeRoofRect(
     const wy0 = Math.round(worldY);
     const period = 56;
     const bandW = 14;
-    ctx.fillStyle = '#65bcb6';
+    ctx.fillStyle = isSteam ? '#5fdcd4' : '#65bcb6';
     for (let dy = 0; dy < ih; dy++) {
       const wy = wy0 + dy;
       const startPhase = posMod(wx0 + wy, period);
@@ -99,7 +124,7 @@ export function fillBiomeRoofRect(
     // Crisp subtle 16px faint teal grid lines aligned to wall-top boundaries (wx % 16 === 0, wy % 16 === 8)
     const wx0 = Math.round(worldX);
     const wy0 = Math.round(worldY);
-    ctx.fillStyle = '#142829';
+    ctx.fillStyle = '#1d464f';
     const firstVx = posMod(-wx0, 16);
     for (let dx = firstVx; dx < iw; dx += 16) {
       ctx.fillRect(ix + dx, iy, 1, ih);
@@ -188,16 +213,19 @@ export class FloorBuffer {
   private mapHeight = 0;
   private tileSize = TILE_SIZE;
   private pixelScale = 1;
+  private isSteam = false;
   private lastTiles: Uint8Array | null = null;
   private bakedDecalCount = 0;
 
   constructor(bundle: AssetBundle, data: UiDataProvider = DEFAULT_UI_DATA_PROVIDER) {
     this.sprites = new SpriteRenderer(bundle);
     this.data = data;
+    this.isSteam = bundle.sourceMode === 'steam';
   }
 
   setBundle(bundle: AssetBundle): void {
     this.sprites.setBundle(bundle);
+    this.isSteam = bundle.sourceMode === 'steam';
   }
 
   setDataProvider(data: UiDataProvider): void {
@@ -274,7 +302,7 @@ export class FloorBuffer {
     this.ctx.imageSmoothingEnabled = false;
     this.ctx.clearRect(0, 0, logicalW, logicalH);
 
-    fillBiomeRoofRect(this.ctx, map.biome, 0, 0, logicalW, logicalH);
+    fillBiomeRoofRect(this.ctx, map.biome, 0, 0, logicalW, logicalH, 0, 0, this.isSteam);
 
     this.renderTileRange(map, 0, 0, map.width - 1, map.height - 1, areaDef);
   }
@@ -379,7 +407,7 @@ export class FloorBuffer {
     const pal = BIOME_FALLBACK_PALETTES[map.biome] ?? BIOME_FALLBACK_PALETTES.desert;
 
     if (!isWalkable(tile)) {
-      fillBiomeRoofRect(ctx, map.biome, px, py, ts, ts);
+      fillBiomeRoofRect(ctx, map.biome, px, py, ts, ts, px, py, this.isSteam);
       return;
     }
 
@@ -426,10 +454,12 @@ export class FloorBuffer {
           const subY = (ty & 1) * ts;
           drewBase = this.sprites.drawSubRect(ctx, floorSprite, slabVariant, subX, subY, ts, ts, px, py, ts, ts);
 
-          // Subtle intact-floor variety using authentic Steam sprFloor*B slabs (~14% of intact 2x2 floor blocks)
+          // Subtle intact-floor variety using sprFloor*B slabs (~14% of intact 2x2 floor blocks).
+          // Skip on 7-3 Throne Hall so the Palace floor stays 100% uniform dark charcoal diamond tiles (17_throne_hall.png)!
           if (
             drewBase &&
             map.biome !== 'frozen_city' &&
+            map.areaCode !== '7-3' &&
             tile === TileType.Floor &&
             this.sprites.hasSprite(floorAltSprite) &&
             isIntactSlab2x2(map, slabTx, slabTy)
@@ -458,8 +488,13 @@ export class FloorBuffer {
       ctx.fillRect(px + sx + 1, py + sy + 1, 2, 1);
     }
 
-    // Sparse authentic floor micro-details (sprDetail*) on intact non-carpet tiles
-    if (tile === TileType.Floor && !drewIceLake && this.sprites.hasSprite(detailSprite)) {
+    // Sparse authentic floor micro-details (sprDetail*) strictly on non-carpet, non-7-3 intact floor tiles
+    if (
+      tile === TileType.Floor &&
+      map.areaCode !== '7-3' &&
+      !drewIceLake &&
+      this.sprites.hasSprite(detailSprite)
+    ) {
       const dh = tileHash(tx, ty, 31);
       if (dh % 11 === 0) {
         const ox = 4 + ((dh >>> 4) % 9);

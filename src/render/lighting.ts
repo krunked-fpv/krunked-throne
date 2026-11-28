@@ -28,16 +28,16 @@ function createOffscreenCanvas(w: number, h: number): LightCanvas | null {
 export interface DynamicLight {
   x: number;
   y: number;
-  radius: number;
+  radius: number; // Pass B outer visibility hole punched through #000000 darkness mask
+  innerRadius?: number; // Pass A inner full-bright hole punched through 42% dim veil
   intensity: number; // 0..1
   glowColor?: string;
-  glowRadius?: number; // crisp flat pixel-hard inner highlight disc radius
-  glowAlpha?: number; // translucent flat highlight opacity
-  brightWorldHalo?: boolean; // true for glowing plasma/guardian orbs & portals visible in bright biomes
+  glowRadius?: number;
+  glowAlpha?: number;
 }
 
 /**
- * Biomes that use Nuclear Throne's iconic hard-edged pitch-black circular darkness veil
+ * Biomes that use Nuclear Throne's iconic 2-tier hard-edged pitch-black circular darkness veil
  * (Sewers, Pizza Sewers, Crystal Caves, Cursed Caves, Labs).
  */
 const HARD_DARK_BIOMES = new Set<BiomeId>([
@@ -48,42 +48,19 @@ const HARD_DARK_BIOMES = new Set<BiomeId>([
   'labs',
 ]);
 
-function getBiomePlayerHaloStyle(biome: BiomeId): string {
-  if (biome === 'caves' || biome === 'cursed_caves') {
-    return 'rgba(215, 185, 255, 0.22)';
-  }
-  if (biome === 'labs') {
-    return 'rgba(165, 225, 240, 0.16)';
-  }
-  if (biome === 'sewers' || biome === 'pizza_sewers') {
-    return 'rgba(195, 245, 180, 0.14)';
-  }
-  return 'rgba(210, 215, 240, 0.16)';
-}
-
-function getBiomeAccentHaloStyle(biome: BiomeId): string {
-  if (biome === 'caves' || biome === 'cursed_caves') {
-    return 'rgba(215, 185, 255, 0.18)';
-  }
-  if (biome === 'labs') {
-    return 'rgba(165, 225, 240, 0.16)';
-  }
-  if (biome === 'sewers' || biome === 'pizza_sewers') {
-    return 'rgba(195, 245, 180, 0.15)';
-  }
-  return 'rgba(220, 230, 245, 0.16)';
-}
-
 /**
- * Authentic 1x pixel-grid Nuclear Throne circular darkness & hard-edged highlight pass:
- * - Dark biomes (Crystal Caves, Labs, Sewers, Cursed Caves, Pizza Sewers):
- *   * Outer unlit region is 100% PURE SOLID PITCH BLACK (#000000, alpha 1.0)
- *   * Visibility holes are carved with razor-sharp HARD-EDGED PIXEL-STEPPED CIRCLES
- *     (player radius 112 / Eyes 150 / Horror 122 / dead 60, cleanly unioned with crystals,
- *     torches, rad canisters, portals, bosses, projectiles, and explosions)
- *   * Iconic inner brighter translucent pixel-hard halo circle around the player (radius 36)
- *     plus crisp flat pixel-hard highlight discs around luminous crystals/torches/lasers/explosions
- * - ZERO blurry additive `lighter` bloom haze that washes out pixel art!
+ * Authentic 1x pixel-grid 2-tier Nuclear Throne circular darkness pass:
+ * - Only applies to dark biomes (Caves, Cursed Caves, Labs, Sewers, Pizza Sewers); bright biomes
+ *   (including Palace 7-1..7-3, Desert, Oasis, Scrapyard, Frozen, Jungle) stay 100% razor-crisp with
+ *   zero translucent green/milky floor discs!
+ * - Pass A (Mid-Ring 42% Dim Veil): fills 1x surface with rgba(0, 0, 0, 0.42) and punches crisp
+ *   pixel-hard inner full-bright holes (Player r=38 / Eyes 54 / Horror 42, crystals/torches 20,
+ *   lasers/projectiles 22, portals 30, explosions 38).
+ * - Pass B (Outer Pitch-Black Mask): fills 1x surface with #000000 (alpha 1.0) and punches crisp
+ *   pixel-hard outer visibility holes (Player r=108 / Eyes 144 / Horror 118 / dead 58, portals 68,
+ *   bosses 68, explosions 62, lasers 36, Rebel allies 54, passive crystals/torches/canisters <= 34).
+ * - Inside r=38: 100% full-bright sprites; r=38..108: exact 42% shadowed tones (#8152bc -> #44315e,
+ *   #12333b -> #0d1919); outside r=108: 100% pitch black #000000.
  */
 export class LightingPass {
   private canvas: LightCanvas | null = null;
@@ -127,21 +104,22 @@ export class LightingPass {
     const lights: DynamicLight[] = [];
     const alpha = Math.max(0, Math.min(1, interpAlpha));
 
-    // 1. Player primary visibility circle (exact Nuclear Throne radii: 112 / Eyes 150 / Horror 122 / dead 60)
+    // 1. Player 2-tier visibility circles:
+    //    Outer visibility: 108 (Eyes: 144, Horror: 118, dead: 58)
+    //    Inner full-bright: 38 (Eyes: 54, Horror: 42, dead: 20)
     const isEyes = state.player.mutant === 'eyes';
     const isHorror = state.player.mutant === 'horror';
-    const playerRadius = state.player.alive ? (isEyes ? 150 : isHorror ? 122 : 112) : 60;
+    const playerOuter = state.player.alive ? (isEyes ? 144 : isHorror ? 118 : 108) : 58;
+    const playerInner = state.player.alive ? (isEyes ? 54 : isHorror ? 42 : 38) : 20;
     lights.push({
       x: playerX,
       y: playerY,
-      radius: playerRadius,
+      radius: playerOuter,
+      innerRadius: playerInner,
       intensity: 1,
-      glowRadius: state.player.alive ? 36 : 20,
-      glowAlpha: 1,
-      glowColor: getBiomePlayerHaloStyle(state.map.biome),
     });
 
-    // 2. Glowing projectiles (lasers, plasma, guardian orbs, fire, lightning, rad beam, rockets)
+    // 2. Glowing projectiles (lasers, plasma, flames, lightning, rad beam, boss orbs, rockets)
     for (let i = 0; i < state.projectiles.length; i++) {
       const p = state.projectiles[i]!;
       const pos = lerpPos(p.prevX, p.prevY, p.x, p.y, alpha, 96);
@@ -150,17 +128,14 @@ export class LightingPass {
       switch (p.kind) {
         case 'laser':
         case 'enemy_laser': {
-          const laserHalo = 'rgba(80, 235, 95, 0.18)';
-          lights.push({ x: px, y: py, radius: 46, intensity: 1, glowColor: laserHalo, glowRadius: 16, glowAlpha: 1 });
+          lights.push({ x: px, y: py, radius: 36, innerRadius: 22, intensity: 1 });
           if (p.beamOriginX !== undefined && p.beamOriginY !== undefined) {
             lights.push({
               x: (p.beamOriginX + px) * 0.5,
               y: (p.beamOriginY + py) * 0.5,
-              radius: 44,
+              radius: 34,
+              innerRadius: 18,
               intensity: 1,
-              glowColor: laserHalo,
-              glowRadius: 14,
-              glowAlpha: 1,
             });
           }
           break;
@@ -170,137 +145,93 @@ export class LightingPass {
           lights.push({
             x: px,
             y: py,
-            radius: p.sprite === 'sprNothingBeam' ? 60 : 52,
+            radius: p.sprite === 'sprNothingBeam' ? 48 : 36,
+            innerRadius: 22,
             intensity: 1,
-            glowColor: 'rgba(80, 235, 72, 0.16)',
-            glowRadius: p.sprite === 'sprNothingBeam' ? 22 : Math.max(14, Math.round(p.radius * 2.1)),
-            glowAlpha: 1,
-            brightWorldHalo: p.sprite !== 'sprNothingBeam',
           });
           break;
-        case 'enemy_bullet': {
-          const spr = p.sprite || '';
-          if (
-            spr === 'sprGuardianBullet' ||
-            spr === 'sprBigGuardianBullet' ||
-            spr === 'sprExploGuardianBullet' ||
-            spr === 'sprThrone2Bullet'
-          ) {
-            lights.push({
-              x: px,
-              y: py,
-              radius: 48,
-              intensity: 1,
-              glowColor: 'rgba(72, 230, 56, 0.15)',
-              glowRadius: Math.max(15, Math.round(p.radius * 2.2)),
-              glowAlpha: 1,
-              brightWorldHalo: true,
-            });
-          }
-          break;
-        }
         case 'flame':
         case 'enemy_flame':
-          lights.push({ x: px, y: py, radius: 40, intensity: 1, glowColor: 'rgba(255, 165, 65, 0.18)', glowRadius: 14, glowAlpha: 1 });
+          lights.push({ x: px, y: py, radius: 32, innerRadius: 18, intensity: 1 });
           break;
         case 'lightning':
-          lights.push({ x: px, y: py, radius: 48, intensity: 1, glowColor: 'rgba(130, 225, 255, 0.18)', glowRadius: 16, glowAlpha: 1 });
+          lights.push({ x: px, y: py, radius: 36, innerRadius: 22, intensity: 1 });
           break;
         case 'rad_beam':
           lights.push({
             x: px,
             y: py,
-            radius: 44 + p.radius * 2,
+            radius: Math.min(44, 30 + Math.round(p.radius * 1.5)),
+            innerRadius: 22,
             intensity: 1,
-            glowColor: 'rgba(95, 245, 115, 0.18)',
-            glowRadius: 14 + Math.round(p.radius),
-            glowAlpha: 1,
           });
           break;
         case 'boss_orb':
-          lights.push({
-            x: px,
-            y: py,
-            radius: 50,
-            intensity: 1,
-            glowColor: 'rgba(85, 235, 85, 0.16)',
-            glowRadius: 17,
-            glowAlpha: 1,
-            brightWorldHalo: true,
-          });
+          lights.push({ x: px, y: py, radius: 36, innerRadius: 22, intensity: 1 });
           break;
         case 'rocket':
         case 'nuke':
         case 'boss_missile':
-          lights.push({ x: px, y: py, radius: 36, intensity: 1, glowColor: 'rgba(255, 150, 65, 0.18)', glowRadius: 12, glowAlpha: 1 });
+          lights.push({ x: px, y: py, radius: 30, innerRadius: 16, intensity: 1 });
           break;
         default:
           break;
       }
     }
 
-    // 3. Props: rad canisters, crystals, torches/lamps, lab tubes, throne generators, proto statues, Plant snares
-    const biomeAccentHalo = getBiomeAccentHaloStyle(state.map.biome);
+    // 3. Props: tight small visibility circles (<= 34px outer, 20px inner) for passive crystals/torches/canisters!
     for (let i = 0; i < state.props.length; i++) {
       const prop = state.props[i]!;
       if (prop.kind === 'rad_canister' && !prop.opened) {
-        lights.push({ x: prop.x, y: prop.y, radius: 56, intensity: 1, glowColor: 'rgba(110, 245, 115, 0.18)', glowRadius: 20, glowAlpha: 1 });
+        lights.push({ x: prop.x, y: prop.y, radius: 34, innerRadius: 20, intensity: 1 });
       } else if (prop.kind === 'idpd_canister' && !prop.opened) {
-        lights.push({ x: prop.x, y: prop.y, radius: 50, intensity: 1, glowColor: 'rgba(100, 190, 255, 0.18)', glowRadius: 18, glowAlpha: 1 });
+        lights.push({ x: prop.x, y: prop.y, radius: 32, innerRadius: 18, intensity: 1 });
       } else if (prop.kind === 'throne_generator' && prop.hp > 0) {
-        lights.push({ x: prop.x, y: prop.y, radius: 68, intensity: 1, glowColor: 'rgba(100, 245, 125, 0.18)', glowRadius: 24, glowAlpha: 1 });
+        lights.push({ x: prop.x, y: prop.y, radius: 34, innerRadius: 20, intensity: 1 });
       } else if (prop.kind === 'proto_statue') {
         const charging = prop.hp < prop.maxHp || (prop.radsStored ?? 0) > 0;
         lights.push({
           x: prop.x,
           y: prop.y,
-          radius: charging ? 72 : 56,
+          radius: charging ? 48 : 34,
+          innerRadius: charging ? 24 : 20,
           intensity: 1,
-          glowColor: 'rgba(115, 245, 150, 0.18)',
-          glowRadius: charging ? 26 : 20,
-          glowAlpha: 1,
         });
       } else if (prop.kind === 'snare_trap') {
         lights.push({
           x: prop.x,
           y: prop.y,
-          radius: Math.max(58, prop.radius + 20),
+          radius: 34,
+          innerRadius: 20,
           intensity: 1,
-          glowColor: 'rgba(110, 240, 125, 0.16)',
-          glowRadius: Math.min(30, Math.max(18, Math.round(prop.radius * 0.45))),
-          glowAlpha: 1,
         });
       } else if (prop.sprite) {
         const spr = prop.sprite;
-        if (spr === 'sprStreetLight' || spr === 'sprTorch' || spr === 'sprWallTorch') {
-          lights.push({ x: prop.x, y: prop.y - 6, radius: 74, intensity: 1, glowColor: 'rgba(255, 215, 125, 0.18)', glowRadius: 26, glowAlpha: 1 });
-        } else if (spr.startsWith('sprCrystalProp')) {
-          lights.push({
-            x: prop.x,
-            y: prop.y - 2,
-            radius: 68,
-            intensity: 1,
-            glowColor: biomeAccentHalo,
-            glowRadius: 26,
-            glowAlpha: 1,
-          });
-        } else if (spr === 'sprPalacePillar' || spr === 'sprNuclearPillar') {
-          lights.push({ x: prop.x, y: prop.y - 4, radius: 56, intensity: 1, glowColor: 'rgba(95, 240, 125, 0.16)', glowRadius: 20, glowAlpha: 1 });
-        } else if (spr === 'sprMutantTube' || spr === 'sprTube') {
-          lights.push({ x: prop.x, y: prop.y - 4, radius: 64, intensity: 1, glowColor: 'rgba(130, 235, 215, 0.18)', glowRadius: 24, glowAlpha: 1 });
-        } else if (spr === 'sprSodaMachine') {
-          lights.push({ x: prop.x, y: prop.y - 2, radius: 50, intensity: 1, glowColor: 'rgba(130, 225, 255, 0.16)', glowRadius: 18, glowAlpha: 1 });
+        if (
+          spr === 'sprStreetLight' ||
+          spr === 'sprTorch' ||
+          spr === 'sprWallTorch' ||
+          spr.startsWith('sprCrystalProp') ||
+          spr === 'sprMutantTube' ||
+          spr === 'sprTube'
+        ) {
+          lights.push({ x: prop.x, y: prop.y - 3, radius: 34, innerRadius: 20, intensity: 1 });
+        } else if (
+          spr === 'sprPalacePillar' ||
+          spr === 'sprNuclearPillar' ||
+          spr === 'sprSodaMachine' ||
+          spr === 'sprIceFlower' ||
+          spr === 'sprIceFlowerIdle' ||
+          spr === 'sprServer'
+        ) {
+          lights.push({ x: prop.x, y: prop.y - 3, radius: 28, innerRadius: 16, intensity: 1 });
         } else if (spr === 'sprCampfire') {
-          lights.push({ x: prop.x, y: prop.y - 2, radius: 96, intensity: 1, glowColor: 'rgba(255, 170, 75, 0.18)', glowRadius: 34, glowAlpha: 1 });
-        } else if (spr === 'sprIceFlower' || spr === 'sprIceFlowerIdle') {
-          lights.push({ x: prop.x, y: prop.y - 4, radius: 56, intensity: 1, glowColor: 'rgba(135, 230, 255, 0.18)', glowRadius: 20, glowAlpha: 1 });
-        } else if (spr === 'sprServer') {
-          lights.push({ x: prop.x, y: prop.y - 4, radius: 48, intensity: 1, glowColor: 'rgba(140, 215, 235, 0.16)', glowRadius: 18, glowAlpha: 1 });
+          lights.push({ x: prop.x, y: prop.y - 2, radius: 68, innerRadius: 34, intensity: 1 });
         }
       }
     }
 
-    // 4. Rad pickups (small crisp visibility dot in dark biomes)
+    // 4. Rad pickups (subtle tiny glints — never flood the screen)
     for (let i = 0; i < state.pickups.length; i++) {
       const pk = state.pickups[i]!;
       if (pk.kind === 'rad' || pk.kind === 'big_rad') {
@@ -308,38 +239,26 @@ export class LightingPass {
         lights.push({
           x: pkPos.x,
           y: pkPos.y,
-          radius: pk.kind === 'big_rad' ? 34 : 22,
+          radius: pk.kind === 'big_rad' ? 22 : 14,
+          innerRadius: pk.kind === 'big_rad' ? 10 : 0,
           intensity: 1,
-          glowColor: 'rgba(110, 245, 120, 0.16)',
-          glowRadius: pk.kind === 'big_rad' ? 12 : 7,
-          glowAlpha: 1,
         });
       }
     }
 
     // 5. Active portal vortex
     if (state.portal.active) {
-      const pulse = Math.round(88 + Math.sin(state.tick * 0.25) * 4);
-      const target = state.portal.targetArea;
-      const portalGlow =
-        target === 'vault'
-          ? 'rgba(95, 240, 140, 0.18)'
-          : target === '1-?' || target === 'hq-1'
-            ? 'rgba(95, 195, 255, 0.18)'
-            : 'rgba(195, 125, 255, 0.18)';
+      const pulse = Math.round(68 + Math.sin(state.tick * 0.25) * 3);
       lights.push({
         x: state.portal.x,
         y: state.portal.y,
         radius: pulse,
+        innerRadius: 30,
         intensity: 1,
-        glowColor: portalGlow,
-        glowRadius: 30,
-        glowAlpha: 1,
-        brightWorldHalo: true,
       });
     }
 
-    // 6. Bosses, Rebel allies, & luminous enemies (Laser/Lightning Crystals, Guardians)
+    // 6. Bosses, Rebel allies, & luminous enemies (passive crystals capped <= 34!)
     for (let i = 0; i < state.enemies.length; i++) {
       const e = state.enemies[i]!;
       const ePos = lerpPos(e.prevX, e.prevY, e.x, e.y, alpha, 56);
@@ -349,22 +268,18 @@ export class LightingPass {
         lights.push({
           x: ex,
           y: ey,
-          radius: 90,
+          radius: 68,
+          innerRadius: 30,
           intensity: 1,
-          glowColor: biomeAccentHalo,
-          glowRadius: 32,
-          glowAlpha: 1,
         });
       } else if (e.friendly) {
         const isSapling = e.defId === 'sapling';
         lights.push({
           x: ex,
           y: ey,
-          radius: isSapling ? 46 : 68,
+          radius: isSapling ? 32 : 54,
+          innerRadius: isSapling ? 14 : 20,
           intensity: 1,
-          glowColor: biomeAccentHalo,
-          glowRadius: isSapling ? 14 : 22,
-          glowAlpha: 1,
         });
       } else if (
         e.defId === 'laser_crystal' ||
@@ -375,19 +290,14 @@ export class LightingPass {
         lights.push({
           x: ex,
           y: ey,
-          radius: 66,
+          radius: 34,
+          innerRadius: 20,
           intensity: 1,
-          glowColor:
-            e.defId === 'guardian' || e.defId === 'explo_guardian'
-              ? 'rgba(90, 240, 85, 0.16)'
-              : biomeAccentHalo,
-          glowRadius: 24,
-          glowAlpha: 1,
         });
       }
     }
 
-    // 7. Explosions & glowing particles
+    // 7. Explosions & glowing combat particles
     for (let i = 0; i < state.particles.length; i++) {
       const pt = state.particles[i]!;
       if (
@@ -398,17 +308,19 @@ export class LightingPass {
         pt.kind === 'laser_hit'
       ) {
         const lifeFrac = pt.maxLifeTicks > 0 ? pt.lifeTicks / pt.maxLifeTicks : 0.5;
+        const isBlast = pt.kind === 'explosion';
+        const outerR = isBlast
+          ? Math.round(Math.min(62, Math.max(30, pt.size * 2.2) * (0.65 + 0.35 * lifeFrac)))
+          : Math.round(Math.min(36, Math.max(18, pt.size * 1.8) * (0.65 + 0.35 * lifeFrac)));
+        const innerR = isBlast
+          ? Math.round(Math.min(38, Math.max(18, pt.size * 1.4) * (0.65 + 0.35 * lifeFrac)))
+          : Math.round(Math.min(22, Math.max(10, pt.size * 1.0) * (0.65 + 0.35 * lifeFrac)));
         lights.push({
           x: pt.x,
           y: pt.y,
-          radius: Math.round(Math.min(68, Math.max(26, pt.size * 2.4) * (0.65 + 0.35 * lifeFrac))),
+          radius: outerR,
+          innerRadius: innerR,
           intensity: 1,
-          glowColor:
-            pt.kind === 'plasma'
-              ? 'rgba(95, 245, 115, 0.18)'
-              : 'rgba(255, 200, 110, 0.18)',
-          glowRadius: Math.round(Math.min(26, Math.max(12, pt.size * 1.2) * (0.65 + 0.35 * lifeFrac))),
-          glowAlpha: 1,
         });
       }
     }
@@ -424,8 +336,10 @@ export class LightingPass {
   }
 
   /**
-   * Renders crisp 1x pixel-hard flat highlight discs (zero blurry additive haze)
-   * and Nuclear Throne's hard-edged pitch-black circular darkness veil in dark biomes.
+   * Renders Nuclear Throne's true 2-tier 1x pixel-hard circular darkness:
+   * - Pass A: 42% black dim veil (`rgba(0, 0, 0, 0.42)`) with crisp full-bright inner circles punched out.
+   * - Pass B: 100% pitch-black (`#000000`) mask with crisp outer visibility circles punched out.
+   * Bright biomes return immediately with ZERO translucent floor discs!
    */
   render(
     mainCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -439,57 +353,56 @@ export class LightingPass {
     const darkness = Math.max(0, Math.min(1, state.map.darkness));
     const isHardDark =
       darkness >= 0.35 || (darkness > 0.01 && HARD_DARK_BIOMES.has(state.map.biome));
+    if (!isHardDark) return;
+
     const w = camera.viewportWidth;
     const h = camera.viewportHeight;
     const view = camera.getViewOrigin();
-
-    const lights = this.collectLights(state, playerX, playerY, interpAlpha, extraLights);
-
-    // 1. Crisp pixel-hard flat translucent highlight discs (drawn via source-over, ZERO blurry lighter bloom!)
-    mainCtx.save();
-    mainCtx.globalCompositeOperation = 'source-over';
-    for (let i = 0; i < lights.length; i++) {
-      const l = lights[i]!;
-      if (!l.glowColor) continue;
-      // In bright biomes, only render crisp flat highlight discs for glowing plasma/guardian orbs & portals
-      if (!isHardDark && !l.brightWorldHalo) continue;
-      const glowR = Math.round(l.glowRadius ?? 0);
-      if (glowR <= 0) continue;
-      const scrX = Math.round(l.x - view.left);
-      const scrY = Math.round(l.y - view.top);
-      if (
-        scrX + glowR < 0 ||
-        scrX - glowR > w ||
-        scrY + glowR < 0 ||
-        scrY - glowR > h
-      ) {
-        continue;
-      }
-      mainCtx.globalAlpha = Math.max(0, Math.min(1, l.glowAlpha ?? 1));
-      mainCtx.fillStyle = l.glowColor;
-      fillPixelDisc(mainCtx, scrX, scrY, glowR);
-    }
-    mainCtx.restore();
-
-    // 2. Hard-edged 1x pitch-black circular darkness veil for dark biomes (Caves, Labs, Sewers, Cursed Caves)
-    if (!isHardDark) return;
-
     const lScale = 1;
     const lctx = this.ensureSurface(w * lScale, h * lScale);
     if (!lctx || !this.canvas) return;
+
+    const lights = this.collectLights(state, playerX, playerY, interpAlpha, extraLights);
 
     lctx.save();
     if (typeof lctx.setTransform === 'function') {
       lctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     lctx.imageSmoothingEnabled = false;
+    mainCtx.imageSmoothingEnabled = false;
+
+    // ------------------------------------------------------------------------
+    // PASS A: Mid-Ring 42% Dim Veil with crisp pixel-hard inner full-bright holes
+    // ------------------------------------------------------------------------
     lctx.globalCompositeOperation = 'source-over';
     lctx.globalAlpha = 1;
-    // 100% pure solid pitch black outside carved visibility circles (matches 08_caves_4_1 & 14_labs_6_1!)
+    lctx.clearRect(0, 0, w, h);
+    lctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+    lctx.fillRect(0, 0, w, h);
+
+    lctx.globalCompositeOperation = 'destination-out';
+    lctx.fillStyle = '#000000';
+    lctx.globalAlpha = 1;
+    for (let i = 0; i < lights.length; i++) {
+      const l = lights[i]!;
+      const r = Math.round(l.innerRadius ?? 0);
+      if (r <= 0) continue;
+      const scrX = Math.round(l.x - view.left);
+      const scrY = Math.round(l.y - view.top);
+      if (scrX + r < 0 || scrX - r > w || scrY + r < 0 || scrY - r > h) continue;
+      fillPixelDisc(lctx, scrX, scrY, r);
+    }
+    mainCtx.drawImage(this.canvas, 0, 0, w, h, 0, 0, w, h);
+
+    // ------------------------------------------------------------------------
+    // PASS B: Outer 100% Pitch-Black (#000000) Mask with crisp outer visibility holes
+    // ------------------------------------------------------------------------
+    lctx.globalCompositeOperation = 'source-over';
+    lctx.globalAlpha = 1;
+    lctx.clearRect(0, 0, w, h);
     lctx.fillStyle = '#000000';
     lctx.fillRect(0, 0, w, h);
 
-    // Carve visibility holes with razor-sharp hard-edged pixel-stepped discs (zero radial feathering!)
     lctx.globalCompositeOperation = 'destination-out';
     lctx.fillStyle = '#000000';
     lctx.globalAlpha = 1;
@@ -499,20 +412,12 @@ export class LightingPass {
       if (r <= 0) continue;
       const scrX = Math.round(l.x - view.left);
       const scrY = Math.round(l.y - view.top);
-      if (
-        scrX + r < 0 ||
-        scrX - r > w ||
-        scrY + r < 0 ||
-        scrY - r > h
-      ) {
-        continue;
-      }
+      if (scrX + r < 0 || scrX - r > w || scrY + r < 0 || scrY - r > h) continue;
       fillPixelDisc(lctx, scrX, scrY, r);
     }
     lctx.globalCompositeOperation = 'source-over';
     lctx.restore();
 
-    mainCtx.imageSmoothingEnabled = false;
     mainCtx.drawImage(this.canvas, 0, 0, w, h, 0, 0, w, h);
   }
 }

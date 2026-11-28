@@ -1527,9 +1527,10 @@ export class GameRenderer {
     const view = this.camera.getViewOrigin();
     const viewLeft = settings.pixelSnap ? Math.round(view.left) : view.left;
     const viewTop = settings.pixelSnap ? Math.round(view.top) : view.top;
+    const isSteam = this.bundle.sourceMode === 'steam';
 
-    // Continuous solid biome wall-top roof background clear (ZERO black void outside rooms!)
-    fillBiomeRoofRect(ctx, state.biome, viewLeft, viewTop, w, h, 0, 0);
+    // Continuous solid biome wall-top roof background clear (ZERO black void, ZERO Steam halo seams!)
+    fillBiomeRoofRect(ctx, state.biome, viewLeft, viewTop, w, h, 0, 0, isSteam);
 
     // Teleport-safe interpolated player coords
     const playerPos = lerpPosSafe(state.player.prevX, state.player.prevY, state.player.x, state.player.y, alpha, 56);
@@ -1748,11 +1749,9 @@ export class GameRenderer {
       this.extraLightScratch.push({
         x: fl.x,
         y: fl.y,
-        radius: Math.round(fl.radius * (0.55 + 0.45 * frac)),
+        radius: Math.round(Math.min(62, fl.radius * (0.55 + 0.45 * frac))),
+        innerRadius: Math.round(Math.min(36, fl.radius * 0.55 * (0.55 + 0.45 * frac))),
         intensity: 1,
-        glowColor: 'rgba(255, 220, 140, 0.18)',
-        glowRadius: Math.round(Math.min(26, fl.radius * 0.45 * (0.6 + 0.4 * frac))),
-        glowAlpha: 1,
       });
     }
     this.lighting.render(ctx, state, this.camera, playerX, playerY, alpha, this.extraLightScratch);
@@ -1827,17 +1826,55 @@ export class GameRenderer {
       }
     }
 
-    // Pass 2b: Steam south-facing wall outline rim ONLY (never paint dark boxes over solid roof mass or Built-In!)
+    // Pass 2b: Authentic Steam organic jagged wall edges (`sprWall*Out`, 24x32, orig=(4,12)) on ALL exposed perimeter
+    // wall tiles, then cleanly mask adjacent outer roof tiles (`wMask === 0`) at `topY = py - 8` so organic fringe ONLY
+    // overhangs walkable floor edges with ZERO seam on the solid outer roof mass (matches 11b_levelup.png)!
     if (this.bundle.sourceMode === 'steam' && this.sprites.hasSprite(wallOutSpr)) {
+      const outDef = this.sprites.getSprite(wallOutSpr);
+      // Steam sprWall*Out has originY=12 (already baked with -8 roof overhang); fallback to -8 if originY < 8
+      const outOffsetY = outDef && outDef.originY >= 8 ? 0 : -8;
       for (let ty = minTy; ty <= maxTy; ty++) {
         const row = ty * map.width;
         for (let tx = minTx; tx <= maxTx; tx++) {
           const idx = row + tx;
-          if ((map.wallMask[idx]! & 16) === 0) continue;
           if (wMask ? wMask[idx] !== 1 : isWalkable(map.tiles[idx]!) || !hasNearbyFloor(map, tx, ty)) {
             continue;
           }
-          this.sprites.draw(ctx, wallOutSpr, tx * ts, ty * ts, { frame: 0, pixelSnap: true });
+          const variant = map.floorVariants[idx] ?? ((tx * 5 + ty * 11) & 7);
+          this.sprites.draw(ctx, wallOutSpr, tx * ts, ty * ts + outOffsetY, { frame: variant, pixelSnap: true });
+        }
+      }
+      // Repaint outer roof tiles (`wMask === 0`) bordering perimeter walls at `topY = ty * ts - 8` so outer edges are 100% seamless
+      if (wMask) {
+        const rMinTy = Math.max(0, minTy - 1);
+        const rMaxTy = Math.min(map.height - 1, maxTy + 1);
+        const rMinTx = Math.max(0, minTx - 1);
+        const rMaxTx = Math.min(map.width - 1, maxTx + 1);
+        const mw = map.width;
+        const mh = map.height;
+        for (let ty = rMinTy; ty <= rMaxTy; ty++) {
+          const row = ty * mw;
+          const topY = ty * ts - 8;
+          for (let tx = rMinTx; tx <= rMaxTx; tx++) {
+            const idx = row + tx;
+            if (wMask[idx] !== 0 || isWalkable(map.tiles[idx]!)) continue;
+            let nearPerim = false;
+            for (let oy = -1; oy <= 1 && !nearPerim; oy++) {
+              const ny = ty + oy;
+              if (ny < 0 || ny >= mh) continue;
+              const nRow = ny * mw;
+              for (let ox = -1; ox <= 1; ox++) {
+                const nx = tx + ox;
+                if (nx >= 0 && nx < mw && wMask[nRow + nx] === 1) {
+                  nearPerim = true;
+                  break;
+                }
+              }
+            }
+            if (nearPerim) {
+              fillBiomeRoofRect(ctx, map.biome, tx * ts, topY, ts, ts, tx * ts, topY, true);
+            }
+          }
         }
       }
     }
@@ -1867,8 +1904,8 @@ export class GameRenderer {
     const py = ty * ts;
     const topY = py - overhang;
     const wMask = this.wallRenderMask;
-    const roofColor = getBiomeRoofColor(map.biome);
     const isSteam = this.bundle.sourceMode === 'steam';
+    const roofColor = getBiomeRoofColor(map.biome, isSteam);
 
     // 1. 2.5D south front faces (sprWall*Bot) for south-facing tiles in this row
     for (let tx = minTx; tx <= maxTx; tx++) {
@@ -1901,8 +1938,8 @@ export class GameRenderer {
       const variant = map.floorVariants[idx] ?? ((tx * 5 + ty * 11) & 7);
 
       // Paint exact solid biome roof color directly underneath sprWall*Top so transparent Steam/Built-In
-      // edge pixels melt seamlessly into the continuous roof mass with ZERO dark seams!
-      fillBiomeRoofRect(ctx, map.biome, px, topY, ts, ts);
+      // edge pixels melt seamlessly into the continuous roof mass with ZERO seams!
+      fillBiomeRoofRect(ctx, map.biome, px, topY, ts, ts, px, topY, isSteam);
 
       const drewTop = this.sprites.draw(ctx, wallTopSpr, px, topY, {
         frame: variant,
@@ -2522,18 +2559,6 @@ export class GameRenderer {
       drawPixelRing(ctx, prop.x, prop.y, pulseR, 1, 4, tick & 7);
       ctx.restore();
     }
-
-    // Throne generator HP bar when damaged
-    if (prop.kind === 'throne_generator' && prop.hp > 0 && prop.hp < prop.maxHp) {
-      const bw = 20;
-      const frac = Math.max(0, Math.min(1, prop.hp / prop.maxHp));
-      const bx = Math.round(prop.x - bw / 2);
-      const by = Math.round(prop.y - 16);
-      ctx.fillStyle = '#141018';
-      ctx.fillRect(bx - 1, by - 1, bw + 2, 4);
-      ctx.fillStyle = '#52e864';
-      ctx.fillRect(bx, by, Math.round(bw * frac), 2);
-    }
   }
 
   private renderCorpse(
@@ -2685,17 +2710,20 @@ export class GameRenderer {
       }
     }
 
-    // Strong Spirit halo aura behind player
+    // Strong Spirit white halo floating cleanly ABOVE player's head (matching 17_throne_hall & 18_throne_idle!)
     if (player.strongSpiritReady && player.alive) {
-      const drewHalo = this.sprites.draw(ctx, 'sprStrongSpirit', px, py - 2, {
+      const haloDef = this.sprites.getSprite('sprStrongSpirit');
+      // Steam sprStrongSpirit has oy=26 (ring at localY=-15..-10); Built-In has oy=10 (ring at localY=-8..-4).
+      const haloOffsetY = haloDef && haloDef.originY >= 20 ? 3 : 10;
+      const drewHalo = this.sprites.draw(ctx, 'sprStrongSpirit', px, py - haloOffsetY, {
         frame: Math.floor(state.tick * 0.25),
-        alpha: 0.72,
+        alpha: 0.9,
         pixelSnap,
       });
       if (!drewHalo) {
         ctx.save();
-        ctx.fillStyle = 'rgba(120, 235, 255, 0.75)';
-        drawPixelRing(ctx, px, py - 8, 5, 1);
+        ctx.fillStyle = '#ffffff';
+        drawPixelRing(ctx, px, py - 13, 5, 1);
         ctx.restore();
       }
     }
@@ -3318,9 +3346,9 @@ export class GameRenderer {
         ctx.fillStyle = '#ffffff';
         drawPixelDisc(ctx, bx, startY, Math.round(2 + pulse * 2));
       } else {
-        // Firing phase: subtle carpet emerald under-wash beneath the cohesive Layer 5 beam column
-        ctx.fillStyle = `rgba(28, 180, 72, ${(0.16 + 0.06 * pulse).toFixed(3)})`;
-        ctx.fillRect(Math.round(bx - halfW - 3), Math.round(startY), (halfW + 3) * 2, Math.round(maxH));
+        // Firing phase: tight subtle emerald wash strictly inside the red carpet beneath the 22px beam column
+        ctx.fillStyle = `rgba(28, 195, 72, ${(0.16 + 0.06 * pulse).toFixed(3)})`;
+        ctx.fillRect(Math.round(bx - 15), Math.round(startY), 30, Math.round(maxH));
       }
       ctx.restore();
     }
@@ -3386,82 +3414,98 @@ export class GameRenderer {
     }
 
     const ix = Math.round(beamX);
-    const iTop = Math.round(topY);
+    const iTop = Math.round(topY - 4);
     const iBot = Math.round(botY);
     const beamH = Math.max(24, iBot - iTop);
     const t = this.renderTimeSec;
-    const pulse = 0.5 + 0.5 * Math.sin(t * 48);
-    const outerHalfW = Math.round(15 + pulse * 2);
-    const innerHalfW = Math.round(11 + Math.sin(t * 36));
+    const outerHalfW = 11; // Crisp uniform 22px vertical column matching 19_throne_beam.png!
+    const bandHalfW = 9;
+    const coreHalfW = 7;
 
     ctx.save();
-    // 1. Authentic 19_throne_beam.png: vibrant neon-green outer beam (#38d848 / #68f538) + blazing pure-white core
-    ctx.fillStyle = '#38d848';
+    // 1. Razor-clean, straight, uniform-width vertical column (~22px wide):
+    //    crisp #38e838 outer green edges -> bright #e8ff90 lime-white band -> blazing #ffffff center core!
+    ctx.fillStyle = '#38e838';
     ctx.fillRect(ix - outerHalfW, iTop, outerHalfW * 2, beamH);
-    ctx.fillStyle = '#78ff3c';
-    ctx.fillRect(ix - outerHalfW + 2, iTop, (outerHalfW - 2) * 2, beamH);
+    ctx.fillStyle = '#e8ff90';
+    ctx.fillRect(ix - bandHalfW, iTop, bandHalfW * 2, beamH);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ix - coreHalfW, iTop, coreHalfW * 2, beamH);
 
-    // 2. Seamlessly blended authentic NT sprNothingBeam grain down the center axis (rot=0 when straight down!)
+    // 2. Unrotated sprNothingBeam core texture clipped strictly to column width (preserves rot=0 contract!)
     const beamRot = sampleAngle - Math.PI * 0.5;
     if (this.sprites.hasSprite('sprNothingBeam')) {
       const beamFrame = Math.floor(state.tick * 0.5);
       const stampY = throneBoss ? iTop + Math.min(beamH - 12, 24) : Math.round(sampleY);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(ix - outerHalfW, iTop, outerHalfW * 2, beamH);
+      ctx.clip();
       this.sprites.draw(ctx, 'sprNothingBeam', ix, stampY, {
         frame: beamFrame,
         rotation: beamRot,
-        alpha: 0.42,
+        alpha: 0.22,
         pixelSnap,
       });
+      ctx.restore();
     }
 
-    // 3. Blazing pure-white inner column matching 19_throne_beam.png
+    // 3. Crisp vertical center pulse streaks & hollow neon-green energy capsules matching 19_throne_beam.png
+    const pulseX = ix + (((state.tick & 1) === 0) ? -2 : 2);
+    ctx.fillStyle = '#f2ffd8';
+    ctx.fillRect(pulseX, iTop + 2, 1, Math.max(1, beamH - 4));
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(ix - innerHalfW, iTop, innerHalfW * 2, beamH);
+    ctx.fillRect(ix - 1, iTop + 2, 2, Math.max(1, beamH - 4));
 
-    // 4. Crisp streaming vertical neon-green energy flecks inside the white beam core
-    const fleckSpacing = 32;
-    const fleckScroll = Math.floor(wrapMod(t * 260, fleckSpacing));
-    for (let dy = fleckScroll; dy < beamH - 10; dy += fleckSpacing) {
-      const fy = iTop + dy;
-      const fxOff = (((Math.floor(dy / fleckSpacing) * 7 + state.tick) % 13) - 6);
-      ctx.fillStyle = '#58e838';
-      ctx.fillRect(ix + fxOff - 2, fy, 4, 8);
-      ctx.fillStyle = '#d8ffc8';
-      ctx.fillRect(ix + fxOff - 1, fy + 1, 2, 6);
+    const capSpacing = 36;
+    const capScroll = Math.floor(wrapMod(t * 240, capSpacing));
+    for (let dy = capScroll; dy < beamH - 10; dy += capSpacing) {
+      const cy = iTop + dy;
+      const laneIdx = Math.floor(dy / capSpacing);
+      const cxOff = ((laneIdx * 7 + (state.tick >> 2)) % 9) - 4;
+      ctx.fillStyle = '#58f038';
+      ctx.fillRect(ix + cxOff - 2, cy, 4, 8);
+      ctx.fillStyle = '#e8ff90';
+      ctx.fillRect(ix + cxOff - 1, cy + 1, 2, 6);
     }
 
-    // 5. Rounded crisp pixel-hard emitter dome at cannon mouth (ix, iTop)
+    // 4. Clean flush semicircular emitter mouth cap at iTop (NEVER wider than the 22px column!)
     if (throneBoss) {
-      ctx.fillStyle = '#38d848';
-      drawPixelDisc(ctx, ix, iTop, outerHalfW);
-      ctx.fillStyle = '#78ff3c';
-      drawPixelDisc(ctx, ix, iTop, Math.max(4, outerHalfW - 2));
-      ctx.fillStyle = '#ffffff';
-      drawPixelDisc(ctx, ix, iTop + 2, innerHalfW);
-      ctx.fillStyle = '#b8f538';
-      drawPixelDisc(ctx, ix, iTop + 4, 4);
-
-      // Bake persistent carpet scorch decals along the beam path periodically during firing
-      if (state.tick - this.lastBeamScorchTick >= 6) {
-        this.lastBeamScorchTick = state.tick;
-        const scorchY = iTop + 20 + ((state.tick * 29) % Math.max(24, beamH - 24));
-        const scorchX = ix + (((state.tick * 13) % 19) - 9);
-        this.floorBuffer.bakeDecal({
-          kind: 'scorch',
-          x: scorchX,
-          y: scorchY,
-          angle: 0,
-          scale: 0.72,
-          color: '#112116',
-        });
+      for (let dy = -outerHalfW; dy <= 0; dy++) {
+        const span = Math.floor(Math.sqrt(Math.max(0, outerHalfW * outerHalfW - dy * dy)) + 0.35);
+        ctx.fillStyle = '#38e838';
+        ctx.fillRect(ix - span, iTop + dy, span * 2 + 1, 1);
       }
+      for (let dy = -bandHalfW; dy <= 0; dy++) {
+        const span = Math.floor(Math.sqrt(Math.max(0, bandHalfW * bandHalfW - dy * dy)) + 0.35);
+        ctx.fillStyle = '#e8ff90';
+        ctx.fillRect(ix - span, iTop + dy + 1, span * 2 + 1, 1);
+      }
+      for (let dy = -coreHalfW; dy <= 0; dy++) {
+        const span = Math.floor(Math.sqrt(Math.max(0, coreHalfW * coreHalfW - dy * dy)) + 0.35);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(ix - span, iTop + dy + 2, span * 2 + 1, 1);
+      }
+      // Small bright lime center core dot right inside the emitter mouth (matches 19_throne_beam.png!)
+      ctx.fillStyle = '#b8f538';
+      ctx.fillRect(ix - 2, iTop - 1, 4, 4);
     }
 
-    // 6. Crisp leading-edge pixel flare at bottom of beam
-    ctx.fillStyle = '#38d848';
-    drawPixelDisc(ctx, ix, iBot, Math.round(outerHalfW * 0.8));
-    ctx.fillStyle = '#ffffff';
-    drawPixelDisc(ctx, ix, iBot, Math.round(innerHalfW * 0.75));
+    // 5. Crisp compact tapered leading edge at iBot (no oversized round blob!)
+    ctx.fillStyle = '#38e838';
+    ctx.fillRect(ix - bandHalfW, iBot, bandHalfW * 2, 2);
+    ctx.fillStyle = '#e8ff90';
+    ctx.fillRect(ix - coreHalfW, iBot, coreHalfW * 2, 1);
+
+    // 6. Small crisp floating green & white pixel sparks drifting off both beam edges
+    for (let s = 0; s < 10; s++) {
+      const side = (s & 1) === 0 ? -1 : 1;
+      const prog = wrapMod(t * (2.2 + (s % 3) * 0.5) + s * 0.19, 1);
+      const sy = iTop + ((s * 31 + state.tick * 9) % Math.max(16, beamH));
+      const sx = ix + side * (outerHalfW + 1 + Math.round(prog * 8));
+      ctx.fillStyle = s % 3 === 0 ? '#ffffff' : '#58f038';
+      ctx.fillRect(sx, Math.round(sy), s % 2 === 0 ? 2 : 1, 2);
+    }
     ctx.restore();
   }
 
@@ -4260,21 +4304,15 @@ export class GameRenderer {
     y: number,
     lifeFrac: number,
   ): void {
-    // Upgraded from crude 5x5 lime squares to crisp emerald warning chevrons & sparks!
+    // Subtle crisp 1x vertical emerald/white charge sparks along the carpet (never grassy V-clumps!)
     const ix = Math.round(x);
     const iy = Math.round(y);
     ctx.save();
-    ctx.globalAlpha = Math.max(0.25, lifeFrac);
-    // Dark outline shadow chevron
-    ctx.fillStyle = '#082413';
-    drawPixelLine(ctx, ix - 4, iy - 1, ix, iy + 3, 2);
-    drawPixelLine(ctx, ix, iy + 3, ix + 4, iy - 1, 2);
-    // Bright emerald chevron + hot white apex spark
-    ctx.fillStyle = '#5eff88';
-    drawPixelLine(ctx, ix - 4, iy - 2, ix, iy + 2, 1);
-    drawPixelLine(ctx, ix, iy + 2, ix + 4, iy - 2, 1);
+    ctx.globalAlpha = Math.max(0.25, lifeFrac * 0.85);
+    ctx.fillStyle = '#48e858';
+    ctx.fillRect(ix, iy - 2, 1, 4);
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(ix, iy + 1, 1, 2);
+    ctx.fillRect(ix, iy - 1, 1, 2);
     ctx.restore();
   }
 
