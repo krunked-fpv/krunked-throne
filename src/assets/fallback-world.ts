@@ -81,43 +81,43 @@ const BIOME_THEMES: readonly BiomeTheme[] = [
   },
   {
     code: 3, pattern: 'scrapyard',
-    // Warm dusty taupe cobblestones (#776b64) + cool battleship slate-gray rock walls (#828890)
-    floorBase: '#776b64', floorHi: '#837770', floorMid: '#6b6059', floorDark: '#615650', floorCrack: '#4e443f',
-    accent: '#9c5838', accent2: '#68e830',
-    wallTop: '#828890', wallTopHi: '#949aa2', wallTopDark: '#6d737b',
-    wallBot: '#646a72', wallBotHi: '#787f87', wallBotDark: '#4e535a', wallOut: '#393d42',
+    // Dense organic rounded rocky cobblestones (#7a6e66/#857870, crevices #544a44) + craggy slate walls (#828890)
+    floorBase: '#7a6e66', floorHi: '#857870', floorMid: '#6f645c', floorDark: '#544a44', floorCrack: '#423934',
+    accent: '#a25c3a', accent2: '#68e830',
+    wallTop: '#828890', wallTopHi: '#989ea6', wallTopDark: '#666c74',
+    wallBot: '#646a72', wallBotHi: '#7e858e', wallBotDark: '#4a4f57', wallOut: '#353940',
   },
   {
     code: 4, pattern: 'caves',
-    // Muted plum-violet cave stone (#3c2f4d) + royal purple walls (#44315e) + glowing amber embers
-    floorBase: '#3c2f4d', floorHi: '#46365a', floorMid: '#352944', floorDark: '#2c213a', floorCrack: '#20172c',
-    accent: '#ff8c28', accent2: '#ffd45c',
-    wallTop: '#44315e', wallTopHi: '#543e73', wallTopDark: '#36264c',
-    wallBot: '#312247', wallBotHi: '#402d5c', wallBotDark: '#251838', wallOut: '#1a1028',
+    // True 2-tier darkness raw brightness: wallTop #7a4eb4 -> dims to #44315e in 42% ring, pops vibrant inside!
+    floorBase: '#644a82', floorHi: '#725692', floorMid: '#563e72', floorDark: '#473161', floorCrack: '#34224a',
+    accent: '#ff8c28', accent2: '#ffe066',
+    wallTop: '#7a4eb4', wallTopHi: '#8f66c4', wallTopDark: '#5e3892',
+    wallBot: '#563286', wallBotHi: '#6d45a0', wallBotDark: '#3d2066', wallOut: '#2b154a',
   },
   {
     code: 5, pattern: 'frozen',
-    // Calm cool light-gray snow (#b9b9b9) + diagonal sky-blue ice (#789eb7/#9ac0d8) + silver snow roof (#9da4a6)
-    floorBase: '#b9b9b9', floorHi: '#c6cacd', floorMid: '#aeb2b6', floorDark: '#9da3a9', floorCrack: '#7a838c',
-    accent: '#789eb7', accent2: '#9ac0d8',
-    wallTop: '#9da4a6', wallTopHi: '#b0b7b9', wallTopDark: '#899194',
-    wallBot: '#78828a', wallBotHi: '#939ea6', wallBotDark: '#5d6872', wallOut: '#49525c',
+    // Bright crisp cool snow (#d2d6da) popping over silver-gray roof (#9da4a6) + striped sky-blue ice (#7da8c4/#a6d2ec)
+    floorBase: '#d2d6da', floorHi: '#dfe3e6', floorMid: '#c6cbd0', floorDark: '#b2b9c0', floorCrack: '#848e98',
+    accent: '#7da8c4', accent2: '#a6d2ec',
+    wallTop: '#9da4a6', wallTopHi: '#b4bcc0', wallTopDark: '#858e92',
+    wallBot: '#747f88', wallBotHi: '#94a0a9', wallBotDark: '#56626c', wallOut: '#424c56',
   },
   {
     code: 6, pattern: 'labs',
-    // Clean dark charcoal-slate metal floor (#1d2328) + deep dark lab teal roof (#0d1919) + lime pipe strip (#5ce040)
-    floorBase: '#1d2328', floorHi: '#242b31', floorMid: '#1a2025', floorDark: '#151a1e', floorCrack: '#0f1317',
-    accent: '#5ce040', accent2: '#42d4e8',
-    wallTop: '#0d1919', wallTopHi: '#142829', wallTopDark: '#091212',
-    wallBot: '#15282c', wallBotHi: '#1f3a40', wallBotDark: '#101e22', wallOut: '#081113',
+    // True 2-tier darkness raw brightness: wallTop #12333b -> dims to #0d1919 in 42% ring, pops crisp inside!
+    floorBase: '#263036', floorHi: '#2f3c44', floorMid: '#212a30', floorDark: '#192126', floorCrack: '#11171b',
+    accent: '#5ce040', accent2: '#42e0f0',
+    wallTop: '#12333b', wallTopHi: '#1d464f', wallTopDark: '#0b2228',
+    wallBot: '#18343a', wallBotHi: '#244a52', wallBotDark: '#102428', wallOut: '#091518',
   },
   {
     code: 7, pattern: 'palace',
     // Charcoal/navy 16x16 diagonal diamond floor (#26262c/#1a1c22) + dusty crimson-terracotta walls (#64282c)
     floorBase: '#26262c', floorHi: '#2d2e36', floorMid: '#1a1c22', floorDark: '#15171c', floorCrack: '#0f1015',
     accent: '#58f048', accent2: '#d8b85c',
-    wallTop: '#64282c', wallTopHi: '#74383b', wallTopDark: '#501e22',
-    wallBot: '#5c2528', wallBotHi: '#703a3b', wallBotDark: '#42181c', wallOut: '#2e1014',
+    wallTop: '#64282c', wallTopHi: '#783a3e', wallTopDark: '#4f1d21',
+    wallBot: '#5c2528', wallBotHi: '#7a3e40', wallBotDark: '#40161a', wallOut: '#2b0e12',
   },
   {
     code: 100, pattern: 'vault',
@@ -128,11 +128,11 @@ const BIOME_THEMES: readonly BiomeTheme[] = [
   },
   {
     code: 101, pattern: 'oasis',
-    // Bright pale mint-seafoam shallow water (#9dc1b9) + bright turquoise roof (#58afa9) + dark kelp cliff (#1f6454)
-    floorBase: '#9dc1b9', floorHi: '#aed1c9', floorMid: '#8cb2aa', floorDark: '#7aa29a', floorCrack: '#4c7c74',
-    accent: '#349c46', accent2: '#e8526a',
+    // Bright luminous seafoam-mint shallow water (#b6ddd4/#c0e5dc) + vibrant turquoise roof (#58afa9) + thick dark kelp cliff
+    floorBase: '#b6ddd4', floorHi: '#c0e5dc', floorMid: '#a2ccc2', floorDark: '#8cbab0', floorCrack: '#548c82',
+    accent: '#34a048', accent2: '#ff4e74',
     wallTop: '#58afa9', wallTopHi: '#68bfb9', wallTopDark: '#479c96',
-    wallBot: '#1f6454', wallBotHi: '#2c7e66', wallBotDark: '#15483d', wallOut: '#103830',
+    wallBot: '#1a5c4a', wallBotHi: '#287a5e', wallBotDark: '#103e32', wallOut: '#0c2e25',
   },
   {
     code: 102, pattern: 'pizza',
@@ -150,18 +150,18 @@ const BIOME_THEMES: readonly BiomeTheme[] = [
   },
   {
     code: 104, pattern: 'cursed',
-    floorBase: '#302048', floorHi: '#3b2857', floorMid: '#28193d', floorDark: '#201332', floorCrack: '#150b24',
-    accent: '#f054cc', accent2: '#ffa0f0',
-    wallTop: '#3c265a', wallTopHi: '#4d3272', wallTopDark: '#2e1c47',
-    wallBot: '#2a1842', wallBotHi: '#3a2259', wallBotDark: '#1d0f30', wallOut: '#140922',
+    floorBase: '#4c326e', floorHi: '#5c3e82', floorMid: '#40285e', floorDark: '#311d4a', floorCrack: '#221236',
+    accent: '#f054cc', accent2: '#ffa8f2',
+    wallTop: '#643a98', wallTopHi: '#7c50b2', wallTopDark: '#4c2878',
+    wallBot: '#462272', wallBotHi: '#5e3492', wallBotDark: '#301452', wallOut: '#200c38',
   },
   {
     code: 105, pattern: 'jungle',
-    // Warm earthy olive-brown dirt (#5e542a) + bright lush leaf-green canopy (#438428)
-    floorBase: '#5e542a', floorHi: '#6a5f31', floorMid: '#534a24', floorDark: '#473f1e', floorCrack: '#342e15',
-    accent: '#4e9630', accent2: '#e03c4c',
-    wallTop: '#438428', wallTopHi: '#529834', wallTopDark: '#346c1e',
-    wallBot: '#2b5c18', wallBotHi: '#397822', wallBotDark: '#1e4210', wallOut: '#16300c',
+    // Warm earthy olive-brown dirt (#5e542a) + dense bumpy leafy green canopy (#438428/#5eb228/#286416)
+    floorBase: '#5e542a', floorHi: '#6b6032', floorMid: '#534924', floorDark: '#453d1c', floorCrack: '#312b13',
+    accent: '#5eb228', accent2: '#e43c4c',
+    wallTop: '#438428', wallTopHi: '#5eb228', wallTopDark: '#286416',
+    wallBot: '#286416', wallBotHi: '#3d8822', wallBotDark: '#1b480e', wallOut: '#123209',
   },
   {
     code: 106, pattern: 'hq',
@@ -234,23 +234,23 @@ function drawBiomeFloor32(
   }
 
   if (t.pattern === 'frozen' && isAltB) {
-    // ICONIC DIAGONAL SKY-BLUE STRIPED FROZEN ICE TILES matching 13_frozen_5_3.png!!
+    // ICONIC DIAGONAL SKY-BLUE STRIPED FROZEN ICE TILES (#7da8c4 / #a6d2ec) matching 13_frozen_5_3.png!!
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const diag = (px + py) & 15;
-        let col = '#789eb7';
-        if (diag === 1) col = '#b2d2e6';
-        else if (diag >= 0 && diag <= 3) col = '#9ac0d8';
-        else if (diag === 15) col = '#6a90aa';
+        let col = '#7da8c4';
+        if (diag === 1) col = '#c2e4f6';
+        else if (diag >= 0 && diag <= 3) col = '#a6d2ec';
+        else if (diag === 15) col = '#6b96b2';
         buf.set(px, py, col);
       }
     }
     if (frame === 1) {
-      // Crisp light-gray snow patch creeping onto one ice edge
-      buf.ellipse(6, 5, 6, 4, '#b9b9b9');
-      buf.ellipse(10, 4, 4, 3, '#c4c8cb');
-      buf.line(18, 20, 23, 22, '#648aa4');
-      buf.line(23, 22, 26, 20, '#b2d2e6');
+      // Crisp bright snow patch creeping onto one ice edge
+      buf.ellipse(6, 5, 6, 4, '#d2d6da');
+      buf.ellipse(10, 4, 4, 3, '#dfe3e6');
+      buf.line(18, 20, 23, 22, '#628ca8');
+      buf.line(23, 22, 26, 20, '#c2e4f6');
     }
     buf.flush(ctx, x, y);
     return;
@@ -303,63 +303,63 @@ function drawBiomeFloor32(
   }
 
   if (t.pattern === 'oasis') {
-    // BRIGHT pale mint-seafoam shallow water (#9dc1b9) matching 05_oasis.png!
+    // BRIGHT luminous pale seafoam-mint shallow water (#b6ddd4 / #c0e5dc) matching 05_oasis.png Left!
     buf.rect(0, 0, w, h, t.floorBase);
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
-        // Very subtle wide diagonal water shimmer
         const band = (px + py) & 31;
-        if (band >= 0 && band <= 4 && hash2d(px, py, seed + 3) > 195) {
+        if (band >= 0 && band <= 7) {
           buf.set(px, py, t.floorHi);
         }
       }
     }
-    // Sparse soft 2-3px horizontal ripples
+    // Delicate sparse water ripples
     buf.rect(6 + frame * 3, 9, 3, 1, t.floorMid);
     buf.rect(19 - frame * 2, 22, 3, 1, t.floorMid);
     if (isAltB) {
       if (frame === 0) {
         // Dark emerald underwater kelp/moss patch matching 05_oasis.png
-        buf.ellipse(16, 16, 9, 7, '#2d7a50');
-        buf.ellipse(15, 15, 6, 5, '#3a905c');
+        buf.ellipse(16, 16, 9, 7, '#287a4e');
+        buf.ellipse(15, 15, 6, 5, '#38965c');
         for (let py = 10; py <= 22; py++) {
           for (let px = 8; px <= 24; px++) {
-            if (buf.get(px, py) === '#3a905c' && hash2d(px, py, seed) > 180) {
-              buf.set(px, py, '#246642');
+            if (buf.get(px, py) === '#38965c' && hash2d(px, py, seed) > 175) {
+              buf.set(px, py, '#1d623e');
             }
           }
         }
       } else {
-        // Tiny water bubbles & sea pebble
-        buf.pixelRing(12, 14, 2, '#d8f0ea');
+        // Delicate water bubbles & sea pebble
+        buf.pixelRing(12, 14, 2, '#e4f7f2');
         buf.set(11, 13, '#ffffff');
-        buf.pixelRing(22, 20, 1, '#d8f0ea');
-        buf.rect(18, 11, 2, 1, '#7a9e96');
+        buf.pixelRing(22, 20, 1, '#e4f7f2');
+        buf.rect(18, 11, 2, 1, '#82aea4');
       }
     } else if (frame === 2) {
-      buf.pixelRing(15, 16, 1, '#d2ece6');
+      buf.pixelRing(15, 16, 1, '#e2f6f0');
     } else if (frame === 3) {
-      buf.rect(11, 20, 2, 1, '#7da49c');
-      buf.set(12, 19, '#d2ece6');
+      buf.rect(11, 20, 2, 1, '#8ab4aa');
+      buf.set(12, 19, '#e2f6f0');
     }
     buf.flush(ctx, x, y);
     return;
   }
 
   if (t.pattern === 'scrapyard') {
-    // Warm dusty taupe-gray rounded cobblestone/rubble floor (#776b64 / #645952) matching 06_scrapyard_3_3.png!
+    // DENSE ORGANIC ROUNDED ROCKY COBBLESTONES (#7a6e66/#857870, crisp dark #544a44 crevices) matching 06_scrapyard_3_3.png!
+    // Constant tileable Voronoi seed across all 4 frames -> ZERO straight rectangular grid seams!
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
-        const v = voronoi2d(px, py, 8, 107, 4, 0.58);
+        const v = voronoi2d(px, py, 6.4, 211, 5, 0.76);
         let col = t.floorBase;
-        if (v.edge < 0.115) {
-          col = '#635852';
-        } else if (v.edge < 0.19 && v.dy < -0.18) {
-          col = '#82766f';
-        } else if ((v.cellId & 7) === 0) {
-          col = '#6f645d';
-        } else if ((v.cellId & 7) === 1 && hash2d(px, py, seed) > 200) {
-          col = '#80746d';
+        // Rounded dark crevices all around every organic cobblestone (corners round smoothly via v.d1!)
+        if (v.edge < 0.19 || v.d1 > 0.62) {
+          col = t.floorDark; // #544a44 crisp crevice
+        } else if (v.dy < -0.10 && v.edge < 0.31) {
+          col = '#8c7f76'; // subtle sunlit upper rock rim
+        } else {
+          const tone = v.cellId & 3;
+          col = tone === 0 ? '#857870' : tone === 1 ? '#7a6e66' : tone === 2 ? '#72665f' : '#80746b';
         }
         buf.set(px, py, col);
       }
@@ -367,12 +367,12 @@ function drawBiomeFloor32(
     if (isAltB) {
       if (frame === 0) {
         // Iconic Scrapyard rectangular rusty floor drain grate matching 06_scrapyard_3_3 / 07_bigdog_3_3!
-        buf.rect(6, 10, 20, 12, '#423534');
-        buf.rect(7, 11, 18, 10, '#6c5a58');
+        buf.rect(6, 10, 20, 12, '#3d3130');
+        buf.rect(7, 11, 18, 10, '#6e5c5a');
         for (let gx = 8; gx <= 22; gx += 2) {
-          buf.rect(gx, 12, 1, 8, '#2d2324');
+          buf.rect(gx, 12, 1, 8, '#281f20');
         }
-        buf.rect(7, 11, 18, 1, '#8a7470');
+        buf.rect(7, 11, 18, 1, '#8e7874');
       } else {
         // Iconic glowing green radioactive crack in cobbles (07_bigdog_3_3.png!)
         buf.line(10, 14, 16, 16, '#62e030');
@@ -384,35 +384,37 @@ function drawBiomeFloor32(
     } else if (frame === 1) {
       buf.rect(10, 19, 2, 1, t.floorCrack);
     } else if (frame === 2) {
-      buf.set(20, 10, '#9a5838');
-      buf.set(21, 10, '#6e3c24');
+      buf.set(20, 10, '#9e5a38');
+      buf.set(21, 10, '#6c3a22');
     } else if (frame === 3) {
-      // Tiny white scrap pebble ring
-      buf.rect(13, 14, 3, 2, '#b8b0aa');
-      buf.set(14, 14, '#776b64');
+      // Tiny pale scrap bone/trash ring
+      buf.rect(13, 14, 3, 2, '#beb6b0');
+      buf.set(14, 14, '#7a6e66');
     }
     buf.flush(ctx, x, y);
     return;
   }
 
   if (t.pattern === 'caves' || t.pattern === 'cursed') {
-    // Calm muted plum-violet bumpy cave stone (#3c2f4d) — ZERO noisy black polka dots!
+    // True 2-tier darkness raw textured amethyst cave rock (#644a82) — dims to calm #3c2f4d in 42% ring!
     buf.rect(0, 0, w, h, t.floorBase);
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
-        const v = voronoi2d(px, py, 10.667, t.code * 13 + 5, 3, 0.65);
-        if (v.edge < 0.08) {
+        const v = voronoi2d(px, py, 8, t.code * 13 + 5, 4, 0.68);
+        if (v.edge < 0.11) {
           buf.set(px, py, t.floorMid);
-        } else if (v.dy < -0.25 && v.d1 < 0.42 && hash2d(px, py, seed) > 150) {
+        } else if (v.dy < -0.18 && v.d1 < 0.45 && hash2d(px, py, seed) > 130) {
           buf.set(px, py, t.floorHi);
+        } else if ((v.cellId & 7) === 0 && hash2d(px, py, seed + 11) > 190) {
+          buf.set(px, py, t.floorDark);
         }
       }
     }
     if (isAltB) {
       if (frame === 0) {
         // CRISP WHITE PIXEL COBWEB matching 08_caves_4_1.png & 09_caves_lights.png!
-        const webCol = '#9692a8';
-        const webHi = '#c8c4d8';
+        const webCol = '#b8b2ce';
+        const webHi = '#ece8f8';
         buf.line(5, 5, 26, 26, webCol);
         buf.line(26, 6, 6, 26, webCol);
         buf.line(16, 4, 16, 27, webCol);
@@ -437,64 +439,73 @@ function drawBiomeFloor32(
   }
 
   if (t.pattern === 'frozen') {
-    // Calm cool light-gray snow (#b9b9b9) — NOT blinding white, ZERO grid lines!
+    // Bright crisp cool snow (#d2d6da) with soft snow drifts (#c6cbd0 / #dfe3e6) popping over #9da4a6 roof!
     buf.rect(0, 0, w, h, t.floorBase);
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
+        // Gentle wide diagonal wind-sculpted snow drift wave (tileable period 32)
+        const drift = ((px + py * 2) & 31);
         const hsh = hash2d(px, py, seed + 11);
-        if (hsh > 248) buf.set(px, py, t.floorMid);
-        else if (hsh < 6) buf.set(px, py, t.floorHi);
+        if (drift >= 0 && drift <= 6 && hsh > 135) buf.set(px, py, t.floorHi);
+        else if (drift >= 16 && drift <= 19 && hsh > 165) buf.set(px, py, t.floorMid);
+        else if (hsh > 250) buf.set(px, py, '#eef2f5');
       }
     }
     if (frame === 1) {
       buf.line(9, 13, 14, 13, t.floorMid);
-      buf.line(10, 12, 13, 12, t.floorHi);
+      buf.line(10, 12, 13, 12, '#eef2f5');
     } else if (frame === 2) {
       buf.rect(19, 20, 3, 1, t.floorDark);
       buf.rect(20, 19, 2, 1, t.floorHi);
     } else if (frame === 3) {
       buf.rect(11, 22, 2, 2, t.floorMid);
-      buf.set(11, 22, t.floorHi);
+      buf.set(11, 22, '#eef2f5');
     }
     buf.flush(ctx, x, y);
     return;
   }
 
   if (t.pattern === 'jungle') {
-    // Warm earthy olive-brown dirt (#5e542a) matching 12_jungle.png!
+    // Warm earthy olive-brown dirt (#5e542a) with subtle grass blades & organic earth speckles (11b_levelup.png!)
     buf.rect(0, 0, w, h, t.floorBase);
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const hsh = hash2d(px, py, seed + 19);
-        if (hsh > 224) buf.set(px, py, t.floorHi);
-        else if (hsh < 28) buf.set(px, py, t.floorMid);
-        else if (hsh < 6) buf.set(px, py, t.floorDark);
+        if (hsh > 214) buf.set(px, py, t.floorHi);
+        else if (hsh < 38) buf.set(px, py, t.floorMid);
+        else if (hsh < 10) buf.set(px, py, t.floorDark);
       }
     }
-    // Sparse tiny grass blade flecks
-    if (frame === 1 || frame === 3) {
-      buf.set(10, 13, '#448228');
-      buf.set(11, 12, '#5aa236');
-      buf.set(12, 13, '#448228');
-    }
-    if (frame === 2) {
-      buf.line(18, 20, 21, 21, '#3d3018');
-      buf.set(20, 19, '#448228');
+    // Subtle organic grass blades & earth pebbles matching 11b_levelup.png
+    if (frame === 0) {
+      buf.set(7, 22, '#4a8e28');
+      buf.set(8, 21, '#62b432');
+      buf.set(23, 9, '#463d1c');
+    } else if (frame === 1 || frame === 3) {
+      buf.set(10, 13, '#448426');
+      buf.set(11, 12, '#62b432');
+      buf.set(12, 13, '#448426');
+      buf.set(22, 23, '#3c3216');
+      buf.set(23, 23, '#726636');
+    } else if (frame === 2) {
+      buf.line(17, 20, 21, 21, '#3b2e16');
+      buf.set(19, 19, '#529c2c');
+      buf.set(20, 18, '#68bc36');
     }
     if (isAltB) {
       if (frame === 0) {
-        // Lush grass tuft cluster + twig
-        buf.rect(12, 14, 5, 3, '#387020');
-        buf.set(12, 13, '#529834');
-        buf.set(14, 12, '#5ea83c');
-        buf.set(16, 13, '#529834');
+        // Lush grass tuft cluster + fallen twig
+        buf.rect(12, 14, 5, 3, '#2d6818');
+        buf.set(12, 13, '#52a42c');
+        buf.set(14, 12, '#66be34');
+        buf.set(16, 13, '#52a42c');
         buf.line(20, 21, 24, 22, '#3d2e16');
       } else {
         // Tiny red jungle flower on dirt
-        buf.rect(14, 15, 3, 2, '#3c7a22');
-        buf.set(15, 14, '#e03848');
-        buf.set(14, 15, '#e03848');
-        buf.set(16, 15, '#e03848');
+        buf.rect(14, 15, 3, 2, '#387a20');
+        buf.set(15, 14, '#e43848');
+        buf.set(14, 15, '#e43848');
+        buf.set(16, 15, '#e43848');
         buf.set(15, 15, '#ffe048');
       }
     }
@@ -503,24 +514,24 @@ function drawBiomeFloor32(
   }
 
   if (t.pattern === 'labs') {
-    // Clean dark charcoal-slate lab metal floor (#1d2328) matching 14_labs_6_1.png!
+    // True 2-tier darkness raw dark metal lab panels (#263036) — dims cleanly to #161c20 in 42% ring!
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const q = ((px >> 4) + (py >> 4)) & 1;
         const seam = (px & 15) === 0 || (py & 15) === 0;
-        buf.set(px, py, seam ? t.floorDark : q === 0 ? t.floorBase : '#21282e');
+        buf.set(px, py, seam ? t.floorDark : q === 0 ? t.floorBase : '#2b363d');
       }
     }
     if (isAltB) {
       if (frame === 0) {
-        // Subtle recessed metal floor vent
-        buf.rect(8, 10, 16, 12, '#12161a');
+        // Clean recessed metal floor vent
+        buf.rect(8, 10, 16, 12, '#151c20');
         for (let gy = 11; gy <= 20; gy += 2) {
-          buf.rect(9, gy, 14, 1, '#262f37');
+          buf.rect(9, gy, 14, 1, '#323f48');
         }
       } else {
-        // Tiny glowing green bio-drop on clean dark tile
-        buf.rect(14, 15, 3, 2, '#2a6e30');
+        // Subtle cracked lab panel with tiny glowing green drop
+        buf.rect(14, 15, 3, 2, '#2d7a34');
         buf.set(15, 15, '#5ce040');
       }
     } else if (frame === 2) {
@@ -757,13 +768,20 @@ function drawBiomeWallTop16(
   buf.rect(0, 0, w, h, t.wallTop);
 
   if (t.pattern === 'desert' || t.pattern === 'campfire') {
-    // Calm solid warm sandstone-taupe roof (#9b8568) seamlessly melting into outer roof mass (ZERO horizontal tiling bars!)
+    // Warm sandstone-taupe roof (#9b8568) with organic weathered sandstone pebble nodules & micro-notches
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const hsh = hash2d(px, py, seed);
-        if (hsh > 244) buf.set(px, py, t.wallTopHi);
-        else if (hsh < 12) buf.set(px, py, t.wallTopDark);
+        if (hsh > 234) buf.set(px, py, t.wallTopHi);
+        else if (hsh < 20) buf.set(px, py, t.wallTopDark);
       }
+    }
+    // Hand-pixelled weathered sandstone surface chips along roof
+    if (frame >= 1) {
+      const cx = (frame * 5 + 1) % 12;
+      const cy = 2 + ((frame * 3) % 9);
+      buf.rect(cx, cy, 3, 1, t.wallTopDark);
+      buf.rect(cx, cy - 1, 2, 1, t.wallTopHi);
     }
   } else if (t.pattern === 'oasis') {
     // Bright vibrant turquoise (#58afa9) with gentle wide diagonal sheen matching 05_oasis.png!
@@ -783,91 +801,126 @@ function drawBiomeWallTop16(
       ], { l: '#50c444', L: '#3ca838', g: '#2d8c30', d: '#1d6624' });
     }
   } else if (t.pattern === 'scrapyard') {
-    // Cool battleship slate-gray (#828890) seamlessly tiling with subtle rubble pebbles & tiny rust flecks!
+    // Craggy battleship slate-gray (#828890) with jagged rocky rubble facets & cracked concrete texture (06_scrapyard_3_3.png!)
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
-        const hsh = hash2d(px, py, seed);
-        if (hsh > 234) buf.set(px, py, t.wallTopHi);
-        else if (hsh < 24) buf.set(px, py, t.wallTopDark);
+        const v = voronoi2d(px, py, 5.333, seed + 17, 3, 0.72);
+        if (v.edge < 0.14 && hash2d(px, py, seed + 3) > 105) {
+          buf.set(px, py, t.wallTopDark);
+        } else if (v.dy < -0.18 && v.edge < 0.28 && hash2d(px, py, seed + 9) > 130) {
+          buf.set(px, py, t.wallTopHi);
+        }
       }
     }
-    if (frame === 2 || frame === 3) {
-      const rx = (frame * 5 + 2) % 12;
-      const ry = 4 + ((frame * 3) % 8);
-      buf.rect(rx, ry, 2, 1, '#9c5a3a');
-      buf.set(rx, ry + 1, '#683822');
+    // Chipped concrete crack & rust scrap flecks matching 06_scrapyard_3_3.png
+    const rx = (frame * 5 + 2) % 11;
+    const ry = 3 + ((frame * 4) % 9);
+    buf.rect(rx, ry, 2, 2, '#9e5a3a');
+    buf.set(rx + 1, ry + 1, '#683620');
+    if (frame === 1 || frame === 3) {
+      buf.line(2, 10, 6, 12, '#585e66');
+      buf.set(3, 9, '#9da4ac');
     }
   } else if (t.pattern === 'caves' || t.pattern === 'cursed') {
-    // Solid muted royal purple (#44315e) with bumpy cave-rock facets & tiny glowing orange/magenta ember!
+    // True 2-tier raw amethyst rock (#7a4eb4) with crisp bumpy crystal facets (#8f66c4 / #5e3892) + glowing orange embers!
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
-        const hsh = hash2d(px >> 1, py >> 1, seed + 3);
-        const sub = (px & 1) + (py & 1);
-        if (hsh > 195 && sub === 0) buf.set(px, py, t.wallTopHi);
-        else if (hsh < 55 && sub === 2) buf.set(px, py, t.wallTopDark);
+        const v = voronoi2d(px, py, 5.333, seed + 7, 3, 0.7);
+        if (v.edge < 0.15) buf.set(px, py, t.wallTopDark);
+        else if (v.dy < -0.15 && v.d1 < 0.45) buf.set(px, py, t.wallTopHi);
       }
     }
-    if (frame === 2 || frame === 3) {
-      const ex = frame === 2 ? 5 : 10;
-      const ey = frame === 2 ? 7 : 10;
+    if (frame === 1 || frame === 3) {
+      const ex = frame === 1 ? 4 : 10;
+      const ey = frame === 1 ? 5 : 9;
       buf.rect(ex, ey, 2, 2, t.accent);
       buf.set(ex, ey, t.accent2);
     }
   } else if (t.pattern === 'frozen') {
-    // Solid cool silver-gray snow roof (#9da4a6) seamlessly tiling with minimal soft drift hints (ZERO horizontal stripes!)
+    // Cool silver-gray snow roof (#9da4a6) with fractured snow crevices & drifted ice chunks (10_frozen_5_1.png!)
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const hsh = hash2d(px, py, seed);
-        if (hsh > 246) buf.set(px, py, t.wallTopHi);
-        else if (hsh < 10) buf.set(px, py, t.wallTopDark);
+        if (hsh > 236) buf.set(px, py, t.wallTopHi);
+        else if (hsh < 18) buf.set(px, py, t.wallTopDark);
       }
     }
-    if (frame === 2) {
-      buf.line(4, 7, 8, 8, t.wallTopDark);
-      buf.set(6, 7, t.wallTopHi);
+    if (frame === 1 || frame === 3) {
+      // Crisp small fractured snow/ice crevasse V-notch
+      const fx = frame === 1 ? 4 : 9;
+      const fy = frame === 1 ? 5 : 10;
+      buf.line(fx, fy, fx + 3, fy + 1, '#7c868e');
+      buf.line(fx + 3, fy + 1, fx + 5, fy, '#7c868e');
+      buf.line(fx + 1, fy - 1, fx + 4, fy - 1, '#bcc4c8');
     }
   } else if (t.pattern === 'jungle') {
-    // Vibrant lush leaf-green canopy (#438428) with crisp pixel leaf clusters (#529834 / #346c1e) matching 12_jungle.png!
-    for (let py = 0; py < h; py++) {
-      for (let px = 0; px < w; px++) {
-        const hsh = hash2d(px, py, seed + 17);
-        const clump = ((px + (py >> 1) * 3) & 3);
-        if (clump === 0 && hsh > 110) buf.set(px, py, t.wallTopHi);
-        else if (clump === 2 && hsh < 130) buf.set(px, py, t.wallTopDark);
-      }
-    }
-    if (frame === 3) {
-      // Tiny sunlit leaf highlight cluster
-      buf.rect(5, 5, 2, 2, '#62ad3e');
-      buf.rect(10, 10, 2, 2, '#62ad3e');
+    // DENSE BUMPY SERRATED LEAFY CANOPY PIXEL CLUSTERS (#5eb228 / #438428 / #286416) matching 11b_levelup.png!!
+    // Layered organic 5x4 staggered leaf crowns so Jungle walls look genuinely leafy, never flat boxes!
+    const tufts: Array<[number, number]> = [
+      [2, 2], [9, 1], [14, 3],
+      [5, 6], [12, 7], [0, 8],
+      [3, 12], [10, 11], [15, 13],
+    ];
+    for (let i = 0; i < tufts.length; i++) {
+      const [bx, by] = tufts[i]!;
+      const tx = (bx + frame * 3) & 15;
+      const ty = (by + (frame & 1) * 2) & 15;
+      const wrapSet = (px: number, py: number, col: string): void => {
+        buf.set((px + 16) & 15, (py + 16) & 15, col);
+      };
+      // Shaded dark leaf underside
+      wrapSet(tx - 1, ty + 2, t.wallTopDark);
+      wrapSet(tx, ty + 2, t.wallTopDark);
+      wrapSet(tx + 1, ty + 2, t.wallTopDark);
+      wrapSet(tx + 2, ty + 1, t.wallTopDark);
+      // Mid-canopy green leaf body
+      wrapSet(tx - 1, ty + 1, '#3a7a22');
+      wrapSet(tx, ty + 1, t.wallTop);
+      wrapSet(tx + 1, ty + 1, t.wallTop);
+      wrapSet(tx - 1, ty, t.wallTop);
+      wrapSet(tx + 2, ty, '#3a7a22');
+      // Vibrant sunlit lime-green leaf crown pixels
+      wrapSet(tx, ty, t.wallTopHi);
+      wrapSet(tx + 1, ty, t.wallTopHi);
+      wrapSet(tx, ty - 1, (i + frame) % 3 === 0 ? '#72c632' : t.wallTopHi);
     }
   } else if (t.pattern === 'labs') {
-    // Deep dark lab teal (#0d1919) with crisp subtle 1px #142829 panel seam matching 14_labs_6_1.png!
+    // True 2-tier raw dark lab teal (#12333b) with crisp subtle #1d464f 16px panel grid seam matching 14_labs_6_1.png!
     for (let px = 0; px < w; px++) buf.set(px, 0, t.wallTopHi);
     for (let py = 0; py < h; py++) buf.set(0, py, t.wallTopHi);
     if (frame === 2 || frame === 3) {
-      // Dark recessed ceiling panel / tiny lab telemetry wires
-      buf.rect(3, 3, 10, 9, '#102022');
-      buf.rect(4, 5, 8, 1, '#183033');
-      buf.rect(4, 8, 8, 1, '#183033');
+      // Recessed lab equipment ceiling vent + tiny red/cyan monitor pixels
+      buf.rect(3, 3, 10, 9, '#0e282e');
+      buf.rect(4, 5, 8, 1, '#1d464f');
+      buf.rect(4, 8, 8, 1, '#1d464f');
       if (frame === 3) {
-        buf.set(11, 5, '#d83838');
-        buf.set(11, 8, '#42d4e8');
+        buf.set(11, 5, '#e83838');
+        buf.set(11, 8, '#42e0f0');
       }
     }
   } else if (t.pattern === 'palace') {
-    // Solid dusty crimson-terracotta (#64282c) with whisper-subtle weathered brick seams (ZERO blue bricks!)
+    // Dusty crimson-terracotta (#64282c) with weathered brick-course relief & chipped stone rim pixels (15_palace_7_1.png!)
     for (let py = 0; py < h; py++) {
       const isMortarRow = py === 7 || py === 15;
       const ox = py >= 8 ? 4 : 0;
       for (let px = 0; px < w; px++) {
         const isJoint = ((px + ox) & 7) === 0;
+        const hsh = hash2d(px, py, seed);
         if (isMortarRow || isJoint) {
-          if (hash2d(px, py, seed) > 105) buf.set(px, py, '#562024');
+          if (hsh > 75) buf.set(px, py, t.wallTopDark);
         } else if (py === 0 || py === 8) {
-          if (hash2d(px, py, seed + 5) > 175) buf.set(px, py, '#6e3034');
+          if (hsh > 120) buf.set(px, py, t.wallTopHi);
+        } else if (hsh > 235) {
+          buf.set(px, py, '#723337');
+        } else if (hsh < 14) {
+          buf.set(px, py, '#521e22');
         }
       }
+    }
+    if (frame >= 2) {
+      // Subtle chipped brick corner relief
+      buf.rect(4 + frame * 2, 4, 2, 1, '#48181c');
+      buf.set(4 + frame * 2, 3, t.wallTopHi);
     }
   } else if (t.pattern === 'sewers' || t.pattern === 'pizza') {
     // Solid mossy dark olive (#344030 / #384434) with subtle damp stone speckling
@@ -917,48 +970,56 @@ function drawBiomeWallBot16(
   buf.rect(0, 0, w, h, t.wallBot);
 
   if (t.pattern === 'desert' || t.pattern === 'campfire') {
-    // Stratified dusty sandstone-tan cliff face (#847058, #6d5b47, #584838) with organic strata & bottom crevice!
+    // Stratified dusty sandstone cliff with crisp weathered rocky overhang notches & vertical fissures (04_desert_1_1.png!)
     buf.rect(0, 0, w, 9, t.wallBotHi);
     buf.rect(0, 9, w, 4, t.wallBot);
     buf.rect(0, 13, w, 2, t.wallBotDark);
     buf.rect(0, 15, w, 1, t.wallOut);
-    // Vertical eroded sandstone rock striations in visible band y=8..14
+    // Weathered sandstone rim overhang notches at y=8..9 + organic vertical rock fissures
     for (let px = 0; px < w; px++) {
       const hsh = hash2d(px, frame, seed);
-      if (hsh > 190) {
+      const notch = (px * 3 + frame * 5) % 5;
+      if (notch === 0 || notch === 2) {
+        buf.set(px, 8, t.wallTopHi);
+        buf.set(px, 9, t.wallTop);
+      } else if (notch === 1) {
         buf.rect(px, 8, 1, 5, t.wallBotDark);
-      } else if (hsh < 64) {
-        buf.rect(px, 8, 1, 3, t.wallTop);
+        buf.set(px, 13, t.wallOut);
+      } else {
+        buf.set(px, 8, t.wallBotHi);
       }
-      if (hsh % 5 === 0) {
-        buf.set(px, 11 + (hsh & 1), t.wallBotHi);
+      if (hsh > 205) {
+        buf.rect(px, 10, 1, 4, t.wallBotDark);
+      } else if (hsh < 55) {
+        buf.set(px, 11, t.wallBotHi);
+        buf.set(px, 12, t.wallBot);
       }
     }
   } else if (t.pattern === 'oasis') {
-    // Rich dark kelp/seaweed cliff edge (#1f6454, #15483d) hanging cleanly over the bright water!
+    // Thick lush dark sea-green kelp cliff overhang (#1a5c4a / #103e32) hanging over luminous mint water!
     buf.rect(0, 0, w, 8, t.wallTopDark);
     buf.rect(0, 8, w, 4, t.wallBot);
     buf.rect(0, 12, w, 3, t.wallBotDark);
     buf.rect(0, 15, w, 1, t.wallOut);
-    // Serrated hanging kelp fronds dipping down over the cliff face
+    // Dense layered dark-emerald hanging seaweed curtains across y=8..14
     for (let px = 0; px < w; px++) {
-      const drop = 2 + (hash2d(px, frame, seed) % 5);
-      const frondCol = (px + frame) % 3 === 0 ? '#369c46' : '#26784c';
+      const drop = 3 + (hash2d(px, frame, seed) % 4);
+      const frondCol = (px + frame) % 3 === 0 ? '#329848' : (px & 1) === 0 ? '#1e6b4c' : '#16523e';
       buf.rect(px, 8, 1, Math.min(6, drop), frondCol);
-      if (drop >= 5) buf.set(px, 8 + drop, '#144438');
+      buf.set(px, 8, (px + frame) % 2 === 0 ? '#3eb054' : '#267c52');
+      if (drop >= 5) buf.set(px, 8 + drop, '#0e362a');
     }
   } else if (t.pattern === 'sewers' || t.pattern === 'pizza') {
     // Mossy damp sewer bricks (#263022, #1d261a) with vibrant green slime drips!
     buf.rect(0, 8, w, 4, t.wallBot);
     buf.rect(0, 12, w, 3, t.wallBotDark);
-    buf.rect(0, 11, w, 1, t.wallOut); // horizontal mortar course
+    buf.rect(0, 11, w, 1, t.wallOut);
     buf.rect(0, 15, w, 1, t.wallOut);
     for (let bx = 0; bx < w; bx += 8) {
       buf.rect(bx, 8, 1, 3, t.wallOut);
       buf.rect((bx + 4) & 15, 12, 1, 3, t.wallOut);
       buf.rect(bx + 1, 8, 6, 1, t.wallBotHi);
     }
-    // Dripping green sewer slime on variants 1..3
     if (frame >= 1) {
       const sx = (frame * 5 + 2) % 12;
       buf.rect(sx, 8, 2, 4 + (frame & 1), t.accent);
@@ -966,107 +1027,109 @@ function drawBiomeWallBot16(
       buf.set(sx + 1, 13, '#3b7a2a');
     }
   } else if (t.pattern === 'scrapyard') {
-    // Craggy cool slate-gray concrete rubble cliff face (#646a72, #4e535a) matching 06_scrapyard_3_3.png!
+    // Jagged craggy concrete rubble & carved boulder cliff face (#646a72, #4a4f57) matching 06_scrapyard_3_3.png!
     buf.rect(0, 0, w, 9, t.wallBotHi);
     buf.rect(0, 9, w, 4, t.wallBot);
     buf.rect(0, 13, w, 2, t.wallBotDark);
     buf.rect(0, 15, w, 1, t.wallOut);
-    // Chunky staggered concrete/rubble stones in visible band y=8..14
-    const blocks: Array<[number, number, number, number]> = [
-      [0, 8, 5, 3], [6, 8, 6, 4], [13, 8, 3, 3],
-      [2, 11, 5, 3], [9, 12, 6, 3],
+    // Jagged rocky overhang boulders & deep irregular fissures in y=8..14
+    const boulders: Array<[number, number, number, number]> = [
+      [0, 8, 4, 4], [5, 8, 5, 3], [11, 8, 5, 4],
+      [2, 11, 5, 3], [8, 11, 6, 4],
     ];
-    for (const [bx, by, bw, bh] of blocks) {
+    for (let i = 0; i < boulders.length; i++) {
+      const [bx, by, bw, bh] = boulders[i]!;
       const ox = (bx + frame * 3) & 15;
-      buf.rect(ox, by, Math.min(bw, w - ox), bh, t.wallBotHi);
-      buf.rect(ox, by + bh - 1, Math.min(bw, w - ox), 1, t.wallBotDark);
-      buf.set(ox, by, t.wallTopHi);
+      const cw = Math.min(bw, w - ox);
+      buf.rect(ox, by, cw, bh, i % 2 === 0 ? '#787f88' : '#646a72');
+      buf.rect(ox, by, Math.max(1, cw - 1), 1, '#989ea6');
+      buf.rect(ox, by + bh - 1, cw, 1, '#3e434a');
+      if (ox > 0) buf.rect(ox - 1, by, 1, bh, '#42474f');
     }
-    if (frame === 1 || frame === 3) {
-      buf.rect(4 + frame * 2, 10, 2, 1, '#9a5436'); // subtle rust chip
-    }
+    // Warm rust scrap flecks
+    buf.rect((4 + frame * 3) % 13, 10, 2, 2, '#9e5636');
+    buf.set((5 + frame * 3) % 13, 11, '#683620');
   } else if (t.pattern === 'caves' || t.pattern === 'cursed') {
-    // Deep amethyst vertical rock cliff (#312247, #251838) dotted with TINY GLOWING ORANGE EMBERS (#ff8c28)!
+    // True 2-tier raw faceted amethyst rock cliff (#563286) dotted with CRISP GLOWING ORANGE EMBERS (#ff8c28)!
     buf.rect(0, 0, w, 8, t.wallTopDark);
     buf.rect(0, 8, w, 4, t.wallBot);
     buf.rect(0, 12, w, 3, t.wallBotDark);
     buf.rect(0, 15, w, 1, t.wallOut);
-    // Vertical crystalline rock ribs
+    // Chiseled vertical amethyst facets + jagged rim
     for (let px = 0; px < w; px += 4) {
       buf.rect(px, 8, 1, 7, t.wallBotDark);
-      buf.rect(px + 1, 8, 1, 4, t.wallBotHi);
+      buf.rect(px + 1, 8, 2, 3, t.wallBotHi);
+      buf.set(px + 1, 8, t.wallTopHi);
     }
-    // Iconic tiny glowing orange/amber embers on cliff face matching 08_caves_4_1.png!
     if (frame === 1 || frame === 3) {
       const ex = frame === 1 ? 4 : 11;
       buf.rect(ex, 10, 2, 2, t.accent);
       buf.set(ex, 10, t.accent2);
     }
     if (frame === 2) {
-      buf.set(8, 12, t.accent);
-      buf.set(8, 11, t.accent2);
+      buf.rect(7, 11, 2, 2, t.accent);
+      buf.set(7, 11, t.accent2);
     }
   } else if (t.pattern === 'frozen') {
-    // Fractured icy-slate cliff face (#78828a, #5d6872) with crisp snow cornice & icicles!
-    buf.rect(0, 0, w, 9, '#b8c0c6');
+    // Crisp jagged fractured icicle & overhanging snow cornice cliff face (10_frozen_5_1 / 13_frozen_5_3!)
+    buf.rect(0, 0, w, 9, '#c4ccd2');
     buf.rect(0, 9, w, 3, t.wallBot);
     buf.rect(0, 12, w, 3, t.wallBotDark);
     buf.rect(0, 15, w, 1, t.wallOut);
-    // Crisp white snow overhang + vertical ice fractures matching 10_frozen_5_1 / 13_frozen_5_3
     for (let px = 0; px < w; px++) {
-      const icicle = (px * 5 + frame * 3) % 4;
-      buf.rect(px, 8, 1, icicle === 0 ? 3 : icicle === 1 ? 2 : 1, icicle === 0 ? '#dce4e8' : '#b8c4cc');
+      const tooth = (px * 5 + frame * 3) % 5;
+      const icicleH = tooth === 0 ? 4 : tooth === 1 ? 3 : tooth === 2 ? 2 : 1;
+      buf.rect(px, 8, 1, icicleH, tooth === 0 ? '#eef4f8' : tooth === 1 ? '#d4dee6' : '#b8c4cc');
+      if (tooth === 0) buf.set(px, 8 + icicleH, '#88b4d0'); // icy crystal tip
       if ((px & 3) === 2) buf.rect(px, 10, 1, 5, t.wallOut);
     }
   } else if (t.pattern === 'jungle') {
-    // Serrated dark-green foliage overhang (#2b5c18, #1e4210) over earthy roots!
+    // Dense bumpy serrated overhanging foliage border (#5eb228/#438428/#286416) over dark jungle roots (11b_levelup.png!)
     buf.rect(0, 0, w, 9, t.wallBotHi);
-    buf.rect(0, 9, w, 4, '#3d301a');
-    buf.rect(0, 13, w, 2, '#2a2010');
-    buf.rect(0, 15, w, 1, '#1a140a');
+    buf.rect(0, 9, w, 4, '#3a2d18');
+    buf.rect(0, 13, w, 2, '#281e10');
+    buf.rect(0, 15, w, 1, '#181209');
     for (let px = 0; px < w; px++) {
-      const leafDrop = 2 + (hash2d(px, frame, seed + 7) % 4);
+      const leafDrop = 3 + (hash2d(px, frame, seed + 7) % 4);
       buf.rect(px, 8, 1, leafDrop, (px + frame) % 2 === 0 ? t.wallBot : t.wallBotDark);
-      if (leafDrop >= 4) buf.set(px, 8, t.wallBotHi);
+      buf.set(px, 8, (px + frame) % 3 === 0 ? '#5eb228' : '#438428');
+      if (leafDrop >= 5) buf.set(px, 8 + leafDrop - 1, '#1a440d');
     }
   } else if (t.pattern === 'labs') {
-    // Iconic dark lab bulkhead (#15282c, #101e22) + BRIGHT GLOWING LIME-GREEN HORIZONTAL PIPE STRIP (#5ce040) matching 14_labs_6_1.png!!
+    // True 2-tier raw dark lab bulkhead (#18343a) + BRIGHT GLOWING #5ce040 LIME PIPE STRIP + cyan/red monitor LEDs!
     buf.rect(0, 0, w, 8, t.wallTop);
     buf.rect(0, 8, w, 7, t.wallBot);
     buf.rect(0, 15, w, 1, t.wallOut);
-    // Vertical panel seam
     buf.rect(0, 8, 1, 7, t.wallBotDark);
     buf.rect(1, 8, 1, 7, t.wallBotHi);
     // BRIGHT GLOWING LIME-GREEN HORIZONTAL PIPE STRIP across y=9..10!
-    buf.rect(0, 9, w, 1, '#9cff6e');
+    buf.rect(0, 9, w, 1, '#b2ff80');
     buf.rect(0, 10, w, 1, '#5ce040');
-    buf.rect(0, 11, w, 1, '#1a4a24');
-    // Lower dark metal vent + tiny cyan/red wall monitor indicator dots!
+    buf.rect(0, 11, w, 1, '#1c5628');
+    // Lower dark metal vent + vivid cyan/red monitor LEDs!
     buf.rect(2, 12, 12, 2, t.wallBotDark);
     if (frame === 1 || frame === 3) {
-      buf.set(5, 13, '#42d4e8');
-      buf.set(10, 13, '#e83838');
+      buf.set(5, 13, '#42e0f0');
+      buf.set(10, 13, '#f03838');
     } else if (frame === 2) {
       buf.set(8, 13, '#5ce040');
     }
   } else if (t.pattern === 'palace') {
-    // Warm weathered terracotta brick courses (#703a3b / #5c2528 / #42181c) matching 15_palace_7_1.png!
+    // Weathered terracotta brick courses with chipped stone rim relief (#7a3e40 / #5c2528 / #40161a) matching 15_palace_7_1.png!
     buf.rect(0, 0, w, 8, t.wallTop);
     buf.rect(0, 8, w, 7, t.wallBot);
-    buf.rect(0, 11, w, 1, t.wallBotDark); // mortar line between upper & lower visible brick courses
+    buf.rect(0, 11, w, 1, t.wallBotDark);
     buf.rect(0, 15, w, 1, t.wallOut);
     for (let bx = 0; bx < w; bx += 8) {
-      // Upper course (y=8..10)
       buf.rect(bx, 8, 1, 3, t.wallBotDark);
-      buf.rect(bx + 1, 8, 7, 1, t.wallBotHi);
-      // Lower staggered course (y=12..14)
+      buf.rect(bx + 1, 8, 6, 1, t.wallBotHi);
+      if ((bx + frame * 4) % 16 === 0) buf.set(bx + 3, 8, '#40161a'); // chipped stone notch
       const lx = (bx + 4) & 15;
       buf.rect(lx, 12, 1, 3, t.wallBotDark);
       buf.rect((lx + 1) & 15, 12, 3, 1, t.wallBotHi);
     }
     if (frame === 3) {
-      // Subtle glowing rad moss fleck between palace bricks (visible in 15_palace_7_1.png!)
-      buf.rect(6, 11, 2, 1, '#58e048');
+      buf.rect(6, 11, 2, 1, '#58f048');
       buf.set(7, 12, '#2d7a24');
     }
   } else {
@@ -1878,27 +1941,28 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
     buf.flush(ctx, x, y);
   });
 
-  // CRISP 1x PALACE PILLAR (`sprPalacePillar` terracotta + neon-green rad rings matching 17_throne_hall.png!)
-  // & standard stone `sprPillar`
+  // CRISP 1x FLUTED CLASSICAL PALACE COLUMN (`sprPalacePillar` terracotta-brick & weathered bronze matching steam_gens.png!)
+  // ZERO neon-green stripes!
   const drawPillar1x = (ctx: DrawCtx, x: number, y: number, w: number, h: number, palace: boolean): void => {
     const buf = new PxCanvas(w, h);
     if (palace) {
-      // Exact 17_throne_hall.png terracotta brick pillar with glowing neon-green rad rings & top emblem!
-      buf.rect(4, 3, 10, 22, '#64282c');
-      buf.rect(5, 3, 4, 22, '#78383c');
-      buf.rect(11, 3, 3, 22, '#481a1e');
-      // Top circular cap with glowing green rad rune
-      buf.rect(5, 2, 8, 5, '#7c3c40');
-      buf.rect(7, 3, 4, 3, '#48e840');
-      buf.rect(8, 4, 2, 1, '#c8ff98');
-      // 3 glowing neon-green horizontal rings down the terracotta shaft
-      buf.rect(4, 9, 10, 2, '#48e840');
-      buf.rect(5, 9, 5, 1, '#b8ff88');
-      buf.rect(4, 15, 10, 2, '#48e840');
-      buf.rect(5, 15, 5, 1, '#b8ff88');
-      buf.rect(4, 21, 10, 2, '#3cc438');
-      // Ground base lip
-      buf.rect(3, 24, 12, 2, '#4a1b1f');
+      // Stepped classical terracotta-bronze base plinth
+      buf.ellipse(9, 24, 6, 2, '#4a1c20');
+      buf.ellipse(9, 23, 6, 2, '#7c3c3c');
+      buf.rect(4, 22, 10, 1, '#a86050');
+      // Fluted classical cylindrical shaft (#7e3c3c / #5c2628 / #a05848 rim)
+      buf.rect(4, 8, 10, 15, '#7e3c3c');
+      buf.rect(5, 8, 2, 15, '#a05848'); // sunlit left flute
+      buf.rect(7, 8, 1, 15, '#5c2628'); // flute groove
+      buf.rect(8, 8, 2, 15, '#8c4844'); // center flute
+      buf.rect(10, 8, 1, 15, '#522024'); // flute groove
+      buf.rect(11, 8, 2, 15, '#682e30'); // right flute
+      buf.rect(13, 8, 1, 15, '#441a1e'); // deep right shadow
+      // Rounded overhanging classical column capital + subtle top masonry crack
+      buf.ellipse(9, 6, 6, 3, '#5c2628');
+      buf.ellipse(9, 5, 6, 3, '#8a4642');
+      buf.rect(5, 3, 7, 1, '#b26c5a');
+      buf.line(7, 4, 11, 6, '#4c1c20'); // weathered top stone crack
     } else {
       // Weathered stone column
       buf.rect(3, 21, 12, 5, '#686274');
@@ -2171,26 +2235,26 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   b.addSprite('sprCoral', 18, 18, 9, 12, 1, (ctx, x, y, w, h) => {
     const buf = new PxCanvas(w, h);
     buf.grid(2, 2, [
-      '......rr......',
-      '..pp..rR..cc..',
-      '.pPp..rR..cCc.',
-      '.pPpr.rR..cC..',
-      '..pPrrRRrcCc..',
-      '...rRRRRRRc...',
-      '..prRRrRRrcp..',
-      '..pPrrRRrPPp..',
+      '......RR......',
+      '..PP..rR..CC..',
+      '.pPP..rR..cCC.',
+      '.pPPr.rR..cC..',
+      '..pPrrRRrcCC..',
+      '..prRRRRRRcc..',
+      '.pPrRRrRRrcPp.',
+      '.pPprrRRrPPpp.',
+      '..rrrRRRRrrr..',
       '...rrRRRRrr...',
-      '....rRRRRr....',
       '....ddRRdd....',
       '.....dddd.....',
     ], {
-      r: '#d8324c',
-      R: '#ff5c74',
-      p: '#e85098',
-      P: '#ff90c4',
-      c: '#28a8b8',
-      C: '#64eef4',
-      d: '#7c1a30',
+      r: '#e62e4c',
+      R: '#ff5e78',
+      p: '#f04498',
+      P: '#ff96cc',
+      c: '#20b8ca',
+      C: '#6cf6ff',
+      d: '#861830',
     });
     buf.outline(INK);
     buf.flush(ctx, x, y);
@@ -2307,8 +2371,8 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   });
   b.addAlias('sprThroneCorpse', 'sprThroneCorpseIdle');
 
-  // 10. MASSIVE STEEL & GLOWING-GREEN THRONE HALL GENERATOR (56x56, matching 17_throne_hall.png!!)
-  // Centered origin (28, 28) so East generators with flipX:true cleanly mirror their 3 green pipes inward!
+  // 10. MONUMENTAL 3D CYLINDRICAL BOILER TURBINE GENERATOR (80x88, centered origin 40,44, matching steam_gens.png!!)
+  // 3 thick curved glowing neon-green intake pipes sit on the right side (East generators with flipX:true mirror them left!)
   const drawGenerator1x = (
     ctx: DrawCtx,
     x: number,
@@ -2320,80 +2384,127 @@ export function registerFallbackWorld(b: FallbackAtlasBuilder): void {
   ): void => {
     const buf = new PxCanvas(w, h);
     if (state === 'hurt') {
-      buf.rect(6, 6, 38, 44, '#ffffff');
-      buf.rect(42, 12, 10, 32, '#ffffff');
+      buf.ellipse(36, 16, 23, 12, '#ffffff');
+      buf.rect(10, 12, 52, 70, '#ffffff');
+      buf.rect(62, 24, 14, 48, '#ffffff');
       buf.outline(INK);
       buf.flush(ctx, x, y);
       return;
     }
     if (state === 'dead') {
-      // Shattered smoking terracotta & steel generator base
-      buf.rect(6, 12, 36, 36, '#4c2226');
-      buf.rect(10, 16, 28, 26, '#262a30');
-      buf.rect(14, 20, 20, 16, '#14161a');
-      buf.ellipse(24, 28, 6, 4, '#24662c');
-      buf.rect(42, 16, 6, 4, '#363c44');
-      buf.rect(42, 26, 5, 4, '#363c44');
-      buf.rect(42, 36, 6, 4, '#363c44');
+      // Shattered smoking terracotta & charred steel turbine husk
+      buf.rect(10, 20, 52, 60, '#4a1b1f');
+      buf.rect(14, 24, 44, 50, '#2a2e34');
+      buf.ellipse(36, 54, 18, 16, '#181b20');
+      buf.ellipse(36, 54, 9, 7, '#225e28');
+      buf.rect(62, 28, 8, 6, '#3a4048');
+      buf.rect(62, 44, 7, 6, '#3a4048');
+      buf.rect(62, 60, 8, 6, '#3a4048');
       buf.outline(INK);
       buf.flush(ctx, x, y);
       return;
     }
 
     const pulse = (f & 1) === 0;
-    const radBright = pulse ? '#66ff54' : '#44dc3a';
-    const radCore = pulse ? '#d4ffaa' : '#9cff78';
+    const radBright = pulse ? '#58f040' : '#40d630';
+    const radCore = pulse ? '#c8ff98' : '#96ff70';
+    const radDark = '#207222';
 
-    // Heavy terracotta-brick mounting plinth matching Palace architecture (17_throne_hall.png!)
-    buf.rect(5, 6, 38, 44, '#6c2e32');
-    buf.rect(6, 6, 36, 2, '#8a4448');
-    buf.rect(5, 46, 38, 4, '#481a1e');
+    // 1. Dark weathered terracotta-red structural chassis & mounting base (#6a282c / #4a181c)
+    buf.rect(9, 12, 54, 68, '#6a282c');
+    buf.rect(10, 12, 52, 3, '#883e42');
+    buf.rect(9, 74, 54, 7, '#4a181c');
+    buf.rect(7, 77, 58, 5, '#5a2024');
+    buf.rect(7, 81, 58, 2, '#3a1216');
+    // Glowing neon-green circuit trim along lower chassis apron (left & right of center diamond!)
+    buf.rect(10, 77, 17, 2, radBright);
+    buf.rect(45, 77, 17, 2, radBright);
+    buf.set(14, 76, radCore);
+    buf.set(22, 76, radCore);
+    buf.set(50, 76, radCore);
+    buf.set(58, 76, radCore);
 
-    // 3 thick glowing green conduit pipes jutting out right side (mirrors left when flipX=true!)
-    for (const py of [11, 24, 37]) {
-      buf.rect(41, py, 10, 8, '#3a8c38');
-      buf.rect(42, py + 1, 8, 2, radBright);
-      buf.rect(42, py + 5, 8, 2, '#225824');
-      // Metallic elbow collar cap
-      buf.rect(48, py - 1, 4, 10, '#88949e');
-      buf.rect(49, py, 2, 8, '#b4c0ca');
+    // 2. 3 THICK CURVED GLOWING NEON-GREEN SIDE INTAKE PIPES (x=62..76, mirror cleanly when flipX=true!)
+    for (const py of [25, 42, 59]) {
+      // Pipe elbow curving right and down into a bolted metallic steel flange
+      buf.rect(62, py, 10, 8, radDark);
+      buf.rect(62, py + 1, 11, 5, radBright);
+      buf.rect(63, py + 1, 9, 2, radCore);
+      buf.rect(69, py + 2, 6, 9, radBright);
+      buf.rect(70, py + 3, 2, 7, radCore);
+      buf.rect(73, py + 3, 2, 8, radDark);
+      // Bolted metallic steel pipe collar cap at bottom of elbow
+      buf.rect(67, py + 10, 10, 4, '#646c74');
+      buf.rect(68, py + 10, 8, 2, '#9aa4ae');
+      buf.rect(69, py + 10, 4, 1, '#c8d2da');
     }
 
-    // Massive arched ribbed steel reactor turbine cylinder matching 17_throne_hall.png!
-    buf.ellipse(24, 24, 15, 17, '#646e78');
-    buf.ellipse(24, 24, 13, 15, '#8c98a2');
-    buf.ellipse(24, 24, 10, 12, '#a6b2bc');
-    buf.ellipse(24, 25, 7, 9, '#7a8690');
-    // Concentric curved metallic turbine grooves & weathering rust streaks
-    buf.pixelRing(24, 24, 13, '#525c66');
-    buf.pixelRing(24, 24, 9, '#58626c');
-    buf.rect(14, 16, 2, 16, '#cfd8e0'); // crisp top-left metallic sheen
-    buf.rect(20, 14, 5, 2, '#9a4c36'); // rust streak
-    buf.rect(28, 22, 4, 3, '#8e4430'); // rust streak
-    buf.rect(14, 29, 4, 2, '#8e4430');
+    // 3. Towering upper cylindrical steel boiler drum (y=4..42, x=15..57)
+    buf.ellipse(36, 15, 21, 10, '#646c74');
+    buf.ellipse(36, 14, 20, 9, '#8a929a');
+    buf.ellipse(36, 12, 16, 6, '#aeb6be');
+    buf.rect(15, 14, 42, 30, '#8a929a');
+    buf.rect(17, 14, 10, 28, '#a4acb4'); // sunlit left cylindrical curve
+    buf.rect(49, 14, 8, 28, '#646c74');  // right cylindrical curve shadow
+    buf.rect(20, 15, 3, 26, '#c8d0d8');  // crisp metallic highlight streak
+    // Rust patina weathering streaks across boiler steel
+    buf.rect(28, 12, 6, 3, '#8e4836');
+    buf.rect(42, 17, 7, 3, '#9a523c');
+    buf.rect(19, 34, 6, 3, '#864232');
+    buf.rect(46, 33, 6, 4, '#864232');
 
-    // Front glowing neon-green hexagonal rad core window & emblem plate
-    buf.rect(17, 36, 14, 12, '#68747e');
-    buf.rect(18, 37, 12, 10, '#96a4ae');
-    buf.rect(20, 39, 8, 6, '#1f4e22');
-    buf.rect(21, 40, 6, 4, radBright);
-    buf.rect(23, 41, 2, 2, radCore);
+    // 4. Glowing neon-green horizontal rad tubes across upper boiler casing + 6 flanking condenser bulbs!
+    for (const ty of [17, 27]) {
+      buf.rect(17, ty, 38, 4, radDark);
+      buf.rect(18, ty + 1, 36, 2, radBright);
+      buf.rect(20, ty + 1, 28, 1, radCore);
+    }
+    // 3 left + 3 right glowing green condenser bulbs mounted on terracotta stanchions
+    for (const bx of [11, 56]) {
+      for (const by of [9, 19, 29]) {
+        buf.rect(bx, by, 5, 6, '#3c444c');
+        buf.rect(bx + 1, by + 1, 3, 4, radBright);
+        buf.set(bx + 1, by + 1, radCore);
+      }
+    }
 
-    // Top glowing green power cell vent
-    buf.rect(18, 10, 12, 5, '#1e4a22');
-    buf.rect(19, 11, 10, 3, radBright);
-    buf.rect(21, 11, 6, 1, radCore);
+    // 5. Lower front-facing concentric 3D ribbed steel turbine drum (y=36..74, x=12..60)
+    buf.ellipse(36, 56, 24, 20, '#505860');
+    buf.ellipse(36, 55, 22, 18, '#8a929a');
+    buf.ellipse(36, 55, 18, 15, '#646c74');
+    buf.ellipse(36, 56, 15, 12, '#9ca4ac');
+    buf.ellipse(36, 57, 11, 9, '#646c74');
+    buf.ellipse(36, 58, 7, 6, '#8a929a');
+    // Vertical steel arch ribs & dark recessed turbine channels
+    for (let rx = 18; rx <= 54; rx += 6) {
+      buf.rect(rx, 43, 1, 24, '#444c54');
+      buf.rect(rx + 1, 44, 1, 22, '#b8c0c8');
+    }
+    // Weathered rust patina along turbine curve
+    buf.rect(21, 44, 5, 4, '#924a38');
+    buf.rect(44, 46, 6, 5, '#8c4434');
+    buf.rect(48, 58, 4, 4, '#843e30');
+
+    // 6. Glowing emerald rune diamond housing at bottom center (x=28..44, y=58..77)
+    buf.rect(28, 59, 16, 18, '#586068');
+    buf.rect(29, 60, 14, 16, '#8a949e');
+    buf.rect(30, 60, 12, 2, '#bcc6ce');
+    // Emerald diamond core
+    buf.poly([[36, 62], [42, 68], [36, 74], [30, 68]], radDark);
+    buf.poly([[36, 63], [41, 68], [36, 73], [31, 68]], radBright);
+    buf.poly([[36, 65], [39, 68], [36, 71], [33, 68]], radCore);
+    buf.rect(35, 67, 2, 2, '#227224');
 
     buf.outline(INK);
     buf.flush(ctx, x, y);
   };
-  b.addSprite('sprBigGenerator', 56, 56, 28, 28, 2, (ctx, x, y, w, h, f) =>
+  b.addSprite('sprBigGenerator', 80, 88, 40, 44, 2, (ctx, x, y, w, h, f) =>
     drawGenerator1x(ctx, x, y, w, h, f, 'idle'),
   );
-  b.addSprite('sprBigGeneratorHurt', 56, 56, 28, 28, 1, (ctx, x, y, w, h) =>
+  b.addSprite('sprBigGeneratorHurt', 80, 88, 40, 44, 1, (ctx, x, y, w, h) =>
     drawGenerator1x(ctx, x, y, w, h, 0, 'hurt'),
   );
-  b.addSprite('sprBigGeneratorDead', 56, 56, 28, 28, 1, (ctx, x, y, w, h) =>
+  b.addSprite('sprBigGeneratorDead', 80, 88, 40, 44, 1, (ctx, x, y, w, h) =>
     drawGenerator1x(ctx, x, y, w, h, 0, 'dead'),
   );
   b.addAlias('sprThroneGenerator', 'sprBigGenerator');
