@@ -701,6 +701,7 @@ export class GameApp {
 
     // Ensure hit regions are populated for this screen before sampling menu input
     if (this.menus.getHitRegions().length === 0) {
+      this.applyHiBitFrameTransform(width, height);
       this.menus.render(this.ctx, menuCtx);
     }
 
@@ -736,6 +737,7 @@ export class GameApp {
         curSize.height,
       );
     } else {
+      this.applyHiBitFrameTransform(curSize.width, curSize.height);
       const latestGp = this.input.getGamepadInfo();
       const curInputMode = this.input.getInputMode();
       if (this.simState && this.shouldRenderWorldBehindScreen(this.screen)) {
@@ -858,6 +860,15 @@ export class GameApp {
     return false;
   }
 
+  private applyHiBitFrameTransform(logicalW: number, logicalH: number): void {
+    if (typeof this.ctx.setTransform === 'function') {
+      const sx = logicalW > 0 ? this.canvas.width / logicalW : 1;
+      const sy = logicalH > 0 ? this.canvas.height / logicalH : 1;
+      this.ctx.setTransform(sx, 0, 0, sy, 0, 0);
+    }
+    this.ctx.imageSmoothingEnabled = false;
+  }
+
   private renderPlayingFrame(
     state: SimState,
     renderSettings: RenderSettings,
@@ -866,6 +877,7 @@ export class GameApp {
     width: number,
     height: number,
   ): void {
+    this.applyHiBitFrameTransform(width, height);
     const inputMode = this.input.getInputMode();
     const gpFamily = this.input.getGamepadInfo().family;
     this.renderWorldWithMode(state, renderSettings, interpAlpha, pointer, inputMode, gpFamily);

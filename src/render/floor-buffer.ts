@@ -69,6 +69,7 @@ export class FloorBuffer {
   private mapWidth = 0;
   private mapHeight = 0;
   private tileSize = TILE_SIZE;
+  private pixelScale = 2;
   private lastTiles: Uint8Array | null = null;
   private bakedDecalCount = 0;
 
@@ -87,6 +88,10 @@ export class FloorBuffer {
 
   getCanvas(): FloorCanvas | null {
     return this.canvas;
+  }
+
+  getPixelScale(): number {
+    return this.pixelScale;
   }
 
   getDimensions(): { width: number; height: number } {
@@ -128,8 +133,12 @@ export class FloorBuffer {
     this.bakedDecalCount = 0;
     this.lastTiles = new Uint8Array(map.tiles);
 
-    const pixelW = Math.max(1, this.mapWidth * this.tileSize);
-    const pixelH = Math.max(1, this.mapHeight * this.tileSize);
+    const logicalW = Math.max(1, this.mapWidth * this.tileSize);
+    const logicalH = Math.max(1, this.mapHeight * this.tileSize);
+    // Use crisp 2x Hi-Bit backing scale whenever the map fits comfortably within 4096px texture bounds
+    const desiredScale = logicalW * 2 <= 4096 && logicalH * 2 <= 4096 ? 2 : 1;
+    const pixelW = logicalW * desiredScale;
+    const pixelH = logicalH * desiredScale;
 
     if (!this.canvas || this.canvas.width !== pixelW || this.canvas.height !== pixelH) {
       this.canvas = createOffscreenCanvas(pixelW, pixelH);
@@ -138,13 +147,22 @@ export class FloorBuffer {
         : null;
     }
 
-    if (!this.ctx) return;
+    if (!this.ctx) {
+      this.pixelScale = 1;
+      return;
+    }
+    if (typeof this.ctx.setTransform === 'function') {
+      this.pixelScale = desiredScale;
+      this.ctx.setTransform(desiredScale, 0, 0, desiredScale, 0, 0);
+    } else {
+      this.pixelScale = 1;
+    }
     this.ctx.imageSmoothingEnabled = false;
-    this.ctx.clearRect(0, 0, pixelW, pixelH);
+    this.ctx.clearRect(0, 0, logicalW, logicalH);
 
     const pal = BIOME_FALLBACK_PALETTES[map.biome] ?? BIOME_FALLBACK_PALETTES.desert;
     this.ctx.fillStyle = pal.voidBg;
-    this.ctx.fillRect(0, 0, pixelW, pixelH);
+    this.ctx.fillRect(0, 0, logicalW, logicalH);
 
     this.renderTileRange(map, 0, 0, map.width - 1, map.height - 1, areaDef);
   }
@@ -235,8 +253,20 @@ export class FloorBuffer {
     const pal = BIOME_FALLBACK_PALETTES[map.biome] ?? BIOME_FALLBACK_PALETTES.desert;
 
     if (!isWalkable(tile)) {
+      // Subtle atmospheric subterranean rock/bedrock strata instead of flat dead void!
       ctx.fillStyle = pal.voidBg;
       ctx.fillRect(px, py, ts, ts);
+      const vh = tileHash(tx, ty, 59);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.025)';
+      if ((vh & 3) === 0) {
+        ctx.fillRect(px + (vh % 5), py + 3 + ((vh >>> 3) % 6), 8 + (vh % 6), 2);
+      } else if ((vh & 3) === 1) {
+        ctx.fillRect(px + 1, py + 10 + ((vh >>> 4) % 4), 11, 1.5);
+      }
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      if ((vh & 7) === 2) {
+        ctx.fillRect(px + 2 + ((vh >>> 5) % 6), py + 5 + ((vh >>> 8) % 6), 6, 2);
+      }
       return;
     }
 
@@ -248,7 +278,7 @@ export class FloorBuffer {
     let drewBase = false;
     if (floorDef && floorDef.frames.length > 0) {
       const f0 = floorDef.frames[0]!;
-      if (f0.srcW >= ts * 2 && f0.srcH >= ts * 2) {
+      if (f0.targetW >= ts * 2 && f0.targetH >= ts * 2) {
         // 32x32 Steam floor slab: sample aligned 16x16 quadrant so adjacent tiles form cohesive slabs
         const slabTx = tx & ~1;
         const slabTy = ty & ~1;
@@ -348,29 +378,51 @@ export class FloorBuffer {
     const topCarpet = ty > 0 && map.tiles[(ty - 1) * map.width + tx] === TileType.Carpet;
     const botCarpet = ty + 1 < map.height && map.tiles[(ty + 1) * map.width + tx] === TileType.Carpet;
 
-    // Rich Nuclear Throne Palace crimson carpet with golden trim on outer edges
-    ctx.fillStyle = '#7d1924';
+    // Rich royal Palace crimson damask carpet with braided gold filigree trim & edge shadow
+    ctx.fillStyle = '#6b1420';
     ctx.fillRect(px, py, ts, ts);
-    ctx.fillStyle = '#99202e';
-    ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+    ctx.fillStyle = '#8f1b2b';
+    ctx.fillRect(px + 0.5, py + 0.5, ts - 1, ts - 1);
 
-    // Subtle woven pattern
-    ctx.fillStyle = '#871c28';
-    ctx.fillRect(px + 3, py + 3, 2, 2);
-    ctx.fillRect(px + 11, py + 11, 2, 2);
+    // Subtle woven damask diamond motif
+    ctx.fillStyle = '#7a1624';
+    ctx.fillRect(px + 3, py + 3, 3, 3);
+    ctx.fillRect(px + 10, py + 10, 3, 3);
+    ctx.fillStyle = '#a32334';
+    ctx.fillRect(px + 4, py + 4, 1, 1);
+    ctx.fillRect(px + 11, py + 11, 1, 1);
 
-    // Golden Palace border along exposed edges
-    ctx.fillStyle = '#d4a843';
-    if (!leftCarpet) ctx.fillRect(px, py, 2, ts);
-    if (!rightCarpet) ctx.fillRect(px + ts - 2, py, 2, ts);
-    if (!topCarpet) ctx.fillRect(px, py, ts, 2);
-    if (!botCarpet) ctx.fillRect(px, py + ts - 2, ts, 2);
-
-    ctx.fillStyle = '#521018';
-    if (!leftCarpet) ctx.fillRect(px + 2, py, 1, ts);
-    if (!rightCarpet) ctx.fillRect(px + ts - 3, py, 1, ts);
-    if (!topCarpet) ctx.fillRect(px, py + 2, ts, 1);
-    if (!botCarpet) ctx.fillRect(px, py + ts - 3, ts, 1);
+    // Braided antique gold border & dark inner piping along exposed edges
+    const drawEdge = (ex: number, ey: number, ew: number, eh: number): void => {
+      ctx.fillStyle = '#d9ad45';
+      ctx.fillRect(ex, ey, ew, eh);
+    };
+    if (!leftCarpet) {
+      drawEdge(px, py, 2, ts);
+      ctx.fillStyle = '#fff0a6';
+      ctx.fillRect(px + 0.5, py, 0.5, ts);
+      ctx.fillStyle = '#470c14';
+      ctx.fillRect(px + 2, py, 1, ts);
+    }
+    if (!rightCarpet) {
+      drawEdge(px + ts - 2, py, 2, ts);
+      ctx.fillStyle = '#9e7422';
+      ctx.fillRect(px + ts - 1, py, 1, ts);
+      ctx.fillStyle = '#470c14';
+      ctx.fillRect(px + ts - 3, py, 1, ts);
+    }
+    if (!topCarpet) {
+      drawEdge(px, py, ts, 2);
+      ctx.fillStyle = '#fff0a6';
+      ctx.fillRect(px, py + 0.5, ts, 0.5);
+      ctx.fillStyle = '#470c14';
+      ctx.fillRect(px, py + 2, ts, 1);
+    }
+    if (!botCarpet) {
+      drawEdge(px, py + ts - 2, ts, 2);
+      ctx.fillStyle = '#470c14';
+      ctx.fillRect(px, py + ts - 3, ts, 1);
+    }
   }
 
   /**
@@ -433,62 +485,77 @@ export class FloorBuffer {
 
       case 'blood': {
         ctx.save();
-        const baseColor = decal.color || '#961a24';
-        const r = Math.max(2, Math.round(3.2 * scale));
+        const baseColor = decal.color || '#9e1924';
+        const r = Math.max(2, 3.4 * scale);
         const ang = decal.angle || 0;
         const cosA = Math.cos(ang);
         const sinA = Math.sin(ang);
+        const seed = tileHash(x, y, Math.round(ang * 31));
 
-        // Dark grounded rim stain
-        ctx.fillStyle = '#3b090f';
-        ctx.globalAlpha = 0.55;
-        ctx.fillRect(
-          x - r - 1,
-          y - Math.max(1, Math.floor(r * 0.75)),
-          r * 2 + 2,
-          Math.max(3, Math.round(r * 1.5)),
-        );
+        // Helper for crisp organic pixel splatter blob (zero rectangular boxes!)
+        const blob = (bx: number, by: number, rx: number, ry: number): void => {
+          const iry = Math.max(1, Math.ceil(ry * 2));
+          for (let dy2 = -iry; dy2 <= iry; dy2++) {
+            const ny = dy2 / Math.max(1, iry);
+            const span = Math.sqrt(Math.max(0, 1 - ny * ny)) * rx;
+            if (span >= 0.25) {
+              ctx.fillRect(bx - span, by + dy2 * 0.5, span * 2, 0.6);
+            }
+          }
+        };
 
-        // Core splatter pool
+        // Dark grounded dried-edge rim
+        ctx.fillStyle = '#33070d';
+        ctx.globalAlpha = 0.62;
+        blob(x, y + 0.5, r + 1.1, r * 0.72 + 0.8);
+
+        // Multi-lobe organic splatter pool
         ctx.fillStyle = baseColor;
-        ctx.globalAlpha = 0.88;
-        ctx.fillRect(
-          x - r,
-          y - Math.max(1, Math.floor(r * 0.65)),
-          r * 2,
-          Math.max(2, Math.round(r * 1.3)),
+        ctx.globalAlpha = 0.90;
+        blob(x, y, r, r * 0.68);
+        blob(x + cosA * (r * 0.7), y + sinA * (r * 0.55), r * 0.72, r * 0.52);
+        blob(
+          x + (((seed & 7) - 3.5) * 0.55),
+          y + ((((seed >>> 4) & 7) - 3.5) * 0.45),
+          r * 0.65,
+          r * 0.48,
         );
 
-        // Directional spray streak & deterministic satellite droplets along impact vector
-        for (let k = 1; k <= 4; k++) {
-          const spread = (k % 2 === 0 ? 1 : -1) * (0.28 * k);
-          const dist = r + k * 2.1 * Math.max(0.8, scale * 0.75);
-          const dx = Math.round(Math.cos(ang + spread) * dist);
-          const dy = Math.round(Math.sin(ang + spread) * dist);
-          const sz = k <= 2 ? 2 : 1;
+        // Directional spray fan & tapered droplets along impact vector (Odinfall gore juice!)
+        for (let k = 1; k <= 6; k++) {
+          const h = tileHash(x + k * 7, y - k * 5, seed);
+          const spread = ((h % 100) / 100 - 0.5) * 1.15;
+          const dist = r * 0.8 + k * 1.85 * Math.max(0.75, scale * 0.8);
+          const dx = Math.cos(ang + spread) * dist;
+          const dy = Math.sin(ang + spread) * dist;
+          const sz = k <= 2 ? 1.5 : k <= 4 ? 1 : 0.5;
           ctx.fillRect(x + dx, y + dy, sz, sz);
         }
-        // Forward smear blotch along primary spray direction
-        const sx = Math.round(cosA * (r + 1));
-        const sy = Math.round(sinA * (r + 1));
-        ctx.fillRect(x + sx - 1, y + sy - 1, Math.max(2, Math.round(r * 0.8)), 2);
-        // Subtle glossy crimson wet highlight
-        ctx.fillStyle = '#cf2938';
-        ctx.globalAlpha = 0.45;
-        ctx.fillRect(x - Math.max(1, Math.floor(r * 0.4)), y - Math.max(1, Math.floor(r * 0.3)), Math.max(1, Math.floor(r * 0.8)), 1);
+        // Subtle glossy wet crimson specular speck
+        ctx.fillStyle = '#de2e3f';
+        ctx.globalAlpha = 0.55;
+        ctx.fillRect(x - r * 0.35, y - r * 0.25, Math.max(1, r * 0.55), 0.5);
         ctx.restore();
         break;
       }
 
       case 'acid': {
         ctx.save();
+        const r = Math.max(3, 5 * scale);
+        ctx.fillStyle = '#205918';
+        ctx.globalAlpha = 0.65;
+        ctx.beginPath();
+        ctx.ellipse(x, y + 0.5, r + 1, r * 0.68 + 0.6, 0, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = decal.color || '#57c936';
-        ctx.globalAlpha = 0.6;
-        const r = Math.max(3, Math.round(5 * scale));
-        ctx.fillRect(x - r, y - Math.round(r * 0.65), r * 2, Math.round(r * 1.3));
-        ctx.fillStyle = '#a8ff5e';
-        ctx.globalAlpha = 0.45;
-        ctx.fillRect(x - Math.floor(r * 0.5), y - Math.floor(r * 0.3), r, Math.max(1, Math.floor(r * 0.6)));
+        ctx.globalAlpha = 0.72;
+        ctx.beginPath();
+        ctx.ellipse(x, y, r, r * 0.62, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#b4ff66';
+        ctx.globalAlpha = 0.58;
+        ctx.fillRect(x - r * 0.4, y - r * 0.2, r * 0.6, 1);
+        ctx.fillRect(x + r * 0.2, y + r * 0.15, 1, 1);
         ctx.restore();
         break;
       }

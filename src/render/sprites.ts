@@ -290,10 +290,17 @@ export class SpriteRenderer {
     const tex = this.bundle.getTexture(rect.textureId);
     if (!tex) return false;
 
-    const sx = rect.srcX + (subX % Math.max(1, rect.srcW));
-    const sy = rect.srcY + (subY % Math.max(1, rect.srcH));
-    const sw = Math.min(subW, rect.srcX + rect.srcW - sx);
-    const sh = Math.min(subH, rect.srcY + rect.srcH - sy);
+    const scaleX = rect.srcW / Math.max(1, rect.targetW);
+    const scaleY = rect.srcH / Math.max(1, rect.targetH);
+    const mappedSubX = Math.round(subX * scaleX);
+    const mappedSubY = Math.round(subY * scaleY);
+    const mappedSubW = Math.max(1, Math.round(subW * scaleX));
+    const mappedSubH = Math.max(1, Math.round(subH * scaleY));
+
+    const sx = rect.srcX + (mappedSubX % Math.max(1, rect.srcW));
+    const sy = rect.srcY + (mappedSubY % Math.max(1, rect.srcH));
+    const sw = Math.min(mappedSubW, rect.srcX + rect.srcW - sx);
+    const sh = Math.min(mappedSubH, rect.srcY + rect.srcH - sy);
     if (sw <= 0 || sh <= 0) return false;
 
     ctx.drawImage(tex, sx, sy, sw, sh, Math.round(destX), Math.round(destY), destW, destH);

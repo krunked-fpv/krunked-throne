@@ -193,6 +193,58 @@ function drawPixelBorder(
 }
 
 /**
+ * Authentic Nuclear Throne hand-brushed jagged ink-splat panel (100% crisp integer fillRect, ZERO sci-fi screws!).
+ */
+function drawWastelandPlate(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  opts: {
+    fill?: string;
+    border?: string;
+    borderThickness?: number;
+    topAccent?: string;
+    rivets?: boolean;
+    rivetColor?: string;
+  } = {},
+): void {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  const iw = Math.round(w);
+  const ih = Math.round(h);
+  const bt = opts.borderThickness ?? 1;
+
+  // Ragged Nuclear Throne outer ink brush-splat silhouette tails behind the panel!
+  ctx.fillStyle = '#07050c';
+  ctx.fillRect(ix - 2, iy + 4, iw + 4, Math.max(4, ih - 8));
+  ctx.fillRect(ix + 5, iy - 2, Math.max(4, iw - 10), ih + 4);
+  if (iw >= 50 && ih >= 24) {
+    ctx.fillRect(ix - 5, iy + Math.round(ih * 0.20), 6, 3);
+    ctx.fillRect(ix + iw - 1, iy + Math.round(ih * 0.16), 7, 3);
+    ctx.fillRect(ix - 4, iy + Math.round(ih * 0.72), 5, 2);
+    ctx.fillRect(ix + iw - 1, iy + Math.round(ih * 0.78), 6, 2);
+    // Tiny ink splatter flecks
+    ctx.fillRect(ix - 8, iy + Math.round(ih * 0.21), 2, 1);
+    ctx.fillRect(ix + iw + 7, iy + Math.round(ih * 0.17), 2, 2);
+  }
+
+  // Deep charcoal-ink core fill
+  ctx.fillStyle = opts.fill ?? 'rgba(11, 8, 16, 0.94)';
+  ctx.fillRect(ix, iy, iw, ih);
+
+  // Stark high-contrast top accent slash (optional)
+  if (opts.topAccent) {
+    ctx.fillStyle = opts.topAccent;
+    ctx.fillRect(ix + bt, iy + bt, iw - bt * 2, 2);
+  }
+  drawPixelBorder(ctx, ix, iy, iw, ih, opts.border ?? '#4d455c', bt);
+  void opts.rivets;
+  void opts.rivetColor;
+}
+
+/**
  * Computes evenly spaced arc-length angles around an ellipse so wide 4:3
  * ellipses do not bunch mutants together at the left/right tips.
  */
@@ -1158,24 +1210,18 @@ export class MenuSystem {
     const hovered = this.hoveredId === id || isFocused;
     const accent = opts.accent ?? '#ffe047';
 
-    // Crisp outer pixel focus frame (no half-pixel anti-aliased stroke!)
+    // Stark Nuclear Throne ink-charcoal button (jagged ink brush streaks on hover/focus, ZERO sci-fi screws!)
+    ctx.fillStyle = '#07050c';
+    ctx.fillRect(ix - 1, iy + 2, iw + 2, Math.max(2, ih - 4));
+    ctx.fillRect(ix + 1, iy + ih, iw, 1);
     if (hovered) {
-      const pulse = 0.28 + 0.14 * Math.sin(this.renderTimeSec * 7.5);
-      ctx.save();
-      ctx.globalAlpha = pulse;
-      drawPixelBorder(ctx, ix - 1, iy - 1, iw + 2, ih + 2, accent, 1);
-      ctx.restore();
+      ctx.fillRect(ix - 5, iy + Math.floor(ih * 0.25), 5, 3);
+      ctx.fillRect(ix + iw, iy + Math.floor(ih * 0.62), 6, 3);
     }
 
-    ctx.fillStyle = hovered ? 'rgba(42, 33, 56, 0.96)' : 'rgba(18, 14, 24, 0.90)';
+    ctx.fillStyle = hovered ? 'rgba(22, 17, 28, 0.98)' : 'rgba(13, 10, 18, 0.90)';
     ctx.fillRect(ix, iy, iw, ih);
-    // Subtle top bevel & bottom depth rail for chunky pixel feel
-    ctx.fillStyle = hovered ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.03)';
-    ctx.fillRect(ix + 1, iy + 1, iw - 2, 2);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.fillRect(ix + 1, iy + ih - 2, iw - 2, 1);
-
-    drawPixelBorder(ctx, ix, iy, iw, ih, hovered ? accent : '#564e66', 1);
+    drawPixelBorder(ctx, ix, iy, iw, ih, hovered ? accent : '#4a4257', 1);
 
     if (hovered) {
       ctx.fillStyle = accent;
@@ -1231,16 +1277,23 @@ export class MenuSystem {
           pixelSnap: true,
         });
       } else {
-        // Jagged wasteland pixel splat banner (pure integer fillRect — zero SaaS rectangle!)
-        ctx.fillStyle = '#09060d';
-        ctx.fillRect(ix - 8, iy + 3, w + 16, h - 6);
-        ctx.fillRect(ix - 2, iy, w + 4, h);
-        ctx.fillRect(ix + 6, iy - 2, w - 12, h + 4);
-        ctx.fillStyle = opts.accent;
-        ctx.fillRect(ix - 4, iy + 2, 4, h - 4);
-        ctx.fillRect(ix + w, iy + 2, 4, h - 4);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-        ctx.fillRect(ix + 2, iy + 1, w - 4, 2);
+        // Sweeping dynamic Vlambeer/Nuclear Throne jagged black ink brush-splat (ZERO boxy rectangle!)
+        ctx.fillStyle = '#07050c';
+        // Core sweeping brushstroke body
+        ctx.fillRect(ix - 2, iy + 2, w + 6, h - 4);
+        ctx.fillRect(ix + 8, iy, w - 12, h);
+        // Sweeping tapered horizontal ink tails & brush slashes
+        ctx.fillRect(ix - 18, iy + 5, w + 40, 4);
+        ctx.fillRect(ix - 26, iy + 10, w + 56, 4);
+        ctx.fillRect(ix - 12, iy + 15, w + 34, 3);
+        ctx.fillRect(ix + 14, iy - 2, w - 26, 2);
+        ctx.fillRect(ix + 4, iy + h, w - 18, 2);
+        // Raw ink splatter flecks flying off right & left tips
+        ctx.fillRect(ix - 31, iy + 11, 3, 2);
+        ctx.fillRect(ix - 22, iy + 17, 2, 2);
+        ctx.fillRect(ix + w + 33, iy + 10, 4, 2);
+        ctx.fillRect(ix + w + 25, iy + 5, 3, 2);
+        ctx.fillRect(ix + w + 22, iy + 17, 2, 2);
       }
 
       // Animated pixel pointer chevron on left
@@ -1258,9 +1311,9 @@ export class MenuSystem {
         ctx.fillRect(ptrX + 4, ptrY + 2, 1, 1);
       }
     } else {
-      // Clean dark translucent wasteland underline strip (unfocused contrast without boxy clutter)
-      ctx.fillStyle = 'rgba(10, 7, 15, 0.56)';
-      ctx.fillRect(ix + 6, iy + 2, w - 12, h - 4);
+      // Sleek minimal dark wasteland shadow underline (keeps sunset skyline visible!)
+      ctx.fillStyle = 'rgba(10, 7, 15, 0.52)';
+      ctx.fillRect(ix + 16, iy + h - 5, w - 32, 3);
     }
 
     this.fonts.draw(
@@ -1367,41 +1420,53 @@ export class MenuSystem {
   ): void {
     // Steam bakMenu (320x240) when Steam Pack is active!
     if (this.isSteamMode && this.sprites.hasSprite('bakMenu')) {
-      // Warm dusk wasteland side extension behind centered 320x240 bakMenu for 16:9 widescreen
-      ctx.fillStyle = '#181018';
-      ctx.fillRect(0, 0, width, height);
-      ctx.fillStyle = '#24151c';
-      ctx.fillRect(0, Math.round(height * 0.42), width, Math.round(height * 0.30));
-      ctx.fillStyle = '#1b1115';
-      ctx.fillRect(0, Math.round(height * 0.72), width, height);
-
+      // Seamless color-matched wasteland sky & desert side extension behind 320x240 bakMenu in 16:9!
+      const steamSky: ReadonlyArray<[number, string]> = [
+        [0, '#5a5a4e'],
+        [44, '#666457'],
+        [94, '#706c5d'],
+        [114, '#8d7244'],
+        [168, '#9b7b43'],
+      ];
+      for (let i = 0; i < steamSky.length; i++) {
+        const [sy, col] = steamSky[i]!;
+        const ny = i + 1 < steamSky.length ? steamSky[i + 1]![0] : height;
+        ctx.fillStyle = col;
+        ctx.fillRect(0, sy, width, ny - sy);
+      }
+      // Subtle atmospheric dim on outer widescreen wings so focus stays naturally centered
       const bx = Math.round((width - 320) * 0.5);
       this.sprites.draw(ctx, 'bakMenu', bx, 0, { frame: 0, pixelSnap: true });
-      // Subtle atmospheric dim vignette so title logo and buttons read crisply
-      ctx.fillStyle = 'rgba(10, 7, 14, 0.24)';
+      if (bx > 0) {
+        // Smooth 1px-stepped soft dark cinematic edge vignette (ZERO blocky vertical bars!)
+        for (let step = 0; step < bx + 20; step++) {
+          const distFromEdge = Math.max(0, bx + 20 - step) / (bx + 20);
+          const a = distFromEdge * distFromEdge * 0.78;
+          ctx.fillStyle = `rgba(10, 7, 14, ${a.toFixed(3)})`;
+          ctx.fillRect(step, 0, 1, height);
+          ctx.fillRect(width - 1 - step, 0, 1, height);
+        }
+      }
+      ctx.fillStyle = 'rgba(10, 7, 14, 0.20)';
       ctx.fillRect(0, 0, width, height);
       return;
     }
 
-    // Built-In Art: Rich multi-layer pixel dusk wasteland horizon!
+    // Built-In Art: Iconic Nuclear Throne-inspired sun-bleached dusty wasteland hill, ruined skyline & buried crown!
     const skyBands: ReadonlyArray<[number, string]> = [
-      [0, '#0f0a18'],
-      [28, '#170e22'],
-      [56, '#241328'],
-      [82, '#3a1a28'],
-      [106, '#592425'],
-      [126, '#823424'],
-      [142, '#b84f28'],
-      [154, '#e07a32'],
-      [162, '#ffd06b'],
+      [0, '#5a5648'],
+      [28, '#666050'],
+      [56, '#756c57'],
+      [82, '#87785c'],
+      [104, '#9c8662'],
+      [122, '#b39564'],
     ];
     for (let i = 0; i < skyBands.length; i++) {
       const [sy, col] = skyBands[i]!;
-      const nextY = i + 1 < skyBands.length ? skyBands[i + 1]![0] : 168;
+      const nextY = i + 1 < skyBands.length ? skyBands[i + 1]![0] : 134;
       ctx.fillStyle = col;
       ctx.fillRect(0, sy, width, nextY - sy);
-      // Crisp 2px pixel dither transition row between adjacent sky bands
-      if (i > 0 && sy < 156) {
+      if (i > 0) {
         ctx.fillStyle = skyBands[i - 1]![1];
         for (let dx = (i % 2) * 2; dx < width; dx += 4) {
           ctx.fillRect(dx, sy, 2, 1);
@@ -1409,85 +1474,121 @@ export class MenuSystem {
       }
     }
 
-    // Twinkling pixel stars in upper twilight sky
-    for (let s = 0; s < 22; s++) {
-      const sx = (s * 67 + 19) % width;
-      const sy = 6 + ((s * 29) % 72);
-      const twinkle = Math.sin(timeSec * 2.5 + s * 1.7) > 0.35;
-      ctx.fillStyle = twinkle ? '#fff3cc' : '#8577a6';
-      ctx.fillRect(sx, sy, 1, 1);
-    }
-
-    // Low wasteland sunset disc behind far mesas (stepped pixel circle!)
-    const sunX = Math.round(width * 0.5);
-    const sunY = 158;
-    const sunR = 26;
-    for (let dy = -sunR; dy <= 10; dy++) {
-      const span = Math.floor(Math.sqrt(Math.max(0, sunR * sunR - dy * dy)));
-      ctx.fillStyle = dy < -10 ? '#ffad42' : '#ffe478';
-      ctx.fillRect(sunX - span, sunY + dy, span * 2, 1);
-    }
-
-    // Layer 1: Far silhouetted desert mesas & flat-topped buttes
-    const farBaseY = 166;
-    ctx.fillStyle = '#361a24';
-    ctx.fillRect(0, farBaseY, width, height - farBaseY);
-    const farMesas: ReadonlyArray<[number, number, number]> = [
-      [0.02, 0.16, 18],
-      [0.14, 0.24, 11],
-      [0.29, 0.40, 14],
-      [0.62, 0.76, 16],
-      [0.74, 0.84, 9],
-      [0.85, 0.99, 20],
-    ];
-    for (const [f0, f1, mh] of farMesas) {
-      const mx = Math.round(f0 * width);
-      const mw = Math.round((f1 - f0) * width);
-      ctx.fillStyle = '#361a24';
-      ctx.fillRect(mx, farBaseY - mh, mw, mh);
-      ctx.fillRect(mx + 4, farBaseY - mh - 4, Math.max(4, mw - 8), 4);
-      // Warm rim highlight on sun-facing mesa ridge
-      ctx.fillStyle = '#6e2e2a';
-      ctx.fillRect(mx + 4, farBaseY - mh - 4, Math.max(4, mw - 8), 1);
-    }
-
-    // Layer 2: Mid-ground canyon ridge + ruined wasteland overpass pylons
-    const midBaseY = 180;
-    ctx.fillStyle = '#24121c';
-    ctx.fillRect(0, midBaseY, width, height - midBaseY);
-    for (let x = 0; x < width; x += 6) {
-      const bump = Math.round(Math.sin(x * 0.045) * 4 + Math.cos(x * 0.11) * 2);
-      ctx.fillRect(x, midBaseY - 4 - Math.max(0, bump), 6, 8);
-    }
-    // Ruined overpass girder pillars on left & right horizon
-    const ruinX1 = Math.round(width * 0.12);
-    const ruinX2 = Math.round(width * 0.84);
-    ctx.fillStyle = '#1b0e17';
-    ctx.fillRect(ruinX1, midBaseY - 22, 4, 24);
-    ctx.fillRect(ruinX1 + 16, midBaseY - 19, 4, 21);
-    ctx.fillRect(ruinX1 - 6, midBaseY - 23, 30, 3);
-    ctx.fillRect(ruinX2, midBaseY - 18, 4, 20);
-    ctx.fillRect(ruinX2 + 12, midBaseY - 24, 4, 26);
-    ctx.fillRect(ruinX2 - 4, midBaseY - 21, 24, 3);
-
-    // Layer 3: Foreground wasteland desert floor with rocky outcrops, scrub & cactus silhouettes
-    const fgBaseY = 198;
-    ctx.fillStyle = '#140c14';
-    ctx.fillRect(0, fgBaseY, width, height - fgBaseY);
-    ctx.fillStyle = '#29171e';
-    ctx.fillRect(0, fgBaseY, width, 2);
-
-    // Cactus & desert rock silhouettes framing the lower corners
-    const drawCactusSilhouette = (cx: number, baseY: number, h: number): void => {
-      ctx.fillStyle = '#140c14';
-      ctx.fillRect(cx - 2, baseY - h, 4, h);
-      ctx.fillRect(cx - 7, baseY - Math.round(h * 0.65), 5, 3);
-      ctx.fillRect(cx - 7, baseY - Math.round(h * 0.85), 3, Math.round(h * 0.25));
-      ctx.fillRect(cx + 2, baseY - Math.round(h * 0.5), 5, 3);
-      ctx.fillRect(cx + 4, baseY - Math.round(h * 0.72), 3, Math.round(h * 0.25));
+    // Soft drifting dusty wasteland cloud haze across upper sky
+    const drawDustCloud = (cx0: number, cy0: number, cw: number, ch: number): void => {
+      const wx = ((cx0 + Math.floor(timeSec * 2.5)) % (width + cw + 40)) - cw - 20;
+      ctx.fillStyle = 'rgba(218, 204, 168, 0.16)';
+      ctx.fillRect(wx, cy0, cw, ch);
+      ctx.fillRect(wx + 10, cy0 - 3, cw - 20, 3);
+      ctx.fillStyle = 'rgba(72, 64, 52, 0.14)';
+      ctx.fillRect(wx + 4, cy0 + ch - 2, cw - 8, 2);
     };
-    drawCactusSilhouette(Math.round(width * 0.08), fgBaseY + 2, 22);
-    drawCactusSilhouette(Math.round(width * 0.91), fgBaseY + 2, 18);
+    drawDustCloud(24, 34, 88, 9);
+    drawDustCloud(220, 22, 74, 8);
+    drawDustCloud(330, 56, 96, 10);
+
+    // Distant hazy ruined wasteland city skyline & jagged girders silhouetted along desert ridge!
+    const ridgeY = 128;
+    const skyline: ReadonlyArray<[number, number, number]> = [
+      [0.06, 18, 26], [0.11, 14, 16], [0.17, 10, 32],
+      [0.64, 16, 22], [0.69, 22, 34], [0.75, 12, 18], [0.80, 18, 28], [0.87, 14, 20],
+    ];
+    for (const [fx, bw, bh] of skyline) {
+      const bx = Math.round(fx * width);
+      ctx.fillStyle = '#5e5245';
+      ctx.fillRect(bx, ridgeY - bh, bw, bh + 10);
+      // Ruined jagged broken roofline & hollow window slits
+      ctx.fillStyle = '#4d4238';
+      ctx.fillRect(bx + Math.floor(bw * 0.55), ridgeY - bh + 2, Math.ceil(bw * 0.45), bh + 8);
+      ctx.fillStyle = '#87785c';
+      ctx.fillRect(bx + 3, ridgeY - bh + 4, 2, 3);
+      ctx.fillRect(bx + 7, ridgeY - bh + 4, 2, 3);
+      ctx.fillRect(bx + 3, ridgeY - bh + 11, 2, 3);
+      // Protruding rusty rebar spikes on roof
+      ctx.fillStyle = '#4d4238';
+      ctx.fillRect(bx + 2, ridgeY - bh - 5, 1, 5);
+      ctx.fillRect(bx + bw - 4, ridgeY - bh - 3, 1, 3);
+    }
+
+    // Mid-ground sweeping warm ochre desert hill (left slope)
+    for (let x = 0; x < width; x += 2) {
+      const slopeL = Math.round(122 + Math.sin(x * 0.011 + 0.5) * 14 + (x / width) * 26);
+      ctx.fillStyle = '#99743f';
+      ctx.fillRect(x, slopeL, 2, height - slopeL);
+      ctx.fillStyle = '#ab8449';
+      ctx.fillRect(x, slopeL, 2, 2);
+    }
+
+    // Foreground sunlit sweeping golden wasteland dune (right-to-left diagonal rise!)
+    for (let x = 0; x < width; x += 2) {
+      const duneY = Math.round(166 - (x / width) * 34 + Math.sin(x * 0.022) * 5);
+      ctx.fillStyle = '#ba9146';
+      ctx.fillRect(x, duneY, 2, height - duneY);
+      ctx.fillStyle = '#cfa655';
+      ctx.fillRect(x, duneY, 2, 3);
+      // Warm sunlit sand band in lower foreground
+      if (duneY + 26 < height) {
+        ctx.fillStyle = '#ad843e';
+        ctx.fillRect(x, duneY + 28, 2, height - (duneY + 28));
+      }
+    }
+
+    // Subtle organic desert wind-carved sand troughs & scattered wasteland pebbles
+    ctx.fillStyle = '#967035';
+    ctx.fillRect(Math.round(width * 0.58), 166, 36, 2);
+    ctx.fillRect(Math.round(width * 0.62), 168, 22, 2);
+    ctx.fillRect(Math.round(width * 0.42), 206, 28, 2);
+    ctx.fillRect(Math.round(width * 0.78), 192, 24, 2);
+    ctx.fillStyle = '#deb764';
+    ctx.fillRect(Math.round(width * 0.58), 165, 34, 1);
+    ctx.fillRect(Math.round(width * 0.42), 205, 26, 1);
+
+    // Iconic Half-Buried Gilded Wasteland Crown in bottom-left desert sand!
+    const crX = Math.round(width * 0.14);
+    const crY = 186;
+    // Soft sand shadow beneath crown
+    ctx.fillStyle = '#87622e';
+    ctx.fillRect(crX - 18, crY + 20, 40, 6);
+    ctx.fillRect(crX - 14, crY + 25, 32, 3);
+    // Bold dark ink silhouette of tilted royal crown
+    ctx.fillStyle = '#120b0d';
+    ctx.fillRect(crX - 15, crY + 2, 30, 20);
+    ctx.fillRect(crX - 12, crY - 4, 24, 8);
+    ctx.fillRect(crX - 5, crY - 9, 10, 6);
+    // Crimson velvet dome with curved gold ribs
+    ctx.fillStyle = '#9e1c2c';
+    ctx.fillRect(crX - 13, crY + 3, 26, 16);
+    ctx.fillStyle = '#cf2a3c';
+    ctx.fillRect(crX - 11, crY - 2, 20, 14);
+    // Gold crown arches & top orb
+    ctx.fillStyle = '#e8b632';
+    ctx.fillRect(crX - 3, crY - 7, 6, 4);
+    ctx.fillRect(crX - 2, crY - 3, 4, 18);
+    ctx.fillRect(crX - 10, crY + 1, 3, 14);
+    ctx.fillRect(crX + 7, crY + 1, 3, 14);
+    // Golden jeweled rim band tilted into sand
+    ctx.fillStyle = '#d99e26';
+    ctx.fillRect(crX - 14, crY + 13, 28, 8);
+    ctx.fillStyle = '#fff08a';
+    ctx.fillRect(crX - 12, crY + 14, 24, 2);
+    ctx.fillRect(crX - 2, crY - 7, 3, 2);
+    // Center ruby jewel on rim
+    ctx.fillStyle = '#ff384c';
+    ctx.fillRect(crX - 2, crY + 16, 4, 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(crX - 1, crY + 16, 1, 1);
+    // Sunlit desert sand mound lapping organically over lower crown base!
+    ctx.fillStyle = '#cfa655';
+    ctx.fillRect(crX - 18, crY + 18, 12, 6);
+    ctx.fillRect(crX + 6, crY + 19, 14, 5);
+    ctx.fillRect(crX - 10, crY + 21, 24, 5);
+    ctx.fillStyle = '#e6c270';
+    ctx.fillRect(crX - 16, crY + 18, 10, 2);
+    ctx.fillRect(crX + 8, crY + 19, 10, 2);
+
+    // Subtle warm dusk edge vignette so logo & bright menu text pop cleanly
+    ctx.fillStyle = 'rgba(18, 12, 14, 0.14)';
+    ctx.fillRect(0, 0, width, height);
   }
 
   private renderTitleScreen(
@@ -1758,111 +1859,114 @@ export class MenuSystem {
       return;
     }
 
-    // Built-In Mode: Rich layered pixel-art wasteland night campsite!
-    // 1. Night twilight sky band at top with pixel stars & silhouetted mesas
-    const horizonY = 44;
-    ctx.fillStyle = '#0e0a16';
-    ctx.fillRect(0, 0, width, 18);
-    ctx.fillStyle = '#181022';
-    ctx.fillRect(0, 18, width, 14);
-    ctx.fillStyle = '#251724';
-    ctx.fillRect(0, 32, width, horizonY - 32);
+    // Built-In Mode: Rich Hi-Bit tiled wasteland night campsite with starry mesa horizon, warm firelight & organic logs!
+    const horizonY = 38;
+    // 1. Tile our 2x Hi-Bit 64x64 (32x32 logical) sprFloor0 desert clearing floor!
+    if (this.sprites.hasSprite('sprFloor0')) {
+      const floorSpr = this.sprites.getSprite('sprFloor0')!;
+      const fCount = Math.max(1, floorSpr.frames.length);
+      for (let ty = horizonY - 6; ty < height; ty += 32) {
+        for (let tx = 0; tx < width; tx += 32) {
+          const hash = ((tx * 73) ^ (ty * 151) ^ 0x5a) & 0xff;
+          this.sprites.draw(ctx, 'sprFloor0', tx, ty, { frame: hash % fCount, pixelSnap: true });
+        }
+      }
+      // Deep atmospheric wasteland night tint over the desert tiles
+      ctx.fillStyle = 'rgba(13, 9, 18, 0.70)';
+      ctx.fillRect(0, horizonY - 6, width, height - (horizonY - 6));
+    } else {
+      ctx.fillStyle = '#1f1514';
+      ctx.fillRect(0, horizonY, width, height - horizonY);
+    }
 
-    // Stars
-    for (let s = 0; s < 16; s++) {
+    // 2. Night twilight sky band at top with pixel stars & silhouetted mesas
+    ctx.fillStyle = '#0c0814';
+    ctx.fillRect(0, 0, width, 16);
+    ctx.fillStyle = '#160e20';
+    ctx.fillRect(0, 16, width, 12);
+    ctx.fillStyle = '#241624';
+    ctx.fillRect(0, 28, width, horizonY - 28);
+    // Soft twilight transition strip onto tiled desert clearing
+    ctx.fillStyle = '#181016';
+    ctx.fillRect(0, horizonY - 2, width, 3);
+
+    for (let s = 0; s < 18; s++) {
       const sx = (s * 59 + 13) % width;
-      const sy = 5 + ((s * 17) % 24);
+      const sy = 4 + ((s * 17) % 22);
       ctx.fillStyle = (s + Math.floor(timeSec * 2)) % 4 === 0 ? '#ffe9a8' : '#71658a';
       ctx.fillRect(sx, sy, 1, 1);
     }
 
     // Distant jagged wasteland mesas along horizon
-    ctx.fillStyle = '#1a1119';
+    ctx.fillStyle = '#160e16';
     const mesas: ReadonlyArray<[number, number, number]> = [
       [0.24, 0.34, 12],
       [0.33, 0.42, 7],
-      [0.44, 0.56, 10],
-      [0.57, 0.65, 14],
+      [0.44, 0.56, 11],
+      [0.57, 0.66, 15],
     ];
     for (const [m0, m1, mh] of mesas) {
       const mx = Math.round(m0 * width);
       const mw = Math.round((m1 - m0) * width);
       ctx.fillRect(mx, horizonY - mh, mw, mh + 2);
       ctx.fillRect(mx + 3, horizonY - mh - 3, Math.max(4, mw - 6), 3);
+      ctx.fillStyle = '#38212b';
+      ctx.fillRect(mx + 3, horizonY - mh - 3, Math.max(4, mw - 6), 1);
+      ctx.fillStyle = '#160e16';
     }
 
-    // 2. Tiled textured wasteland dirt ground (zero smooth flat pancake!)
-    ctx.fillStyle = '#211715';
-    ctx.fillRect(0, horizonY, width, height - horizonY);
-    for (let ty = horizonY; ty < height; ty += 16) {
-      for (let tx = 0; tx < width; tx += 16) {
-        const h = ((tx * 37) ^ (ty * 91) ^ 0x3d) & 0xff;
-        // Subtle calm organic dirt slab variance
-        ctx.fillStyle = h % 3 === 0 ? '#271b18' : h % 3 === 1 ? '#221715' : '#1e1413';
-        ctx.fillRect(tx, ty, 16, 16);
-
-        // Sparse hand-crafted ground cracks & pebbles
-        if (h % 7 === 0) {
-          ctx.fillStyle = '#170f0e';
-          ctx.fillRect(tx + 3, ty + 6, 5, 1);
-          ctx.fillRect(tx + 7, ty + 7, 3, 1);
-          ctx.fillRect(tx + 9, ty + 8, 2, 1);
-        } else if (h % 9 === 0) {
-          ctx.fillStyle = '#382720';
-          ctx.fillRect(tx + 5, ty + 9, 3, 2);
-          ctx.fillStyle = '#4c362a';
-          ctx.fillRect(tx + 5, ty + 9, 2, 1);
-        } else if (h % 13 === 0) {
-          ctx.fillStyle = '#33231d';
-          ctx.fillRect(tx + 10, ty + 4, 2, 2);
-        }
-      }
-    }
-
-    // 3. Stepped quantized pixel firelight illumination pool (warm authentic pixel-art glow!)
-    const flick = Math.round(Math.sin(timeSec * 12) * 3 + Math.cos(timeSec * 21) * 1.5);
+    // 3. Smooth multi-ring warm amber-orange pixel firelight falloff over the textured tiles!
+    const flick = Math.round(Math.sin(timeSec * 12) * 2.5 + Math.cos(timeSec * 21) * 1.5);
     const firePools: ReadonlyArray<[number, number, string]> = [
-      [seatRx + 34 + flick, seatRy + 22 + flick, '#2e1e18'],
-      [seatRx + 16 + flick, seatRy + 12 + flick, '#3b251c'],
-      [Math.round(seatRx * 0.72) + flick, Math.round(seatRy * 0.72) + flick, '#4d2f1f'],
-      [Math.round(seatRx * 0.38) + flick, Math.round(seatRy * 0.44) + flick, '#693d22'],
+      [seatRx + 52 + flick, seatRy + 34 + flick, 'rgba(255, 118, 36, 0.07)'],
+      [seatRx + 36 + flick, seatRy + 24 + flick, 'rgba(255, 128, 40, 0.08)'],
+      [seatRx + 20 + flick, seatRy + 15 + flick, 'rgba(255, 142, 46, 0.09)'],
+      [seatRx + 4 + flick, seatRy + 6 + flick, 'rgba(255, 160, 54, 0.10)'],
+      [Math.round(seatRx * 0.72) + flick, Math.round(seatRy * 0.74) + flick, 'rgba(255, 180, 66, 0.11)'],
+      [Math.round(seatRx * 0.42) + flick, Math.round(seatRy * 0.46) + flick, 'rgba(255, 212, 92, 0.14)'],
+      [Math.round(seatRx * 0.22) + flick, Math.round(seatRy * 0.26) + flick, 'rgba(255, 236, 148, 0.16)'],
     ];
     for (const [rx, ry, col] of firePools) {
       ctx.fillStyle = col;
-      for (let dy = -ry; dy <= ry; dy += 2) {
+      for (let dy = -ry; dy <= ry; dy++) {
         const norm = dy / Math.max(1, ry);
         const span = Math.round(rx * Math.sqrt(Math.max(0, 1 - norm * norm)));
-        ctx.fillRect(fireX - span, fireY + 5 + dy, span * 2, 2);
+        if (span > 0) ctx.fillRect(fireX - span, fireY + 5 + dy, span * 2, 1);
       }
     }
 
-    // 4. Pixel-art stone fire pit ring + rustic sitting logs around clearing
+    // 4. Sculpted stone fire-pit ring + rustic bark-textured sitting logs around clearing
     const pitRocks: ReadonlyArray<[number, number]> = [
-      [-12, 3], [-8, 7], [-2, 9], [5, 8], [11, 4], [10, -2], [-10, -2],
+      [-13, 3], [-8, 8], [-2, 10], [5, 9], [11, 4], [10, -2], [-10, -2],
     ];
     for (const [ox, oy] of pitRocks) {
-      ctx.fillStyle = '#120c0c';
+      ctx.fillStyle = '#100a0c';
       ctx.fillRect(fireX + ox - 2, fireY + oy - 1, 6, 4);
-      ctx.fillStyle = '#5c4d49';
+      ctx.fillStyle = '#5c4b47';
       ctx.fillRect(fireX + ox - 1, fireY + oy, 4, 2);
-      ctx.fillStyle = '#8c766c';
+      ctx.fillStyle = '#a8846c';
       ctx.fillRect(fireX + ox - 1, fireY + oy, 2, 1);
     }
 
-    // Weathered wasteland sitting logs placed symmetrically around fire clearing
     const drawSittingLog = (lx: number, ly: number): void => {
-      ctx.fillStyle = '#140c0a';
+      ctx.fillStyle = 'rgba(6, 4, 10, 0.55)';
+      ctx.fillRect(lx - 11, ly + 4, 23, 2);
+      ctx.fillStyle = '#120b09';
       ctx.fillRect(lx - 11, ly - 2, 22, 7);
-      ctx.fillStyle = '#523422';
+      ctx.fillStyle = '#4e3120';
       ctx.fillRect(lx - 10, ly - 1, 20, 5);
-      ctx.fillStyle = '#734a2f';
+      ctx.fillStyle = '#7d5034';
       ctx.fillRect(lx - 10, ly - 1, 18, 2);
-      ctx.fillStyle = '#382216';
+      ctx.fillStyle = '#9e6b46';
+      ctx.fillRect(lx - 8, ly - 1, 12, 1);
+      ctx.fillStyle = '#331e13';
       ctx.fillRect(lx - 6, ly + 1, 4, 1);
       ctx.fillRect(lx + 2, ly + 2, 5, 1);
-      // Cut log end ring
-      ctx.fillStyle = '#8f6544';
+      // Cut log wood grain end cap
+      ctx.fillStyle = '#a3754e';
       ctx.fillRect(lx + 8, ly, 2, 3);
+      ctx.fillStyle = '#d4a678';
+      ctx.fillRect(lx + 8, ly, 1, 1);
     };
     drawSittingLog(fireX - Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
     drawSittingLog(fireX + Math.round(seatRx * 0.65), fireY + Math.round(seatRy * 0.72));
@@ -2102,9 +2206,10 @@ export class MenuSystem {
     if (isWide) {
       const subY = portY + portH + 4;
       const subH = 54;
-      ctx.fillStyle = 'rgba(12, 9, 18, 0.84)';
-      ctx.fillRect(portX, subY, portW, subH);
-      drawPixelBorder(ctx, portX, subY, portW, subH, '#4c425e', 1);
+      drawWastelandPlate(ctx, portX, subY, portW, subH, {
+        fill: 'rgba(13, 10, 20, 0.90)',
+        border: '#5a4e6e',
+      });
       const startWepId = goldActive && storedGoldId ? storedGoldId : selected.startingWeapon;
       const startWepLabel = resolveWeaponLabel(startWepId, this.data);
       this.fonts.draw(ctx, '@dSTART WEAPON', portX + 4, subY + 4, 'fntSmall');
@@ -2133,11 +2238,11 @@ export class MenuSystem {
         pixelSnap: true,
       });
     }
-    ctx.fillStyle = 'rgba(12, 9, 18, 0.88)';
-    ctx.fillRect(infoX, infoY, infoW, infoH);
-    drawPixelBorder(ctx, infoX, infoY, infoW, infoH, '#5b5070', 1);
-    ctx.fillStyle = '#ffe047';
-    ctx.fillRect(infoX + 1, infoY + 1, infoW - 2, 1);
+    drawWastelandPlate(ctx, infoX, infoY, infoW, infoH, {
+      fill: 'rgba(14, 11, 22, 0.92)',
+      border: '#685b80',
+      topAccent: '#ffe047',
+    });
 
     this.fonts.draw(ctx, selected.name, infoX + 6, infoY + 5, 'fntM1', {
       color: '#ffe047',
@@ -2426,7 +2531,20 @@ export class MenuSystem {
 
     if (this.isSteamMode && this.sprites.hasSprite('bakMut')) {
       const bx = Math.round((width - 320) * 0.5);
-      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.16, pixelSnap: true });
+      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.18, pixelSnap: true });
+    } else {
+      // Subtle stepped radioactive emerald radial stage & wasteland scanlines
+      ctx.fillStyle = 'rgba(32, 128, 54, 0.14)';
+      ctx.fillRect(Math.round(width * 0.12), 26, Math.round(width * 0.76), height - 56);
+      ctx.fillStyle = 'rgba(72, 232, 98, 0.08)';
+      ctx.fillRect(Math.round(width * 0.24), 44, Math.round(width * 0.52), height - 92);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
+      for (let sy = 4; sy < height; sy += 6) {
+        ctx.fillRect(0, sy, width, 1);
+      }
+      ctx.fillStyle = 'rgba(82, 232, 100, 0.35)';
+      ctx.fillRect(10, 4, width - 20, 1);
+      ctx.fillRect(10, height - 5, width - 20, 1);
     }
 
     this.fonts.draw(ctx, '@gMUTATION', width * 0.5, 10, 'fntL', {
@@ -2487,14 +2605,18 @@ export class MenuSystem {
       const x = startX + i * (cardW + gap);
       const y = isFocused ? cardY - 6 : cardY;
 
-      // Clean single-framed NT card (eliminating cluttered double-framing!)
-      ctx.fillStyle = isFocused ? 'rgba(30, 48, 34, 0.96)' : 'rgba(18, 20, 26, 0.90)';
-      ctx.fillRect(x, y, cardW, cardH);
+      // Ornate beveled wasteland mutation card with glowing focus aura & corner rivets!
       if (isFocused) {
-        ctx.fillStyle = '#52e864';
-        ctx.fillRect(x + 2, y + 2, cardW - 4, 2);
+        ctx.fillStyle = 'rgba(82, 232, 100, 0.20)';
+        ctx.fillRect(x - 2, y - 2, cardW + 4, cardH + 4);
       }
-      drawPixelBorder(ctx, x, y, cardW, cardH, isFocused ? '#52e864' : '#4a4e5e', isFocused ? 2 : 1);
+      drawWastelandPlate(ctx, x, y, cardW, cardH, {
+        fill: isFocused ? 'rgba(26, 46, 32, 0.97)' : 'rgba(18, 20, 28, 0.93)',
+        border: isFocused ? '#52e864' : '#54586c',
+        borderThickness: isFocused ? 2 : 1,
+        topAccent: isFocused ? '#52e864' : undefined,
+        rivetColor: isFocused ? '#b6ffbe' : 'rgba(180, 184, 208, 0.42)',
+      });
 
       // Key badge [1]..[5]
       this.fonts.draw(ctx, `@y[${i + 1}]`, x + 4, y + 5, 'fntSmall', { outline: true });
@@ -2555,9 +2677,11 @@ export class MenuSystem {
     const descBoxH = Math.max(46, 20 + descEstH + 4 + tipEstH + 6);
     const descY = Math.min(height - trayReserve - descBoxH, Math.max(cardY + cardH + 6, height - trayReserve - descBoxH));
 
-    ctx.fillStyle = 'rgba(10, 12, 16, 0.94)';
-    ctx.fillRect(descX, descY, descBoxW, descBoxH);
-    drawPixelBorder(ctx, descX, descY, descBoxW, descBoxH, '#52e864', 1);
+    drawWastelandPlate(ctx, descX, descY, descBoxW, descBoxH, {
+      fill: 'rgba(12, 14, 20, 0.96)',
+      border: '#52e864',
+      topAccent: 'rgba(82, 232, 100, 0.65)',
+    });
 
     if (focusedDef) {
       this.fonts.draw(ctx, `@y${focusedDef.name}`, width * 0.5, descY + 5, 'fntM1', {
@@ -2614,7 +2738,20 @@ export class MenuSystem {
 
     if (this.isSteamMode && this.sprites.hasSprite('bakMut')) {
       const bx = Math.round((width - 320) * 0.5);
-      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.16, pixelSnap: true });
+      this.sprites.draw(ctx, 'bakMut', bx, 0, { frame: 0, alpha: 0.18, pixelSnap: true });
+    } else {
+      // Regal golden Ultra stage aura + horizontal scanlines
+      ctx.fillStyle = 'rgba(176, 122, 24, 0.14)';
+      ctx.fillRect(Math.round(width * 0.10), 28, Math.round(width * 0.80), height - 58);
+      ctx.fillStyle = 'rgba(255, 224, 71, 0.08)';
+      ctx.fillRect(Math.round(width * 0.22), 46, Math.round(width * 0.56), height - 92);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
+      for (let sy = 4; sy < height; sy += 6) {
+        ctx.fillRect(0, sy, width, 1);
+      }
+      ctx.fillStyle = 'rgba(255, 224, 71, 0.42)';
+      ctx.fillRect(10, 4, width - 20, 1);
+      ctx.fillRect(10, height - 5, width - 20, 1);
     }
 
     this.fonts.draw(ctx, '@yULTRA MUTATION', width * 0.5, 16, 'fntL', {
@@ -2652,13 +2789,17 @@ export class MenuSystem {
       const x = startX + i * (cardW + gap);
       const y = isFocused ? cardY - 4 : cardY;
 
-      ctx.fillStyle = isFocused ? 'rgba(52, 40, 22, 0.96)' : 'rgba(20, 17, 28, 0.92)';
-      ctx.fillRect(x, y, cardW, cardH);
       if (isFocused) {
-        ctx.fillStyle = '#ffe047';
-        ctx.fillRect(x + 2, y + 2, cardW - 4, 2);
+        ctx.fillStyle = 'rgba(255, 224, 71, 0.20)';
+        ctx.fillRect(x - 2, y - 2, cardW + 4, cardH + 4);
       }
-      drawPixelBorder(ctx, x, y, cardW, cardH, isFocused ? '#ffe047' : '#5e5573', isFocused ? 2 : 1);
+      drawWastelandPlate(ctx, x, y, cardW, cardH, {
+        fill: isFocused ? 'rgba(50, 38, 22, 0.97)' : 'rgba(20, 17, 28, 0.94)',
+        border: isFocused ? '#ffe047' : '#655b7c',
+        borderThickness: isFocused ? 2 : 1,
+        topAccent: isFocused ? '#ffe047' : undefined,
+        rivetColor: isFocused ? '#fff5b0' : 'rgba(196, 188, 220, 0.42)',
+      });
 
       this.fonts.draw(ctx, `@y[${i + 1}] ULTRA ${i === 0 ? 'A' : 'B'}`, x + cardW * 0.5, y + 7, 'fntSmall', {
         align: 'center',
@@ -2738,12 +2879,13 @@ export class MenuSystem {
     const px = cx - Math.floor(panelW / 2);
     const py = Math.round((height - panelH) * 0.5);
 
-    // Clean single-frame NT overlay (eliminating 4 nested grey rectangle boxes!)
-    ctx.fillStyle = 'rgba(16, 13, 22, 0.98)';
-    ctx.fillRect(px, py, panelW, panelH);
-    ctx.fillStyle = '#ffe047';
-    ctx.fillRect(px + 1, py + 1, panelW - 2, 2);
-    drawPixelBorder(ctx, px, py, panelW, panelH, '#ffe047', 1);
+    // Riveted beveled gunmetal Pause overlay
+    drawWastelandPlate(ctx, px, py, panelW, panelH, {
+      fill: 'rgba(16, 13, 24, 0.98)',
+      border: '#ffe047',
+      topAccent: '#ffe047',
+      rivetColor: '#fff099',
+    });
 
     this.fonts.draw(ctx, 'PAUSED', cx, py + 7, 'fntL', {
       align: 'center',
@@ -3022,9 +3164,11 @@ export class MenuSystem {
     const px = Math.round((width - panelW) * 0.5);
     const modalY = 8;
 
-    ctx.fillStyle = 'rgba(19, 16, 27, 0.98)';
-    ctx.fillRect(px, modalY, panelW, panelH);
-    drawPixelBorder(ctx, px, modalY, panelW, panelH, '#6b6080', 1);
+    drawWastelandPlate(ctx, px, modalY, panelW, panelH, {
+      fill: 'rgba(18, 15, 26, 0.98)',
+      border: '#72668a',
+      topAccent: 'rgba(255, 224, 71, 0.65)',
+    });
 
     // Top row: BACK button on top-left + OPTIONS header centered cleanly at modalY + 8
     this.drawButton(
@@ -3620,11 +3764,12 @@ export class MenuSystem {
     this.fonts.draw(ctx, sub, cx, topY + 20, 'fntSmall', { align: 'center', outline: true });
 
     // Summary Card
-    ctx.fillStyle = 'rgba(14, 11, 20, 0.96)';
-    ctx.fillRect(cardX, cardY, cardW, cardH);
-    ctx.fillStyle = victory ? '#ffe047' : '#c92a3c';
-    ctx.fillRect(cardX + 1, cardY + 1, cardW - 2, 2);
-    drawPixelBorder(ctx, cardX, cardY, cardW, cardH, victory ? '#ffe047' : '#a82838', 1);
+    drawWastelandPlate(ctx, cardX, cardY, cardW, cardH, {
+      fill: 'rgba(14, 11, 22, 0.97)',
+      border: victory ? '#ffe047' : '#c92a3c',
+      topAccent: victory ? '#ffe047' : '#c92a3c',
+      rivetColor: victory ? '#fff299' : '#ff7d8a',
+    });
 
     const mutant = this.data.getMutant(simState?.player.mutant ?? save.selectedMutant);
     const areaText = simState

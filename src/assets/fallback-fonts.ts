@@ -1,7 +1,7 @@
 import type { FontDef, FontGlyph, SpriteDef, TpagRect } from '@/contracts';
 
-export const ATLAS_PAGE_WIDTH = 2048;
-export const ATLAS_PAGE_HEIGHT = 2048;
+export const ATLAS_PAGE_WIDTH = 4096;
+export const ATLAS_PAGE_HEIGHT = 4096;
 
 export type DrawCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 export type DrawFn = (ctx: DrawCtx, x: number, y: number, w: number, h: number, frame: number) => void;
@@ -166,6 +166,77 @@ export class FallbackAtlasBuilder {
       bboxRight: Math.max(1, w - 2),
       bboxTop: 1,
       bboxBottom: Math.max(1, h - 2),
+      bboxMode: 0,
+      sepMasks: 0,
+      playbackSpeed,
+      playbackSpeedType: 0,
+      frames,
+    };
+    this.sprites[name] = def;
+    this.spritesById.push(name);
+    return def;
+  }
+
+  /**
+   * Registers a 2x Hi-Bit crisp pixel-art sprite:
+   * - Logical world dimensions remain (logicalW, logicalH) with (originX, originY)
+   *   so hitboxes, anchors, camera, and tests stay 100% intact.
+   * - Atlas pixels are authored at (logicalW * hiScale) x (logicalH * hiScale)
+   *   (default 2x = 640x480 / 852x480 Odinfall-grade pixel density!).
+   */
+  addSpriteHiBit(
+    name: string,
+    logicalW: number,
+    logicalH: number,
+    originX: number,
+    originY: number,
+    frameCount: number,
+    drawAtHiRes: DrawFn,
+    playbackSpeed = 12,
+    hiScale = 2,
+  ): SpriteDef {
+    if (this.hasSprite(name)) {
+      return this.sprites[name]!;
+    }
+    const srcW = Math.max(1, Math.round(logicalW * hiScale));
+    const srcH = Math.max(1, Math.round(logicalH * hiScale));
+    const frames: TpagRect[] = [];
+    for (let f = 0; f < frameCount; f++) {
+      const alloc = this.allocRect(srcW, srcH);
+      const rect: TpagRect = {
+        ...alloc,
+        srcW,
+        srcH,
+        targetX: 0,
+        targetY: 0,
+        targetW: logicalW,
+        targetH: logicalH,
+        boundW: logicalW,
+        boundH: logicalH,
+      };
+      frames.push(rect);
+      this.drawOps.push({
+        page: rect.textureId,
+        x: rect.srcX,
+        y: rect.srcY,
+        w: srcW,
+        h: srcH,
+        frame: f,
+        draw: drawAtHiRes,
+      });
+    }
+    const id = this.nextSpriteId++;
+    const def: SpriteDef = {
+      id,
+      name,
+      width: logicalW,
+      height: logicalH,
+      originX,
+      originY,
+      bboxLeft: 1,
+      bboxRight: Math.max(1, logicalW - 2),
+      bboxTop: 1,
+      bboxBottom: Math.max(1, logicalH - 2),
       bboxMode: 0,
       sepMasks: 0,
       playbackSpeed,

@@ -223,6 +223,36 @@ export class LightingPass {
           glowRadius: Math.min(34, Math.max(18, prop.radius * 0.45)),
           glowAlpha: 0.11,
         });
+      } else if (prop.sprite) {
+        // Odinfall-grade atmospheric colored floor spill from luminous biome props!
+        const spr = prop.sprite;
+        if (spr === 'sprStreetLight') {
+          lights.push({ x: prop.x, y: prop.y - 8, radius: 64, intensity: 0.85, glowColor: 'rgba(255, 210, 105, 0.9)', glowRadius: 34, glowAlpha: 0.15 });
+        } else if (spr.startsWith('sprCrystalProp')) {
+          const isBlue = spr.includes('Blue');
+          const isGreen = spr.includes('Green');
+          lights.push({
+            x: prop.x,
+            y: prop.y - 2,
+            radius: 42,
+            intensity: 0.65,
+            glowColor: isBlue ? 'rgba(85, 200, 255, 0.9)' : isGreen ? 'rgba(85, 255, 130, 0.9)' : 'rgba(205, 100, 255, 0.9)',
+            glowRadius: 24,
+            glowAlpha: 0.13,
+          });
+        } else if (spr === 'sprPalacePillar' || spr === 'sprNuclearPillar') {
+          lights.push({ x: prop.x, y: prop.y - 4, radius: 46, intensity: 0.68, glowColor: 'rgba(72, 245, 128, 0.9)', glowRadius: 24, glowAlpha: 0.12 });
+        } else if (spr === 'sprMutantTube' || spr === 'sprTube') {
+          lights.push({ x: prop.x, y: prop.y - 4, radius: 48, intensity: 0.72, glowColor: 'rgba(72, 255, 135, 0.9)', glowRadius: 26, glowAlpha: 0.14 });
+        } else if (spr === 'sprSodaMachine') {
+          lights.push({ x: prop.x, y: prop.y - 2, radius: 40, intensity: 0.58, glowColor: 'rgba(110, 230, 255, 0.9)', glowRadius: 20, glowAlpha: 0.12 });
+        } else if (spr === 'sprCampfire') {
+          lights.push({ x: prop.x, y: prop.y - 2, radius: 84, intensity: 0.95, glowColor: 'rgba(255, 140, 48, 0.9)', glowRadius: 38, glowAlpha: 0.16 });
+        } else if (spr === 'sprIceFlower' || spr === 'sprIceFlowerIdle') {
+          lights.push({ x: prop.x, y: prop.y - 4, radius: 44, intensity: 0.70, glowColor: 'rgba(120, 230, 255, 0.9)', glowRadius: 22, glowAlpha: 0.14 });
+        } else if (spr === 'sprServer') {
+          lights.push({ x: prop.x, y: prop.y - 4, radius: 36, intensity: 0.52, glowColor: 'rgba(75, 185, 255, 0.9)', glowRadius: 18, glowAlpha: 0.11 });
+        }
       }
     }
 
@@ -413,10 +443,11 @@ export class LightingPass {
     }
     mainCtx.restore();
 
-    // 2. Darkness veil with carved light pools via cached radial mask stamp
+    // 2. Darkness veil with carved light pools via cached radial mask stamp (2x crisp Hi-Bit surface!)
     if (darkness <= 0.01) return;
 
-    const lctx = this.ensureSurface(w, h);
+    const lScale = 2;
+    const lctx = this.ensureSurface(w * lScale, h * lScale);
     if (!lctx || !this.canvas) return;
 
     const pal = BIOME_FALLBACK_PALETTES[state.map.biome] ?? BIOME_FALLBACK_PALETTES.sewers;
@@ -424,6 +455,10 @@ export class LightingPass {
     const effectiveDarkness =
       state.player.mutant === 'eyes' ? darkness * 0.74 : darkness;
 
+    lctx.save();
+    if (typeof lctx.setTransform === 'function') {
+      lctx.setTransform(lScale, 0, 0, lScale, 0, 0);
+    }
     lctx.globalCompositeOperation = 'source-over';
     lctx.globalAlpha = 1;
     lctx.clearRect(0, 0, w, h);
@@ -457,7 +492,8 @@ export class LightingPass {
       lctx.globalAlpha = 1;
       lctx.globalCompositeOperation = 'source-over';
     }
+    lctx.restore();
 
-    mainCtx.drawImage(this.canvas, 0, 0);
+    mainCtx.drawImage(this.canvas, 0, 0, this.canvas.width, this.canvas.height, 0, 0, w, h);
   }
 }
