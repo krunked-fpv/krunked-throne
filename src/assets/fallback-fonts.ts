@@ -93,6 +93,26 @@ export class FallbackAtlasBuilder {
         this.tpagCount++;
         return this.makeRect(PAD, newShelf.y, w, h, page.id);
       }
+
+      // Page is vertically full: relax waste threshold to pack into any existing shelf that fits
+      let fallbackShelf: AtlasShelf | null = null;
+      let fallbackWaste = Infinity;
+      for (let sIdx = 0; sIdx < page.shelves.length; sIdx++) {
+        const shelf = page.shelves[sIdx]!;
+        if (shelf.height >= h && shelf.cursorX + w + PAD <= ATLAS_PAGE_WIDTH) {
+          const waste = shelf.height - h;
+          if (waste < fallbackWaste) {
+            fallbackWaste = waste;
+            fallbackShelf = shelf;
+          }
+        }
+      }
+      if (fallbackShelf) {
+        const rect = this.makeRect(fallbackShelf.cursorX, fallbackShelf.y, w, h, page.id);
+        fallbackShelf.cursorX += w + PAD;
+        this.tpagCount++;
+        return rect;
+      }
     }
 
     // All existing pages are full: automatically allocate a brand-new 2048x2048 texture page
@@ -267,7 +287,7 @@ export class FallbackAtlasBuilder {
 // PIXEL-ART DRAWING PRIMITIVES (FAST, CRISP, DETERMINISTIC)
 // ============================================================================
 
-export const INK = '#120e16';
+export const INK = '#0e0a12';
 export const INK_SOFT = '#1f1826';
 
 /** Deterministic integer hash returning 0..255 for pixel textures. */
