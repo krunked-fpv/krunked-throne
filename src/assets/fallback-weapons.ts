@@ -29,10 +29,30 @@ type WeaponShape =
   | 'sword'
   | 'hammer'
   | 'guitar'
-  | 'eggplant';
+  | 'eggplant'
+  // Bespoke iconic special weapons (Blueprint Section 5.2 Tier 2 #1)
+  | 'frog_pistol'
+  | 'gun_gun'
+  | 'super_plasma_cannon'
+  | 'black_sword'
+  | 'nuke_launcher'
+  | 'energy_sword'
+  | 'ultra_shovel'
+  | 'blood_hammer';
 
 function classifyWeaponShape(w: WeaponDef): WeaponShape {
   const id = w.id.toLowerCase();
+  const spr = w.sprite;
+  // Bespoke iconic special weapon shapes FIRST!
+  if (spr === 'sprFrogBlaster' || spr === 'sprGoldFrogBlaster' || id.includes('frog_pistol')) return 'frog_pistol';
+  if (spr === 'sprGunGun' || id === 'gun_gun') return 'gun_gun';
+  if (spr === 'sprSuperPlasmaCannon' || id === 'super_plasma_cannon') return 'super_plasma_cannon';
+  if (spr === 'sprBlackSword' || id === 'black_sword') return 'black_sword';
+  if (spr === 'sprNukeLauncher' || spr === 'sprGoldNukeLauncher' || id.includes('nuke_launcher')) return 'nuke_launcher';
+  if (spr === 'sprEnergySword' || id === 'energy_sword' || id === 'cursed_energy_sword') return 'energy_sword';
+  if (spr === 'sprUltraShovel' || id === 'ultra_shovel') return 'ultra_shovel';
+  if (spr === 'sprBloodHammer' || id === 'blood_hammer') return 'blood_hammer';
+
   if (id.includes('eggplant')) return 'eggplant';
   if (id.includes('guitar')) return 'guitar';
   if (id.includes('wrench')) return 'wrench';
@@ -97,10 +117,9 @@ function getWeaponPalette(w: WeaponDef): WeaponPalette {
     return { metal: '#c04c30', metalHi: '#ec7c58', metalDark: '#7c2818', grip: '#462a20', gripDark: '#2a1610', glow: '#ffa828', glowHi: '#fff498', isGold: false, isUltra: false };
   }
   if (id.includes('black')) {
-    return { metal: '#3c384a', metalHi: '#68627c', metalDark: '#201e2a', grip: '#c83038', gripDark: '#7c1820', glow: '#b498ff', glowHi: '#e8dcff', isGold: false, isUltra: false };
+    return { metal: '#2a2634', metalHi: '#5c5670', metalDark: '#14121c', grip: '#c82834', gripDark: '#7c141c', glow: '#d8b4ff', glowHi: '#ffffff', isGold: false, isUltra: false };
   }
   if (w.ammoType === 'energy') {
-    // Sleek gunmetal steel + vibrant NEON-GREEN laser/plasma coils (matching reference video!)
     const isLightning = id.includes('lightning');
     return {
       metal: '#7c8896',
@@ -129,15 +148,142 @@ function getWeaponPalette(w: WeaponDef): WeaponPalette {
 /**
  * Draws crisp compact native 1x black-outlined horizontal weapons (20x10, orig 5,5).
  * Exact <= 20x10 dimensions ensure ZERO fractional downscaling in HUD active (22x10)
- * and secondary (20x10) weapon boxes, with razor-sharp trigger/barrel silhouettes!
+ * and secondary (20x10) weapon boxes, with bespoke silhouettes for iconic special weapons!
  */
-function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, def: WeaponDef): void {
+function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, def: WeaponDef, frame = 0): void {
   const p = new PxCanvas(w, h);
   const shape = classifyWeaponShape(def);
   const pal = getWeaponPalette(def);
   const my = 4; // vertical centerline inside 20x10 (1px outline margin top & bottom: y=1..8)
 
   switch (shape) {
+    case 'frog_pistol': {
+      // Stubby green/gold frog-mouthed pistol with cute yellow bulging eye bump & wide toxic muzzle!
+      p.rect(4, my + 1, 3, 3, pal.grip);
+      p.set(3, my + 3, pal.gripDark);
+      // Plump frog-head receiver
+      p.rect(5, my - 2, 10, 4, pal.metal);
+      p.rect(6, my - 2, 7, 1, pal.metalHi);
+      p.rect(6, my + 1, 8, 1, pal.metalDark);
+      // Bulging yellow frog eye dome on top!
+      p.rect(7, my - 3, 3, 2, '#ffe838');
+      p.set(9, my - 3, INK);
+      // Wide glowing toxic frog-mouth muzzle
+      p.rect(14, my - 2, 4, 5, pal.metalDark);
+      p.rect(15, my - 1, 3, 3, pal.isGold ? '#a8ff48' : pal.glow);
+      p.set(16, my, '#ffffff');
+      break;
+    }
+
+    case 'gun_gun': {
+      // Iconic boxy purple/gold gun-spitting cube with tiny gun barrel peeking out!
+      p.rect(3, my - 3, 11, 7, '#6430a8');
+      p.rect(4, my - 3, 9, 2, '#a468e8');
+      p.rect(4, my + 2, 9, 2, '#3a1868');
+      // Gold trim & crown emblem on side of cube
+      p.rect(3, my - 3, 11, 1, '#f5c838');
+      p.rect(3, my + 3, 11, 1, '#c89218');
+      p.rect(6, my - 1, 5, 3, '#f5c838');
+      p.rect(7, my, 3, 1, '#ffffff');
+      // Mini gun silhouette emerging from right chute!
+      p.rect(14, my - 1, 4, 2, '#9ca8b8');
+      p.rect(14, my - 1, 4, 1, '#ffffff');
+      p.rect(14, my + 1, 2, 2, '#885230');
+      break;
+    }
+
+    case 'super_plasma_cannon': {
+      // Massive triple-coil green Super Plasma Cannon filling 20x10!
+      p.rect(2, my - 2, 5, 5, pal.metalDark);
+      p.rect(2, my + 2, 3, 2, pal.grip);
+      p.rect(5, my - 3, 12, 7, pal.metal);
+      p.rect(6, my - 3, 10, 2, pal.metalHi);
+      p.rect(6, my + 2, 10, 2, pal.metalDark);
+      // 3 blazing stacked/parallel neon-green plasma containment coils!
+      for (const cx of [7, 10, 13]) {
+        p.rect(cx, my - 2, 2, 5, '#48f848');
+        p.rect(cx, my - 1, 2, 2, '#e4ffe0');
+      }
+      // Flared blazing plasma emitter crown
+      p.rect(17, my - 2, 2, 5, '#58ff58');
+      p.rect(17, my - 1, 2, 3, '#ffffff');
+      break;
+    }
+
+    case 'black_sword': {
+      // Sleek jet-black katana with crimson hilt wrap, gold tsuba & razor pale edge!
+      p.rect(2, my, 4, 2, '#c82834'); // crimson tsuka wrap
+      p.set(3, my, '#ff6874');
+      p.set(5, my + 1, '#7c141c');
+      p.rect(6, my - 2, 1, 6, '#f5c838'); // crisp golden tsuba guard
+      // Long sleek curved jet-black blade
+      p.rect(7, my - 1, 10, 3, '#221e2c');
+      p.rect(7, my - 1, 11, 1, '#68607c');
+      p.set(17, my - 1, '#e8dcff'); // gleaming tip
+      p.set(18, my, '#ffffff');
+      break;
+    }
+
+    case 'nuke_launcher': {
+      // Fat olive/gold nuclear tube with oversized finned nuclear warhead bulging out the front!
+      p.rect(2, my - 1, 11, 4, pal.metal);
+      p.rect(3, my - 1, 9, 1, pal.metalHi);
+      p.rect(3, my + 2, 9, 1, pal.metalDark);
+      p.rect(3, my + 3, 2, 1, pal.grip);
+      p.rect(8, my + 3, 2, 1, pal.gripDark);
+      // Warning stripe band
+      p.rect(10, my - 1, 2, 4, '#f5c838');
+      // Bulging nuclear warhead protruding from muzzle!
+      p.rect(13, my - 2, 4, 6, pal.isGold ? '#fff088' : '#4a6842');
+      p.rect(14, my - 1, 2, 4, '#68ff58'); // radioactive trefoil glow
+      p.rect(17, my - 1, 2, 4, '#e03428'); // red warhead nose cone!
+      p.set(18, my, '#ff9888');
+      break;
+    }
+
+    case 'energy_sword': {
+      // Bespoke sleek metallic emitter hilt + blazing long neon-green energy saber!
+      p.rect(2, my, 4, 2, '#4a5464');
+      p.rect(3, my, 2, 1, '#98a6b8');
+      p.rect(6, my - 2, 2, 6, '#6c7a8c');
+      p.set(7, my - 2, '#d8e6f4');
+      p.set(7, my + 3, '#3a424e');
+      // Radiant tapering plasma blade
+      p.rect(8, my - 2, 9, 5, '#34e04c');
+      p.rect(8, my - 1, 10, 3, '#98ff88');
+      p.rect(9, my, 9, 1, '#ffffff');
+      p.set(18, my, '#e0ffe0');
+      break;
+    }
+
+    case 'ultra_shovel': {
+      // Heavy gunmetal shaft + neon-green rad conduit + gleaming broad Ultra spade head!
+      p.rect(2, my, 8, 2, '#4a5460');
+      p.rect(4, my, 5, 1, '#48f858'); // neon-green rad shaft strip
+      p.rect(10, my - 3, 7, 8, '#687886');
+      p.rect(11, my - 3, 5, 2, '#b4c6d4');
+      p.rect(12, my - 1, 4, 4, '#48f058'); // glowing green rad center
+      p.rect(13, my, 2, 2, '#e4ffe4');
+      p.rect(17, my - 2, 1, 6, '#78ff78'); // razor neon blade edge
+      break;
+    }
+
+    case 'blood_hammer': {
+      // Bone-crimson grip + brutal spiked crimson Blood Hammer head!
+      p.rect(2, my, 9, 2, '#7c1a24');
+      p.rect(3, my, 7, 1, '#d84854');
+      // Massive spiked hammer head
+      p.rect(11, my - 3, 6, 8, '#c82434');
+      p.rect(12, my - 3, 4, 2, '#ff7884');
+      p.rect(12, my + 3, 4, 2, '#6c101a');
+      // Spiked bone/crimson impact teeth on face & top/bottom
+      p.set(17, my - 2, '#ffc0c8');
+      p.set(17, my, '#ffffff');
+      p.set(17, my + 2, '#ffc0c8');
+      p.rect(13, my - 1, 2, 3, '#ff4858');
+      break;
+    }
+
     case 'eggplant': {
       p.rect(3, my - 1, 3, 3, '#48b848');
       p.rect(6, my - 2, 9, 5, '#7a32b8');
@@ -177,18 +323,10 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'sword': {
-      const isEnergy = def.id.includes('energy');
-      if (isEnergy) {
-        p.rect(2, my, 4, 2, '#4a5464');
-        p.rect(6, my - 2, 2, 6, '#7a8898');
-        p.rect(8, my - 1, 9, 4, '#42f058');
-        p.rect(9, my, 9, 2, '#e4ffe8');
-      } else {
-        p.rect(2, my, 4, 2, pal.grip);
-        p.rect(6, my - 2, 2, 6, pal.glow);
-        p.rect(8, my - 1, 9, 3, pal.metal);
-        p.rect(8, my - 1, 10, 1, '#ffffff');
-      }
+      p.rect(2, my, 4, 2, pal.grip);
+      p.rect(6, my - 2, 2, 6, pal.glow);
+      p.rect(8, my - 1, 9, 3, pal.metal);
+      p.rect(8, my - 1, 10, 1, '#ffffff');
       break;
     }
     case 'hammer': {
@@ -202,7 +340,6 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'crossbow': {
-      // Unmistakable T-shaped crossbow silhouette with clean bow limbs & bolt tip
       p.rect(12, 1, 2, 8, pal.metalDark);
       p.set(11, 1, pal.metal);
       p.set(11, 8, pal.metal);
@@ -221,7 +358,6 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'bazooka': {
-      // Flared rocket cone + long launch tube + open grip gap
       p.rect(2, my - 1, 13, 3, pal.metal);
       p.rect(3, my - 1, 11, 1, pal.metalHi);
       p.rect(15, my - 2, 3, 5, pal.glow);
@@ -231,18 +367,16 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'nader': {
-      // Grenade launcher: distinct stubby barrel + heavy lower drum + rear stock gap!
       p.rect(2, my, 4, 3, pal.grip);
       p.rect(5, my - 2, 12, 3, pal.metal);
       p.rect(6, my - 2, 10, 1, pal.metalHi);
-      p.rect(8, my + 1, 5, 3, pal.metalDark); // revolving drum
+      p.rect(8, my + 1, 5, 3, pal.metalDark);
       p.rect(9, my + 1, 2, 1, pal.glow);
       break;
     }
     case 'minigun': {
-      // Heavy rotary housing + top carry handle + 3 crisp parallel barrels!
       p.rect(2, my - 1, 6, 5, pal.metalDark);
-      p.rect(3, my - 3, 4, 1, pal.metalHi); // carry handle with open cutout underneath
+      p.rect(3, my - 3, 4, 1, pal.metalHi);
       p.set(3, my - 2, pal.metal);
       p.set(6, my - 2, pal.metal);
       p.rect(8, my - 2, 10, 1, pal.metalHi);
@@ -262,7 +396,6 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
     }
     case 'double_shotgun':
     case 'flak': {
-      // Sloped stock + twin stacked barrels + pump forend with open cutout!
       p.rect(2, my + 1, 4, 3, pal.grip);
       p.rect(5, my - 2, 12, 2, pal.metalHi);
       p.rect(5, my, 12, 1, pal.metalDark);
@@ -270,7 +403,6 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'shotgun': {
-      // Iconic slim shotgun silhouette: angled wood stock, long barrel, distinct wooden pump!
       p.rect(2, my + 1, 4, 3, pal.grip);
       p.rect(5, my - 1, 13, 2, pal.metal);
       p.rect(6, my - 1, 11, 1, pal.metalHi);
@@ -279,14 +411,13 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
     }
     case 'flamer': {
       p.rect(2, my - 1, 13, 3, pal.metal);
-      p.rect(7, my + 2, 6, 2, '#dc3428'); // pressurized fuel canister
+      p.rect(7, my + 2, 6, 2, '#dc3428');
       p.rect(15, my - 2, 3, 3, pal.glow);
       p.set(16, my - 1, pal.glowHi);
       break;
     }
     case 'plasma':
     case 'lightning': {
-      // Sleek energy cannon: dual bright coils, notched emitter nose, clean grip cutout!
       p.rect(3, my - 2, 13, 4, pal.metal);
       p.rect(4, my - 2, 11, 1, pal.metalHi);
       p.rect(7, my - 1, 3, 2, pal.glow);
@@ -298,7 +429,6 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'laser_rifle': {
-      // Long sleek rifle + exposed neon-green rail + open stock/mag gap
       p.rect(2, my + 1, 3, 3, pal.grip);
       p.rect(5, my - 2, 10, 4, pal.metal);
       p.rect(6, my - 2, 8, 1, pal.metalHi);
@@ -309,7 +439,6 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'laser_pistol': {
-      // Sleek compact Laser Pistol (crisp emitter + green cell + open under-barrel gap!)
       p.rect(4, my - 2, 10, 3, pal.metal);
       p.rect(5, my - 2, 8, 1, pal.metalHi);
       p.rect(7, my - 1, 4, 2, pal.glow);
@@ -320,16 +449,14 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     case 'rifle': {
-      // Classic Assault Rifle: slim barrel, raised sight, sloped stock, distinct protruding mag!
       p.rect(2, my + 1, 4, 3, pal.grip);
       p.rect(5, my - 1, 13, 2, pal.metal);
       p.rect(6, my - 1, 11, 1, pal.metalHi);
-      p.rect(10, my + 1, 2, 3, pal.metalDark); // magazine
-      p.rect(8, my - 2, 4, 1, pal.metalDark); // iron sight
+      p.rect(10, my + 1, 2, 3, pal.metalDark);
+      p.rect(8, my - 2, 4, 1, pal.metalDark);
       break;
     }
     case 'smg': {
-      // Compact boxy SMG with crisp separation between rear grip & front magazine!
       p.rect(4, my - 2, 10, 3, pal.metal);
       p.rect(5, my - 2, 8, 1, pal.metalHi);
       p.rect(4, my + 1, 2, 3, pal.grip);
@@ -338,22 +465,33 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
       break;
     }
     default: {
-      // Iconic Revolver / Pistol (exact crisp silhouette matching steam_gens.png HUD!)
-      // Crisp slim barrel + raised cylinder + angled grip + open trigger-guard negative space!
-      p.rect(5, my - 2, 11, 2, pal.metal);     // sleek top barrel
-      p.rect(6, my - 2, 9, 1, pal.metalHi);    // sunlit barrel highlight
-      p.rect(7, my, 3, 2, pal.metalDark);      // revolver cylinder
-      p.set(6, my, pal.metal);                 // hammer/frame joint
-      p.rect(4, my + 1, 3, 3, pal.grip);       // angled brown grip
-      p.set(3, my + 3, pal.gripDark);          // angled butt heel
+      p.rect(5, my - 2, 11, 2, pal.metal);
+      p.rect(6, my - 2, 9, 1, pal.metalHi);
+      p.rect(7, my, 3, 2, pal.metalDark);
+      p.set(6, my, pal.metal);
+      p.rect(4, my + 1, 3, 3, pal.grip);
+      p.set(3, my + 3, pal.gripDark);
       break;
     }
   }
 
+  // Animated metallic glint sweep on Golden & Ultra weapons!
   if (pal.isGold) {
-    p.set(11, my - 2, '#ffffff');
+    const gx = 5 + frame * 3;
+    for (let dy = -2; dy <= 2; dy++) {
+      const px = gx - dy;
+      if (p.isOpaque(px, my + dy)) {
+        p.set(px, my + dy, '#ffffff');
+      }
+    }
   } else if (pal.isUltra) {
-    p.rect(8, my - 1, 3, 1, '#58ff70');
+    const gx = 6 + frame * 3;
+    for (let dy = -2; dy <= 2; dy++) {
+      const px = gx - dy;
+      if (p.isOpaque(px, my + dy)) {
+        p.set(px, my + dy, frame % 2 === 0 ? '#98ff98' : '#ffffff');
+      }
+    }
   }
 
   p.outline(INK);
@@ -361,10 +499,12 @@ function drawWeapon1x(ctx: DrawCtx, x: number, y: number, w: number, h: number, 
 }
 
 export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
-  // 1. ALL 142 WEAPONS AT CRISP NATIVE 1x (20x10, orig 5,5) — 1:1 integer pixels in HUD!
+  // 1. ALL WEAPONS AT CRISP NATIVE 1x (20x10, orig 5,5) — 4-frame glint sweep on Golden & Ultra!
   for (const def of Object.values(WEAPONS)) {
     if (!b.hasSprite(def.sprite)) {
-      b.addSprite(def.sprite, 20, 10, 5, 5, 1, (ctx, x, y, w, h) => drawWeapon1x(ctx, x, y, w, h, def));
+      const pal = getWeaponPalette(def);
+      const frames = pal.isGold || pal.isUltra ? 4 : 1;
+      b.addSprite(def.sprite, 20, 10, 5, 5, frames, (ctx, x, y, w, h, f) => drawWeapon1x(ctx, x, y, w, h, def, f));
     }
   }
 
@@ -414,7 +554,6 @@ export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     p.flush(ctx, x, y);
   };
 
-  // Iconic Nuclear Throne enemy orbs: bold bright colored ring + pure white center + 1px dark outline!
   const drawEnemyOrb1x = (ctx: DrawCtx, x: number, y: number, w: number, h: number, f: number, outer: string, mid: string, core: string): void => {
     const p = new PxCanvas(w, h);
     const cx = Math.floor(w / 2);
@@ -441,21 +580,21 @@ export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
   ): void => {
     const p = new PxCanvas(w, h);
     const cy = Math.floor(h / 2);
-    const halfSpan = Math.floor(h * 0.44);
-    const maxThick = f === 0 ? Math.max(5, Math.floor(w * 0.34)) : f === 1 ? Math.max(3, Math.floor(w * 0.22)) : 2;
+    const halfSpan = Math.floor(h * 0.45);
+    const maxThick = f === 0 ? Math.max(7, Math.floor(w * 0.34)) : f === 1 ? Math.max(4, Math.floor(w * 0.22)) : 2;
 
     for (let dy = -halfSpan; dy <= halfSpan; dy++) {
       const ny = dy / (halfSpan + 0.5);
       const curve = 1 - ny * ny;
-      const taper = Math.pow(Math.max(0, curve), 0.55);
+      const taper = Math.pow(Math.max(0, curve), 0.52);
       const thick = Math.max(1, Math.round(maxThick * taper));
-      const leadX = Math.floor(w * 0.22) + Math.round(curve * w * 0.58);
+      const leadX = Math.floor(w * 0.22) + Math.round(curve * w * 0.62);
       const trailX = leadX - thick;
       if (f < 2) p.set(trailX - 1, cy + dy, trailRim);
       p.rect(trailX, cy + dy, thick, 1, outer);
       const coreW = Math.max(1, Math.ceil(thick * 0.55));
       p.rect(leadX - coreW + 1, cy + dy, coreW, 1, core);
-      if (taper > 0.25) p.set(leadX, cy + dy, '#ffffff');
+      if (taper > 0.22) p.set(leadX, cy + dy, '#ffffff');
     }
     p.flush(ctx, x, y);
   };
@@ -477,32 +616,31 @@ export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     const baseR = Math.min(w, h) * (0.28 + f * 0.055);
 
     if (f === 0) {
-      // Pure bright white-hot pixel flash cloud
-      p.ellipse(cx, cy, baseR * 1.1, baseR * 1.1, '#ffffff');
-      p.ellipse(cx - 3, cy - 2, baseR * 0.65, baseR * 0.65, '#ffffff');
-      p.ellipse(cx + 3, cy + 2, baseR * 0.6, baseR * 0.6, '#ffffff');
+      p.ellipse(cx, cy, baseR * 1.12, baseR * 1.12, '#ffffff');
+      p.ellipse(cx - 4, cy - 3, baseR * 0.68, baseR * 0.68, '#ffffff');
+      p.ellipse(cx + 4, cy + 3, baseR * 0.62, baseR * 0.62, '#ffffff');
       p.outline(INK);
       p.flush(ctx, x, y);
       return;
     }
 
-    const lobes = 6;
+    const lobes = 7;
     const smokeCol = '#363038';
     const smokeHi = '#524854';
     for (let i = 0; i < lobes; i++) {
-      const ang = (i / lobes) * Math.PI * 2 + f * 0.5;
-      const dist = baseR * (0.45 + (i % 2) * 0.14);
-      const lr = Math.max(2, baseR * (0.48 - f * 0.04));
+      const ang = (i / lobes) * Math.PI * 2 + f * 0.45;
+      const dist = baseR * (0.48 + (i % 2) * 0.14);
+      const lr = Math.max(2.5, baseR * (0.48 - f * 0.04));
       const lx = cx + Math.cos(ang) * dist;
       const ly = cy + Math.sin(ang) * dist;
       p.ellipse(lx, ly, lr, lr, f >= 3 ? (i % 2 === 0 ? smokeCol : smokeHi) : outer);
     }
     if (f < 3) {
-      p.ellipse(cx, cy, baseR * 0.72, baseR * 0.72, mid);
-      p.ellipse(cx, cy, baseR * (f === 1 ? 0.48 : 0.30), baseR * (f === 1 ? 0.48 : 0.30), core);
+      p.ellipse(cx, cy, baseR * 0.74, baseR * 0.74, mid);
+      p.ellipse(cx, cy, baseR * (f === 1 ? 0.50 : 0.30), baseR * (f === 1 ? 0.50 : 0.30), core);
     } else {
       p.ellipse(cx - 1, cy - 1, baseR * 0.38, baseR * 0.38, outer);
-      p.ellipse(cx, cy, baseR * 0.2, baseR * 0.2, mid);
+      p.ellipse(cx, cy, baseR * 0.22, baseR * 0.22, mid);
     }
     p.outline(INK);
     p.flush(ctx, x, y);
@@ -575,8 +713,6 @@ export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     );
   }
 
-  // Iconic bright red-ring white-core enemy orbs (04_desert_1_1.png & 07_bigdog_3_3.png)
-  // & glowing neon-green Palace orbs (15_palace_7_1.png)!
   const enemyOrbList: Array<[string, number, string, string, string]> = [
     ['sprEnemyBullet', 11, '#d82818', '#ff5428', '#ffffff'],
     ['sprEnemyBullet1', 11, '#d82818', '#ff5428', '#ffffff'],
@@ -641,15 +777,135 @@ export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     p.flush(ctx, x, y);
   });
 
+  // 3. MISSING WEAPON FX SPRITES (Blueprint Section 5.1 #4)
+  b.addSprite('sprGunGunFire', 16, 16, 8, 8, 12, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 8;
+    const cy = 8;
+    const r = f < 4 ? 3 + f : Math.max(1, 7 - Math.floor((f - 3) * 0.7));
+    if (f < 9) {
+      p.ellipse(cx, cy, r, r, f % 2 === 0 ? '#f5c838' : '#58e8ff');
+      if (r >= 3) p.ellipse(cx, cy, Math.max(1, r - 2), Math.max(1, r - 2), '#ffffff');
+    }
+    // Tiny gun silhouette spitting out right!
+    const gx = Math.min(11, 5 + Math.floor(f * 0.5));
+    if (f >= 2 && f <= 10) {
+      p.rect(gx, cy - 2, 4, 2, '#a4b2c4');
+      p.rect(gx, cy, 2, 2, '#824c28');
+    }
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprNukeFlame', 32, 24, 32, 12, 3, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cy = 12;
+    const len = 22 + (f === 1 ? 5 : f === 2 ? -3 : 0);
+    const tailX = w - 2 - len;
+    // Blazing nuclear exhaust plume tapering left from rocket nozzle at right edge
+    p.poly([[w - 2, cy - 7], [tailX, cy], [w - 2, cy + 7]], '#ff5818');
+    p.poly([[w - 2, cy - 5], [tailX + 5, cy], [w - 2, cy + 5]], '#ffe848');
+    p.poly([[w - 2, cy - 2], [tailX + 12, cy], [w - 2, cy + 2]], '#ffffff');
+    p.ellipse(tailX + 4, cy + (f === 1 ? -3 : 3), 3, 2, '#ff8828');
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprPopoPlasmaImpact', 32, 32, 16, 16, 7, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 16;
+    const cy = 16;
+    const r = 4 + f * 2;
+    if (f < 4) {
+      p.ellipse(cx, cy, Math.min(13, r + 2), Math.min(13, r + 2), '#2468e0');
+      p.ellipse(cx, cy, Math.min(11, r), Math.min(11, r), '#58e8ff');
+      if (f < 2) p.ellipse(cx, cy, Math.max(2, 6 - f * 2), Math.max(2, 6 - f * 2), '#ffffff');
+    } else {
+      p.pixelRing(cx, cy, Math.min(14, r), '#48b8ff');
+      p.pixelRing(cx, cy, Math.max(2, Math.min(12, r - 2)), '#c8f8ff');
+    }
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + f * 0.4;
+      const d = Math.min(14, 4 + f * 2);
+      p.rect(Math.round(cx + Math.cos(ang) * d), Math.round(cy + Math.sin(ang) * d), 2, 2, f < 4 ? '#ffffff' : '#68ecff');
+    }
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprPopoPlasmaTrail', 8, 8, 4, 4, 3, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const r = Math.max(1, 3 - f);
+    p.ellipse(4, 4, r, r, f === 0 ? '#ffffff' : f === 1 ? '#58e8ff' : '#2878e8');
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprUltraBulletHit', 24, 24, 12, 12, 4, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 12;
+    const cy = 12;
+    if (f < 2) {
+      p.ellipse(cx, cy, 6 - f, 6 - f, '#34d848');
+      p.ellipse(cx, cy, 4 - f, 4 - f, '#d8ffb8');
+      p.rect(cx - 1, cy - 1, 2, 2, '#ffffff');
+    }
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2 + f * 0.3;
+      const dist = 3 + f * 2.5;
+      p.rect(Math.round(cx + Math.cos(ang) * dist), Math.round(cy + Math.sin(ang) * dist), 2, 2, i % 2 === 0 ? '#58ff68' : '#ffffff');
+    }
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprUltraShellDisappear', 16, 16, 8, 8, 5, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 8;
+    const cy = 8;
+    const r = Math.max(1, 5 - f);
+    p.ellipse(cx, cy, r, r, f < 2 ? '#58ff68' : '#2c9c38');
+    if (f < 3) p.ellipse(cx, cy, Math.max(1, r - 2), Math.max(1, r - 2), '#e8ffe8');
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprUltraGrenadeBlink', 6, 6, 3, 3, 2, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    p.rect(1, 1, 4, 4, f === 0 ? '#48ff58' : '#ffffff');
+    p.rect(2, 2, 2, 2, f === 0 ? '#ffffff' : '#98ff88');
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  b.addSprite('sprHyperSlugDisappear', 24, 24, 12, 12, 6, (ctx, x, y, w, h, f) => {
+    const p = new PxCanvas(w, h);
+    const cx = 12;
+    const cy = 12;
+    const spread = 2 + f * 1.8;
+    const sz = Math.max(1, 3 - Math.floor(f * 0.5));
+    if (f < 2) {
+      p.ellipse(cx, cy, 5 - f, 5 - f, '#58ecff');
+      p.ellipse(cx, cy, 2, 2, '#ffffff');
+    }
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + f * 0.5;
+      p.rect(Math.round(cx + Math.cos(ang) * spread), Math.round(cy + Math.sin(ang) * spread), sz, sz, i % 2 === 0 ? '#68f4ff' : '#ffa838');
+    }
+    p.outline(INK);
+    p.flush(ctx, x, y);
+  });
+
+  // 4. WIDENED MELEE SLASHES (40x40..56x56) & PUNCHIER EXPLOSIONS (44x44) (Blueprint Section 5.2 Tier 2 #2)
   const slashList: Array<[string, number, string, string, string]> = [
-    ['sprSlash', 24, '#7ce0ff', '#ffffff', '#182b47'],
-    ['sprHeavySlash', 28, '#ffc038', '#ffffff', '#48260e'],
-    ['sprMegaSlash', 32, '#ff6e28', '#ffffff', '#4a180d'],
-    ['sprEnergySlash', 26, '#48ff80', '#ffffff', '#0c4222'],
-    ['sprHeavyEnergySlash', 30, '#48ff80', '#ffffff', '#0c4222'],
-    ['sprLightningSlash', 26, '#4ce8ff', '#ffffff', '#0d2e4a'],
-    ['sprBloodSlash', 26, '#ff2848', '#ffe8ec', '#4a0b18'],
-    ['sprUltraSlash', 30, '#48ff80', '#ffffff', '#0c4222'],
+    ['sprSlash', 40, '#7ce0ff', '#ffffff', '#182b47'],
+    ['sprHeavySlash', 44, '#ffc038', '#ffffff', '#48260e'],
+    ['sprMegaSlash', 56, '#ff6e28', '#ffffff', '#4a180d'],
+    ['sprEnergySlash', 40, '#48ff80', '#ffffff', '#0c4222'],
+    ['sprHeavyEnergySlash', 44, '#48ff80', '#ffffff', '#0c4222'],
+    ['sprLightningSlash', 42, '#4ce8ff', '#ffffff', '#0d2e4a'],
+    ['sprBloodSlash', 42, '#ff2848', '#ffe8ec', '#4a0b18'],
+    ['sprUltraSlash', 44, '#48ff80', '#ffffff', '#0c4222'],
   ];
   for (const [name, s, outer, core, trailRim] of slashList) {
     b.addSprite(name, s, s, Math.floor(s / 2), Math.floor(s / 2), 3, (ctx, x, y, sw, sh, f) =>
@@ -657,19 +913,19 @@ export function registerWeaponsAndProjectiles(b: FallbackAtlasBuilder): void {
     );
   }
 
-  b.addSprite('sprExplosion', 28, 28, 14, 14, 4, (ctx, x, y, w, h, f) =>
+  b.addSprite('sprExplosion', 44, 44, 22, 22, 4, (ctx, x, y, w, h, f) =>
     drawExplosion1x(ctx, x, y, w, h, f, '#c02818', '#ff7c20', '#fff8b0'),
   );
-  b.addSprite('sprSmallExplosion', 18, 18, 9, 9, 4, (ctx, x, y, w, h, f) =>
+  b.addSprite('sprSmallExplosion', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) =>
     drawExplosion1x(ctx, x, y, w, h, f, '#c02818', '#ff8024', '#fff8b4'),
   );
-  b.addSprite('sprGreenExplosion', 28, 28, 14, 14, 4, (ctx, x, y, w, h, f) =>
+  b.addSprite('sprGreenExplosion', 44, 44, 22, 22, 4, (ctx, x, y, w, h, f) =>
     drawExplosion1x(ctx, x, y, w, h, f, '#1c7828', '#58f058', '#ecffe8'),
   );
-  b.addSprite('sprMeatExplosion', 26, 26, 13, 13, 4, (ctx, x, y, w, h, f) =>
+  b.addSprite('sprMeatExplosion', 40, 40, 20, 20, 4, (ctx, x, y, w, h, f) =>
     drawExplosion1x(ctx, x, y, w, h, f, '#6c101a', '#dc283c', '#ffa0a8'),
   );
-  b.addSprite('sprRogueExplosion', 28, 28, 14, 14, 4, (ctx, x, y, w, h, f) =>
+  b.addSprite('sprRogueExplosion', 40, 40, 20, 20, 4, (ctx, x, y, w, h, f) =>
     drawExplosion1x(ctx, x, y, w, h, f, '#183c8c', '#48a8ff', '#e4fbff'),
   );
 

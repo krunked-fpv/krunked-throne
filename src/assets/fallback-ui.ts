@@ -7,7 +7,10 @@ import {
 import {
   drawBossIntroPortraitHiBit,
   drawCharSelectCardHiBit,
+  drawCharSelectLockedCardHiBit,
+  drawChickenHeadlessPortraitHiBit,
   drawMutantBigPortraitHiBit,
+  drawRebelBHoodedPortraitHiBit,
 } from './fallback-portraits';
 import { PxCanvas, bayer4, makeRamp } from './pixel-art';
 
@@ -609,6 +612,16 @@ const ULTRA_PALETTES_24: readonly IconPalette[] = [
   { d: '#5e24a8', m: '#ba60ff', h: '#f0ccff', a: '#4eff78', b: '#ffffff', cardBg: '#1c1030', cardMid: '#361e5c', cardTrim: '#ffe048' },
   { d: '#1e54be', m: '#4ea6ff', h: '#c8f4ff', a: '#ffe048', b: '#ffffff', cardBg: '#0e1c3a', cardMid: '#1c366e', cardTrim: '#f5c838' },
   { d: '#2c5ea8', m: '#6cb8ff', h: '#e8f8ff', a: '#6ef6ff', b: '#ffffff', cardBg: '#102234', cardMid: '#204264', cardTrim: '#ffe048' },
+  // 24: Horror MELTDOWN (overflowing cracked neon-green rad canister)
+  { d: '#1a7a22', m: '#58f848', h: '#d8ff98', a: '#98a6b4', b: '#ffffff', cardBg: '#0c2610', cardMid: '#1c5222', cardTrim: '#78ff58' },
+  // 25: Skeleton REDEMPTION (ivory skull regrowing warm pink/crimson flesh)
+  { d: '#982038', m: '#f05874', h: '#ffa8b8', a: '#ece6d8', b: '#ffffff', cardBg: '#2c101c', cardMid: '#542034', cardTrim: '#ff7088' },
+  // 26: Skeleton DAMNATION (blazing crimson bone gun)
+  { d: '#8c1820', m: '#ec303c', h: '#ff8868', a: '#ece6d8', b: '#fff498', cardBg: '#2c0e12', cardMid: '#561c22', cardTrim: '#ff5c38' },
+  // 27: Frog DISTANCE (radiating green rad-to-gas orb)
+  { d: '#1e7e24', m: '#62f044', h: '#ccff88', a: '#ffe838', b: '#ffffff', cardBg: '#0e2812', cardMid: '#1e5224', cardTrim: '#88ff58' },
+  // 28: Frog INTIMACY (mutant frog billowing thick neon toxic cloud)
+  { d: '#247820', m: '#6ce840', h: '#d8ff88', a: '#a8ff48', b: '#ffe838', cardBg: '#102c10', cardMid: '#225620', cardTrim: '#a8ff48' },
 ];
 
 const ULTRA_GRIDS_14: readonly (readonly string[])[] = [
@@ -636,6 +649,16 @@ const ULTRA_GRIDS_14: readonly (readonly string[])[] = [
   ['...444444.....', '.443333224....', '432..332.14...', '432.3ww2114...', '.422.22114....', '...444444.....'],
   ['.3w..3w..3w...', '.2w..2w..2w...', '.2w..2w..2w...', '42w442w442w4..', '455545554554..', '.1111111111...'],
   ['...444444.....', '.44w....w44...', '4..333333..4..', '4..32ww21..4..', '.44.1111.44...', '...444444.....'],
+  // 24: MELTDOWN (overflowing cracked rad canister)
+  ['..3..55..3....', '...4444444....', '.3.43ww324.3..', '..343w2k243...', '...42k3w24....', '...4222214....', '...4444444....'],
+  // 25: REDEMPTION (skull regrowing pink flesh)
+  ['...333444.....', '..33224444....', '.322kk4kk44...', '.322kk4kk44...', '..22224444....', '..222w4w4w....', '...111444.....'],
+  // 26: DAMNATION (blazing crimson bone gun)
+  ['...5..3..5....', '..35333353....', '.44444444443..', '.44ww44444432.', '.44444...11...', '.444..........', '.44...........'],
+  // 27: DISTANCE (radiating rad-to-toxic-gas orb)
+  ['.3..3333..3...', '3..33ww32..3..', '...3w55w21....', '3..2233221..3.', '.3..11111..3..', '..3..333..3...'],
+  // 28: INTIMACY (frog engulfed in billowing toxic gas)
+  ['.44..55..44...', '443332233344..', '4332k22k2234..', '432222222214..', '.4324444214...', '..44111144....'],
 ];
 
 function paintEmblem1x(
@@ -1272,8 +1295,8 @@ function registerSkillAndCrownSprites(b: FallbackAtlasBuilder): void {
     p.flush(ctx, ox, oy);
   });
 
-  // 24 FULL-BLEED Ultra Cards (24x32, 24 frames) + SHAPED Transparent-Background HUD Icons (16x16, 24 frames)!
-  b.addSprite('sprEGSkillIcon', 24, 32, 12, 16, 24, (ctx, ox, oy, w, h, f) => {
+  // 29 FULL-BLEED Ultra Cards (24x32, 29 frames) + SHAPED Transparent-Background HUD Icons (16x16, 29 frames)!
+  b.addSprite('sprEGSkillIcon', 24, 32, 12, 16, 29, (ctx, ox, oy, w, h, f) => {
     const pal = ULTRA_PALETTES_24[f % ULTRA_PALETTES_24.length]!;
     const p = new PxCanvas(w, h);
     const grid = ULTRA_GRIDS_14[f % ULTRA_GRIDS_14.length] ?? ULTRA_GRIDS_14[0]!;
@@ -1281,7 +1304,7 @@ function registerSkillAndCrownSprites(b: FallbackAtlasBuilder): void {
     p.flush(ctx, ox, oy);
   });
 
-  b.addSprite('sprEGIconHUD', 16, 16, 8, 8, 24, (ctx, ox, oy, w, h, f) => {
+  b.addSprite('sprEGIconHUD', 16, 16, 8, 8, 29, (ctx, ox, oy, w, h, f) => {
     const pal = ULTRA_PALETTES_24[f % ULTRA_PALETTES_24.length]!;
     const p = new PxCanvas(w, h);
     const grid = ULTRA_GRIDS_14[f % ULTRA_GRIDS_14.length] ?? ULTRA_GRIDS_14[0]!;
@@ -1657,30 +1680,52 @@ function registerHudSprites(b: FallbackAtlasBuilder): void {
     rect(ctx, x, y, 3, 3, '#e6e6eb');
     px(ctx, x + 1, y + 1, '#ffffff');
   });
+
+  // sprUltraLevel (8x8, orig 4,5, 1f): Crisp bright neon-green 'U' badge next to Level Ultra HUD bar!
+  b.addSprite('sprUltraLevel', 8, 8, 4, 5, 1, (ctx, ox, oy, w, h) => {
+    const p = new PxCanvas(w, h);
+    p.rect(1, 1, 2, 5, '#58ff68');
+    p.rect(5, 1, 2, 5, '#58ff68');
+    p.rect(2, 5, 4, 2, '#58ff68');
+    p.rect(1, 1, 1, 4, '#d8ffb8');
+    p.rect(5, 1, 1, 4, '#d8ffb8');
+    p.rect(2, 5, 4, 1, '#ffffff');
+    p.outline(INK);
+    p.flush(ctx, ox, oy);
+  });
 }
 
 export function registerFallbackUi(b: FallbackAtlasBuilder): void {
   // 1. Crisp 1x Krunked Throne Title Emblem & Glow
   registerLogoSprites(b);
 
-  // 2. Large Comic Bust Portraits (96x80, orig 48,40, 24 frames, transparent background!)
-  b.addSprite('sprBigPortrait', 96, 80, 48, 40, 24, (ctx, x, y, w, h, f) =>
+  // 2. Large Comic Bust Portraits (96x80, orig 48,40, 28 frames: 12 A/B + Skeleton 24-25 + Frog 26-27!)
+  b.addSprite('sprBigPortrait', 96, 80, 48, 40, 28, (ctx, x, y, w, h, f) =>
     drawMutantBigPortraitHiBit(ctx, x, y, w, h, f),
   );
+  b.addSprite('sprBigPortraitRebelBHooded', 96, 80, 48, 40, 1, (ctx, x, y, w, h) =>
+    drawRebelBHoodedPortraitHiBit(ctx, x, y, w, h),
+  );
+  b.addSprite('sprBigPortraitChickenHeadless', 96, 80, 48, 40, 3, (ctx, x, y, w, h, f) =>
+    drawChickenHeadlessPortraitHiBit(ctx, x, y, w, h, f),
+  );
 
-  // 3. Mini Char Select Roster Cards (16x24, orig 0,0, 18 frames)
+  // 3. Mini Char Select Roster Cards (16x24, orig 0,0, 18 frames: 1..12 + 14 Skeleton + 15 Frog) & Locked Cards
   b.addSprite('sprCharSelect', 16, 24, 0, 0, 18, (ctx, x, y, w, h, f) =>
     drawCharSelectCardHiBit(ctx, x, y, w, h, f),
   );
+  b.addSprite('sprCharSelectLocked', 16, 24, 0, 0, 18, (ctx, x, y, w, h, f) =>
+    drawCharSelectLockedCardHiBit(ctx, x, y, w, h, f),
+  );
 
-  // 3b. 5 Custom Close-Up Boss Intro Portraits (80x70, orig 40,35, 5 frames)
-  b.addSprite('sprBuiltinBossPortrait', 80, 70, 40, 35, 5, (ctx, x, y, w, h, f) =>
+  // 3b. 9 Custom Close-Up Boss Intro Portraits (80x70, orig 40,35, 9 frames: 0..4 + Mom, Hyper Crystal, Technomancer, Captain!)
+  b.addSprite('sprBuiltinBossPortrait', 80, 70, 40, 35, 9, (ctx, x, y, w, h, f) =>
     drawBossIntroPortraitHiBit(ctx, x, y, w, h, f),
   );
 
-  // 4. 29 Bespoke Mutation Cards/Shaped HUD Icons + 24 Ultra Cards/Icons + 13 Crowns
+  // 4. 29 Bespoke Mutation Cards/Shaped HUD Icons + 29 Ultra Cards/Icons + 13 Crowns
   registerSkillAndCrownSprites(b);
 
-  // 5. Crisp 1x HUD, Health Bar/Fill, Rad Canister, Crosshairs & Draining Ammo Icons
+  // 5. Crisp 1x HUD, Health Bar/Fill, Rad Canister, Crosshairs, Draining Ammo Icons & Ultra Badge
   registerHudSprites(b);
 }
