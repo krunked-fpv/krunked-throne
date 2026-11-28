@@ -20,6 +20,7 @@ import {
   hasMutation,
   hasUltra,
   healPlayer,
+  isIndestructiblePropKind,
   spawnExplosion,
   spawnPickup,
 } from './helpers';
@@ -304,9 +305,10 @@ function resolveMeleeSlash(
     }
     if (deflectedAny && proj.team === 'player') {
       meleeParriedSwings.add(proj);
-      if (state.hitstopTicks < 1) {
-        state.hitstopTicks = 1;
-        emitEvent(state, { type: 'hitstop', ticks: 1 });
+      // Crisp 2-tick melee-deflection hitstop!
+      if (state.hitstopTicks < 2) {
+        state.hitstopTicks = 2;
+        emitEvent(state, { type: 'hitstop', ticks: 2 });
       }
       emitEvent(state, { type: 'shake', trauma: 0.12 });
     }
@@ -360,12 +362,7 @@ function resolveMeleeSlash(
     for (let i = 0; i < propsSnap.length; i++) {
       const prop = propsSnap[i]!;
       if (!state.props.includes(prop) || prop.hp <= 0 || prop.opened || proj.hitIds.includes(prop.id)) continue;
-      if (
-        prop.kind === 'weapon_chest' ||
-        prop.kind === 'big_weapon_chest' ||
-        prop.kind === 'ammo_chest' ||
-        prop.kind === 'snare_trap'
-      ) {
+      if (isIndestructiblePropKind(prop.kind)) {
         continue;
       }
       const dx = prop.x - originX;
@@ -458,7 +455,9 @@ function resolveMeleeSlash(
             meleeSprite = 'sprMeleeIdle';
           }
         }
-        applyDamageToPlayer(state, proj.damage, meleeCause, meleeSprite ?? 'sprMeleeIdle', rng);
+        applyDamageToPlayer(state, proj.damage, meleeCause, meleeSprite ?? 'sprMeleeIdle', rng, {
+          isContact: true,
+        });
       }
     }
   }
@@ -799,14 +798,14 @@ function finishThrownWeapon(state: SimState, proj: ProjectileEntity, rng: Seeded
       burstRemaining: 0,
       burstTimer: 0,
       kickOffset: 0,
-      cursed: wepDef.cursed,
+      cursed: false,
     };
     if (!player.weapons[1]) {
       player.weapons[1] = slotObj;
     } else if (player.weapons[player.activeSlot]?.weaponId === 'chicken_sword' || !player.weapons[player.activeSlot]) {
       player.weapons[player.activeSlot] = slotObj;
     } else {
-      spawnPickup(state, 'weapon', player.x, player.y, { weaponId: proj.weaponId, value: 0 }, rng);
+      spawnPickup(state, 'weapon', player.x, player.y, { weaponId: proj.weaponId, cursed: false, value: 0 }, rng);
     }
     emitEvent(state, {
       type: 'sfx',
@@ -820,8 +819,8 @@ function finishThrownWeapon(state: SimState, proj: ProjectileEntity, rng: Seeded
   // Never duplicate chicken_sword on the floor if Chicken already holds one
   if (alreadyHoldingSword) return;
 
-  // Drop thrown weapon on floor with value: 0 (no pickup ammo/HP exploit!)
-  spawnPickup(state, 'weapon', proj.x, proj.y, { weaponId: proj.weaponId, value: 0 }, rng);
+  // Drop thrown weapon on floor cleansed (cursed: false) with value: 0 (no pickup ammo/HP exploit!)
+  spawnPickup(state, 'weapon', proj.x, proj.y, { weaponId: proj.weaponId, cursed: false, value: 0 }, rng);
 }
 
 function bloomPlantSnare(state: SimState, x: number, y: number): void {
@@ -1075,12 +1074,7 @@ export function stepProjectiles(
       for (let pIdx = 0; pIdx < laserPropsSnap.length; pIdx++) {
         const prop = laserPropsSnap[pIdx]!;
         if (!state.props.includes(prop) || prop.hp <= 0 || prop.opened) continue;
-        if (
-          prop.kind === 'weapon_chest' ||
-          prop.kind === 'big_weapon_chest' ||
-          prop.kind === 'ammo_chest' ||
-          prop.kind === 'snare_trap'
-        ) {
+        if (isIndestructiblePropKind(prop.kind)) {
           continue;
         }
         const hit = segmentCircleHit(proj.x, proj.y, endX, endY, prop.x, prop.y, prop.radius + 3);
@@ -1173,25 +1167,46 @@ export function stepProjectiles(
       proj.canHitPlayer = true;
     }
 
-    // 4. Homing for Bolt Marrow / Seeking Bolts / Smart Gun (LOS-gated so shots don't curve into walls!)
+    // 4. Homing for Bolt Marrow / Seeking Bolts / Smart Gun / Horror Stalker pellets
     if (
       !suspendedByEyes &&
       proj.team === 'player' &&
       (proj.kind === 'seeking_bolt' ||
         proj.weaponId === 'smart_gun' ||
+        proj.weaponId === 'horror_stalker' ||
         (hasBoltMarrow &&
           (proj.kind === 'bolt' || proj.kind === 'splinter' || proj.kind === 'toxic_bolt')))
     ) {
-      const target = findNearestHostile(state, proj.x, proj.y, 145, proj.hitIds, true);
+      const range = proj.weaponId === 'horror_stalker' ? 92 : 145;
+      const target = findNearestHostile(state, proj.x, proj.y, range, proj.hitIds, true);
       if (target) {
         const desiredAngle = Math.atan2(target.y - proj.y, target.x - proj.x);
         const diff = normalizeAngle(desiredAngle - proj.angle);
-        const maxTurn = proj.kind === 'seeking_bolt' ? 0.26 : proj.weaponId === 'smart_gun' ? 0.22 : 0.34;
+        const maxTurn =
+          proj.weaponId === 'horror_stalker'
+            ? 0.16
+            : proj.kind === 'seeking_bolt'
+              ? 0.26
+              : proj.weaponId === 'smart_gun'
+                ? 0.22
+                : 0.34;
         const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
         proj.angle = normalizeAngle(proj.angle + turn);
         const speed = Math.hypot(proj.vx, proj.vy) || 14;
         proj.vx = Math.cos(proj.angle) * speed;
         proj.vy = Math.sin(proj.angle) * speed;
+      }
+    }
+
+    // 4a. Frog Toxic Gas Cloud (`frog_gas`): continuously ticks 2 dmg to enemies inside cloud!
+    if (proj.weaponId === 'frog_gas') {
+      const frogTB = player.mutant === 'frog' && hasMutation(player, 'throne_butt');
+      const tickPeriod = frogTB ? 3 : 6;
+      if ((state.tick + proj.id) % tickPeriod === 0) {
+        proj.hitIds = [];
+      }
+      if (proj.radius < (frogTB ? 18 : 13)) {
+        proj.radius += frogTB ? 0.28 : 0.14;
       }
     }
 
@@ -1254,8 +1269,12 @@ export function stepProjectiles(
     // 5. Velocity damping for flames/grenades & rocket/nuke acceleration + cursor steering
     if (!suspendedByEyes) {
       if (proj.kind === 'flame' || proj.kind === 'enemy_flame') {
-        proj.vx *= 0.92;
-        proj.vy *= 0.92;
+        const gasDamp =
+          proj.weaponId === 'frog_gas' && player.mutant === 'frog' && hasMutation(player, 'throne_butt')
+            ? 0.96
+            : 0.92;
+        proj.vx *= gasDamp;
+        proj.vy *= gasDamp;
       } else if (
         proj.kind === 'grenade' ||
         proj.kind === 'cluster_grenade' ||
@@ -1469,12 +1488,7 @@ export function stepProjectiles(
         const prop = coverPropsSnap[pIdx]!;
         if (!state.props.includes(prop) || prop.hp <= 0 || prop.opened || proj.hitIds.includes(prop.id)) continue;
         if (proj.team === 'player') {
-          if (
-            prop.kind === 'weapon_chest' ||
-            prop.kind === 'big_weapon_chest' ||
-            prop.kind === 'ammo_chest' ||
-            prop.kind === 'snare_trap'
-          ) {
+          if (isIndestructiblePropKind(prop.kind)) {
             continue;
           }
         } else {
@@ -1547,7 +1561,13 @@ export function stepProjectiles(
         } else {
           proj.x = hitP.hitX;
           proj.y = hitP.hitY;
-          const isFire = proj.kind === 'enemy_flame' || proj.kind === 'flame';
+          const isToxic =
+            proj.weaponId === 'toxic_cloud' ||
+            proj.weaponId === 'frog_gas' ||
+            proj.sprite === 'sprToxicGas' ||
+            proj.sprite === 'sprFrogGas' ||
+            proj.kind === 'toxic_bolt';
+          const isFire = !isToxic && (proj.kind === 'enemy_flame' || proj.kind === 'flame');
           if (proj.explosionRadius > 0) {
             detonateProjectile(state, proj, rng);
           } else {
@@ -1565,7 +1585,7 @@ export function stepProjectiles(
               killer.cause,
               killer.sprite,
               rng,
-              { isFire },
+              { isFire, isToxic, isProjectile: true },
             );
           }
           destroyed = true;
@@ -1668,6 +1688,18 @@ export function stepProjectiles(
           emitEvent(state, { type: 'sfx', sound: 'sndDiscBounce', x: proj.x, y: proj.y, pitchJitter: 0.1 });
         } else if (proj.kind === 'shell' || proj.kind === 'slug') {
           emitEvent(state, { type: 'sfx', sound: 'sndShotgunHitWall', x: proj.x, y: proj.y, pitchJitter: 0.12 });
+        } else if (proj.weaponId === 'frog_pistol' || proj.weaponId === 'golden_frog_pistol' || proj.weaponId === 'frog_venom') {
+          emitEvent(state, {
+            type: 'particle',
+            kind: 'toxic',
+            x: wallHit.hitX,
+            y: wallHit.hitY,
+            vx: wallHit.normalX * 1.5,
+            vy: wallHit.normalY * 1.5,
+            color: '#62f042',
+            size: 3,
+            life: 6,
+          });
         }
       } else {
         proj.x = backoffX;

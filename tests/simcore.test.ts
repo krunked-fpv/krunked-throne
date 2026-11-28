@@ -337,7 +337,7 @@ describe('simcore: 100-Seed Worldgen Connectivity Across All Biomes', () => {
 });
 
 describe('simcore: Portal Vortex & World Physics', () => {
-  it('carves safe radius, vacuums pickups/chests, increments chestSkipStreak, and captures player', () => {
+  it('carves safe radius, pulls loose rads without vacuuming unopened chests/canisters, and captures player', () => {
     const state: SimState = createInitialSimState({ mutant: 'fish', seed: 202601 });
     state.pickups = [];
     state.props = [];
@@ -472,9 +472,9 @@ describe('simcore: Portal Vortex & World Physics', () => {
     expect(state.portal.carved).toBe(true);
     expect(state.map.walkableCount - walkableBefore).toBeGreaterThanOrEqual(3);
     expect(state.pickups.length).toBe(0);
-    expect(state.props.length).toBe(0);
-    expect(state.chestSkipStreak).toBe(1);
-    expect(state.player.rads).toBe(5 + 15 + 12);
+    // Authentic Wiki parity: intact weapon_chest & rad_canister are NEVER auto-vacuumed by portals!
+    expect(state.props.length).toBe(2);
+    expect(state.player.rads).toBe(5 + 15);
     expect(state.portal.entered).toBe(true);
     expect(state.phase).toBe('portal_transition');
     expect(state.corpses[0]?.baked).toBe(true);

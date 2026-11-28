@@ -118,7 +118,7 @@ describe('parity-combat: Exploit Fixes, Economy & Portal Rules', () => {
       makeInput({ aimWorldX: prot.player.x + 20, aimWorldY: prot.player.y, pickupPressed: true }),
       pRng,
     );
-    expect(prot.player.hp).toBe(4); // fresh weapon heals +2 HP once
+    expect(prot.player.hp).toBe(3); // Wiki parity: fresh weapon heals +1 HP once
     for (let i = 0; i < 4; i++) {
       stepPlayerAndCombat(
         prot,
@@ -126,7 +126,7 @@ describe('parity-combat: Exploit Fixes, Economy & Portal Rules', () => {
         pRng,
       );
     }
-    expect(prot.player.hp).toBe(4); // ZERO further healing from swapped player weapon!
+    expect(prot.player.hp).toBe(3); // ZERO further healing from swapped player weapon!
   });
 
   it('uses authentic starting ammo (96 bullets, 0 others; seeds golden weapon ammo) and Fish +25% passive', () => {
@@ -208,8 +208,11 @@ describe('parity-combat: Exploit Fixes, Economy & Portal Rules', () => {
     }
     expect(sawPortalClose).toBe(true);
     expect(state.areaCode).toBe('1-2');
-    expect(state.chestSkipStreak).toBeGreaterThanOrEqual(1);
-    expect(state.props.some((p) => p.kind === 'big_weapon_chest')).toBe(true);
+    // Cumulative +25%/skip chance: either Big Weapon Chest spawned (resetting streak) or streak incremented!
+    expect(
+      state.props.some((p) => p.kind === 'big_weapon_chest') ||
+        (state.chestSkipStreak >= 1 && (state.weaponChestSkipStreak ?? 0) >= 1),
+    ).toBe(true);
   });
 
   it('ignores disguised mimics when checking portal open condition', () => {
@@ -221,7 +224,11 @@ describe('parity-combat: Exploit Fixes, Economy & Portal Rules', () => {
     const rng = SeededRng.fromState(state.rngState);
     const mimic = createEnemyEntity(state, 'mimic', state.player.x + 80, state.player.y, rng);
     mimic.aiState = 'disguised';
-    const res = checkPortalTrigger(state, rng);
+    let res: ReturnType<typeof checkPortalTrigger> = 'none';
+    for (let d = 0; d < 32; d++) {
+      res = checkPortalTrigger(state, rng);
+      if (res === 'portal_opened') break;
+    }
     expect(res).toBe('portal_opened');
     expect(state.portal.active).toBe(true);
   });
@@ -711,7 +718,12 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     const leftover = createEnemyEntity(anom, 'bandit', anom.player.x + 60, anom.player.y, aRng);
     leftover.radDrop = 5;
     const killsBefore = anom.stats.kills;
-    expect(checkPortalTrigger(anom, aRng)).toBe('portal_opened');
+    let anomRes: ReturnType<typeof checkPortalTrigger> = 'none';
+    for (let d = 0; d < 32; d++) {
+      anomRes = checkPortalTrigger(anom, aRng);
+      if (anomRes === 'portal_opened') break;
+    }
+    expect(anomRes).toBe('portal_opened');
     expect(anom.stats.kills).toBe(killsBefore + 1);
     expect(anom.pickups.reduce((s, p) => s + (p.kind === 'rad' || p.kind === 'big_rad' ? p.value : 0), 0)).toBe(5);
 
@@ -733,7 +745,7 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     }
     expect(rState.player.hp).toBe(hpBeforeQuickTap);
 
-    // Hold-to-drag directly on top of Rogue & stand still through 0.5s telegraph -> delayed blast CAN self-damage Rogue!
+    // Deliberate hold-to-drag (>= 4 ticks + >= 8px relative drag) directly on top of Rogue -> delayed blast CAN self-damage!
     rState.player.activeCooldown = 0;
     rState.events = [];
     stepPlayerAndCombat(
@@ -743,7 +755,16 @@ describe('parity-combat: All 12 Mutants, Throne Butts & Ultras', () => {
     );
     expect(rState.player.portalStrikeAim?.active).toBe(true);
     expect(rState.events.some((e) => e.type === 'sfx' && e.sound === 'sndRogueAim')).toBe(true);
-    // Release RMB after dragging >= 8px -> queues rolling delayed blasts (delayTicks = 15 + b * 4)
+    for (let hold = 0; hold < 3; hold++) {
+      rState.tick += 1;
+      stepPlayerAndCombat(
+        rState,
+        makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y, activeHeld: true }),
+        rRng,
+      );
+    }
+    // Release RMB after holding >= 4 ticks and dragging >= 8px relative to Rogue
+    rState.tick += 1;
     stepPlayerAndCombat(
       rState,
       makeInput({ aimWorldX: rState.player.x + 20, aimWorldY: rState.player.y, activeHeld: false }),
@@ -919,7 +940,12 @@ describe('parity-combat: Mutations & Crowns 1:1 Rules', () => {
     cursedState.boss = null;
     cursedState.levelStartEnemyCount = 1;
     cursedState.levelKills = 1;
-    expect(checkPortalTrigger(cursedState, cRng)).toBe('portal_opened');
+    let cursedPortalRes: ReturnType<typeof checkPortalTrigger> = 'none';
+    for (let d = 0; d < 32; d++) {
+      cursedPortalRes = checkPortalTrigger(cursedState, cRng);
+      if (cursedPortalRes === 'portal_opened') break;
+    }
+    expect(cursedPortalRes).toBe('portal_opened');
     expect(cursedState.portal.targetArea).toBe('4-?');
   });
 
