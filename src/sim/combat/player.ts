@@ -26,10 +26,13 @@ import {
   addRads,
   createWeaponSlot,
   givePlayerWeapon,
+  interactProtoChest,
   openChest,
-  pickTierWeaponId,
+  rollGunGunWeapon,
+  triggerCribExitPortal,
 } from '@/sim/progression/progression';
 import {
+  MINI_AMMO_PACK_SIZE,
   NON_MELEE_AMMO_TYPES,
   addAmmoToPool,
   applyDamageToEnemy,
@@ -38,9 +41,11 @@ import {
   hasMutation,
   hasUltra,
   healPlayer,
+  recordUnlock,
   spawnCasing,
   spawnExplosion,
   spawnFriendlyUnit,
+  spawnFrogToxicGas,
   spawnPickup,
 } from './helpers';
 import { stepProjectiles } from './projectiles';
@@ -69,8 +74,17 @@ const pendingPortalStrikes = new WeakMap<
   { mapRef: WorldMap; blasts: PendingPortalBlast[] }
 >();
 
-// Tracks whether Rogue dragged >= 8px during hold-to-drag Portal Strike aiming
-const rogueAimDragged = new WeakMap<SimState, boolean>();
+// Bug #1 Fix: tracks cursor drag strictly relative to Rogue + hold duration before allowing inside safeStandoff!
+interface RogueAimState {
+  startRelX: number;
+  startRelY: number;
+  holdTicks: number;
+  dragged: boolean;
+}
+const rogueAimState = new WeakMap<SimState, RogueAimState>();
+
+// Tracks Frog's persistent movement direction (CAN'T STAND STILL passive, bounces off walls!)
+const frogMoveDir = new WeakMap<SimState, { x: number; y: number }>();
 
 function getPendingPortalBlasts(state: SimState): PendingPortalBlast[] {
   let rec = pendingPortalStrikes.get(state);
@@ -261,10 +275,10 @@ function computeEffectiveReload(state: SimState, baseReload: number): number {
     }
   }
 
-  // Stress: up to 2x faster firing as HP drops toward 1
-  if (hasMutation(player, 'stress') && player.maxHp > 1) {
-    const missingFrac = Math.max(0, Math.min(1, (player.maxHp - Math.max(1, player.hp)) / (player.maxHp - 1)));
-    mult *= 1 - missingFrac * 0.5;
+  // Stress: Wiki §4.2 exact formula reload *= (0.2 + 0.8 * (hp / maxHp))
+  if (hasMutation(player, 'stress') && player.maxHp > 0) {
+    const hpRatio = Math.max(0, Math.min(1, player.hp / player.maxHp));
+    mult *= 0.2 + 0.8 * hpRatio;
   }
 
   return Math.max(1, Math.round(baseReload * mult));
@@ -273,6 +287,7 @@ function computeEffectiveReload(state: SimState, baseReload: number): number {
 function computeSpreadRad(state: SimState, spreadDeg: number): number {
   let deg = spreadDeg;
   if (state.player.mutant === 'steroids') deg *= 1.55;
+  if (state.player.mutant === 'skeleton') deg *= 1.5;
   if (hasMutation(state.player, 'eagle_eyes')) deg *= 0.35;
   return (deg * Math.PI) / 180;
 }
@@ -297,10 +312,10 @@ function spawnWeaponShot(
     wep.projectileKind === 'lightning';
   const damageMult = isEnergy && hasLaserBrain ? 1.35 : 1.0;
 
-  // Gun Gun: shoots a literal random floor weapon pickup!
+  // Gun Gun: spends 40 energy and shoots a random weapon pickup at difficulty + 10 (Skeleton B-skin unlock!)
   if (wep.id === 'gun_gun') {
-    const rolledId = pickTierWeaponId(state, rng, 0);
-    const rolledDef = getWeaponDef(rolledId);
+    const rolled = rollGunGunWeapon(state, rng);
+    const rolledDef = getWeaponDef(rolled.weaponId);
     const dropPos = findNearestFloor(
       state.map,
       player.x + Math.cos(aimAngle) * 14,
@@ -314,13 +329,28 @@ function spawnWeaponShot(
       dropPos.y,
       {
         weaponId: rolledDef.id,
-        cursed: Boolean(rolledDef.cursed),
+        cursed: rolled.cursed,
         value: 1,
         vx: Math.cos(aimAngle) * 5.2,
         vy: Math.sin(aimAngle) * 5.2,
       },
       rng,
     );
+    if (player.mutant === 'skeleton') {
+      recordUnlock(state, 'bskin_skeleton');
+    }
+    emitEvent(state, {
+      type: 'particle',
+      kind: 'spark',
+      x: player.x + Math.cos(aimAngle) * 10,
+      y: player.y + Math.sin(aimAngle) * 10,
+      vx: Math.cos(aimAngle) * 1.5,
+      vy: Math.sin(aimAngle) * 1.5,
+      color: '#ffe066',
+      size: 14,
+      life: 8,
+      sprite: 'sprGunGunFire',
+    });
     slotState.kickOffset = Math.min(8, wep.kick * 1.4);
     slotState.lastFiredTick = state.tick;
     state.stats.shotsFired += 1;
@@ -360,6 +390,12 @@ function spawnWeaponShot(
       // Share ONE hitIds array across all fan arcs so Shovel/Ultra Shovel hit each enemy 1x (never 3x/5x!)
       const sharedHitIds: number[] = [];
 
+      // Black Sword deals 80 dmg while Chicken is headless (12 dmg normally!)
+      const meleeBaseDamage =
+        wep.id === 'black_sword' && player.mutant === 'chicken' && player.headlessTicks > 0
+          ? 80
+          : wep.damage;
+
       for (let f = 0; f < fanOffsets.length; f++) {
         const slashAng = angle + fanOffsets[f]!;
         state.projectiles.push({
@@ -374,7 +410,7 @@ function spawnWeaponShot(
           vy: 0,
           angle: slashAng,
           radius: reach * 0.5,
-          damage: Math.round(wep.damage * damageMult),
+          damage: Math.round(meleeBaseDamage * damageMult),
           lifeTicks: wep.projectileLifeTicks,
           maxLifeTicks: wep.projectileLifeTicks,
           pierce: 99,
@@ -527,6 +563,7 @@ function tryFireWeaponSlot(
   shotMultiplier: number = 1,
   reloadMultiplier: number = 1,
   paidShots: number = shotMultiplier,
+  ignoreCost: boolean = false,
 ): boolean {
   const player = state.player;
   const slotState = player.weapons[slotIndex];
@@ -537,7 +574,7 @@ function tryFireWeaponSlot(
   const autoAllowed = wep.auto || player.mutant === 'steroids';
   if (!autoAllowed && !isTriggerEdge && shotMultiplier === 1) return false;
 
-  const freeAmmo = player.gunWarrantTicks > 0;
+  const freeAmmo = ignoreCost || player.gunWarrantTicks > 0;
   const perShotAmmoCost = freeAmmo ? 0 : wep.ammoCost;
   const perShotRadCost = freeAmmo ? 0 : (wep.radCost ?? 0);
 
@@ -616,7 +653,9 @@ function tryFireWeaponSlot(
   if (wep.burstCount > 1) {
     slotState.burstRemaining = wep.burstCount * shotMultiplier - 1;
     slotState.burstTimer = Math.max(1, wep.burstIntervalTicks);
-    const freeBonusBursts = Math.max(0, shotMultiplier - paidShots) * wep.burstCount;
+    const freeBonusBursts = ignoreCost
+      ? slotState.burstRemaining
+      : Math.max(0, shotMultiplier - paidShots) * wep.burstCount;
     slotFreeBurstShots.set(slotState, freeBonusBursts);
     slotBurstInterval.set(slotState, Math.max(1, wep.burstIntervalTicks));
     slotBurstJitter.set(slotState, 0);
@@ -649,6 +688,7 @@ function handleMutantActive(
 
   // Reset continuous flags before re-evaluating
   player.telekinesisActive = false;
+  player.frogRooted = false;
 
   switch (player.mutant) {
     case 'fish': {
@@ -1033,7 +1073,15 @@ function handleMutantActive(
           emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
           break;
         }
+        const isHyperWeapon =
+          curWep !== null &&
+          (curWep.weaponId === 'hyper_rifle' ||
+            curWep.weaponId === 'hyper_slugger' ||
+            curWep.weaponId === 'hyper_launcher');
         if (curWep && curWep.cursed) {
+          if (isHyperWeapon) {
+            recordUnlock(state, 'bskin_robot');
+          }
           // Authentic NT: Robot CAN eat a cursed weapon, taking 7 HP CURSE damage & consuming it!
           player.weapons[0] = surviving;
           player.weapons[1] = null;
@@ -1058,6 +1106,9 @@ function handleMutantActive(
           });
           player.activeCooldown = 14;
         } else if (curWep) {
+          if (isHyperWeapon) {
+            recordUnlock(state, 'bskin_robot');
+          }
           player.weapons[0] = surviving;
           player.weapons[1] = null;
           player.activeSlot = 0;
@@ -1118,19 +1169,9 @@ function handleMutantActive(
         const activeSlot = player.activeSlot;
         const otherSlot: 0 | 1 = activeSlot === 0 ? 1 : 0;
         const cur = player.weapons[activeSlot];
-        if (cur && cur.cursed) {
-          emitEvent(state, { type: 'sfx', sound: 'sndSwapCursed', x: player.x, y: player.y });
-          emitEvent(state, {
-            type: 'pickup_text',
-            x: player.x,
-            y: player.y - 12,
-            text: 'CURSED!',
-            color: '#cc55ff',
-          });
-          player.activeCooldown = 8;
-          break;
-        }
-        if (cur && !cur.cursed) {
+        if (cur) {
+          // Authentic NT: Chicken CAN throw cursed weapons, cleansing their curse!
+          const wasCursed = Boolean(cur.cursed);
           const wepDef = getWeaponDef(cur.weaponId);
           const surviving = player.weapons[otherSlot];
           const throwingLastSword = !surviving && cur.weaponId === 'chicken_sword';
@@ -1141,6 +1182,10 @@ function handleMutantActive(
           ) {
             emitEvent(state, { type: 'sfx', sound: 'sndEmpty', x: player.x, y: player.y });
             break;
+          }
+          // Track Chicken dropping/throwing Chicken Sword on L0 1-1 for L1 1-1 Black Sword unlock!
+          if (state.loop === 0 && state.areaCode === '1-1' && cur.weaponId === 'chicken_sword') {
+            state.chickenDroppedSwordOn1_1 = true;
           }
           const levelScaledDmg = Math.max(20, 14 + player.level * 4 + wepDef.tier * 2);
 
@@ -1166,6 +1211,10 @@ function handleMutantActive(
             weaponId: wepDef.id,
             hitIds: [],
           });
+
+          if (wasCursed) {
+            emitEvent(state, { type: 'sfx', sound: 'sndSwapCursed', x: player.x, y: player.y });
+          }
 
           if (surviving) {
             player.weapons[0] = surviving;
@@ -1263,7 +1312,7 @@ function handleMutantActive(
             pierce: 2,
             bounce: 0,
             explosionRadius: 0,
-            sprite: 'sprHorrorBullet',
+            sprite: player.skin === 'b' ? 'sprHorrorBBullet' : 'sprHorrorBullet',
             hitIds: [],
           });
           // Throne Butt: threshold crossing guarantees healing every 60 ramp ticks even if radBeamTicks starts odd!
@@ -1293,19 +1342,27 @@ function handleMutantActive(
     }
 
     case 'rogue': {
-      // Authentic NT hold-to-drag Portal Strike targeting with delayed rolling blasts!
+      // Bug #1 Fix: track cursor drag strictly relative to Rogue (`(aimWorld - player) - (startAim - startPlayer)`)
+      // AND require holdTicks >= 4 before allowing manual drag inside safeStandoff!
       const superStrike = hasUltra(player, 'rogue_a');
       const blastRadius = superStrike ? 46 : hasTB ? 38 : 30;
 
       if (player.portalStrikeAim?.active) {
         const aim = player.portalStrikeAim;
-        const dragDx = input.aimWorldX - aim.x;
-        const dragDy = input.aimWorldY - aim.y;
-        const dragDistSq = dragDx * dragDx + dragDy * dragDy;
+        const rec = rogueAimState.get(state) ?? {
+          startRelX: aim.x - player.x,
+          startRelY: aim.y - player.y,
+          holdTicks: 1,
+          dragged: false,
+        };
+        const relDragDx = (input.aimWorldX - player.x) - rec.startRelX;
+        const relDragDy = (input.aimWorldY - player.y) - rec.startRelY;
+        const relDragDistSq = relDragDx * relDragDx + relDragDy * relDragDy;
         if (input.activeHeld) {
-          if (dragDistSq >= 64) {
-            aim.angle = Math.atan2(dragDy, dragDx);
-            rogueAimDragged.set(state, true);
+          rec.holdTicks += 1;
+          if (relDragDistSq >= 64) {
+            aim.angle = Math.atan2(relDragDy, relDragDx);
+            rec.dragged = true;
           } else {
             const pDx = aim.x - player.x;
             const pDy = aim.y - player.y;
@@ -1313,18 +1370,19 @@ function handleMutantActive(
               aim.angle = Math.atan2(pDy, pDx);
             }
           }
+          rogueAimState.set(state, rec);
         } else {
-          // Released RMB -> launch rolling delayed carpet along dragged vector (or past safe standoff if un-dragged)!
-          const wasDragged = Boolean(rogueAimDragged.get(state)) || dragDistSq >= 64;
-          rogueAimDragged.delete(state);
+          // Released RMB -> launch rolling delayed carpet along dragged vector (or past safe standoff if un-dragged/quick-tap)!
+          const deliberateDrag = rec.holdTicks >= 4 && (rec.dragged || relDragDistSq >= 64);
+          rogueAimState.delete(state);
           player.portalStrikeAim = null;
           if (player.portalStrikes > 0) {
             player.portalStrikes -= 1;
             player.activeCooldown = 16;
             let startX = aim.x;
             let startY = aim.y;
-            let launchAngle = dragDistSq >= 64 ? Math.atan2(dragDy, dragDx) : aim.angle;
-            if (!wasDragged) {
+            let launchAngle = deliberateDrag && relDragDistSq >= 64 ? Math.atan2(relDragDy, relDragDx) : aim.angle;
+            if (!deliberateDrag) {
               const safeStandoff = blastRadius + player.radius + 14;
               const relDx = aim.x - player.x;
               const relDy = aim.y - player.y;
@@ -1359,7 +1417,12 @@ function handleMutantActive(
               angle: aimAngle,
               active: true,
             };
-            rogueAimDragged.set(state, false);
+            rogueAimState.set(state, {
+              startRelX: input.aimWorldX - player.x,
+              startRelY: input.aimWorldY - player.y,
+              holdTicks: 1,
+              dragged: false,
+            });
             emitEvent(state, { type: 'sfx', sound: 'sndRogueAim', x: player.x, y: player.y });
           } else {
             // Single-tick quick tap: launch delayed rolling blasts forward past safe standoff!
@@ -1374,6 +1437,71 @@ function handleMutantActive(
           }
         } else {
           emitEvent(state, { type: 'sfx', sound: 'sndPortalStrikeEmpty', x: player.x, y: player.y });
+        }
+      }
+      break;
+    }
+
+    case 'skeleton': {
+      // Blood Gamble: fire active weapon for 0 ammo/rads with clamp(ammoCost / miniPackSize, 0, 1) HP risk!
+      const activeSlotObj = player.weapons[player.activeSlot];
+      const activeWepDef = activeSlotObj ? getWeaponDef(activeSlotObj.weaponId) : null;
+      if (activeSlotObj && activeWepDef && (input.activePressed || (input.activeHeld && activeWepDef.auto))) {
+        const fired = tryFireWeaponSlot(
+          state,
+          player.activeSlot,
+          aimAngle,
+          input.activePressed,
+          rng,
+          1,
+          1,
+          1,
+          true,
+        );
+        if (fired) {
+          // Skeleton Ultra B (DAMNATION): Blood Gamble shots cut current reload timer by 80%!
+          if (hasUltra(player, 'skeleton_b')) {
+            activeSlotObj.reloadTicks = Math.max(1, Math.round(activeSlotObj.reloadTicks * 0.2));
+            activeSlotObj.maxReloadTicks = activeSlotObj.reloadTicks;
+          }
+          const miniPack = MINI_AMMO_PACK_SIZE[activeWepDef.ammoType] || 0;
+          let selfDmgRisk = miniPack > 0 ? Math.max(0, Math.min(1, activeWepDef.ammoCost / miniPack)) : 0;
+          if ((activeWepDef.radCost ?? 0) > 0) {
+            selfDmgRisk = Math.max(selfDmgRisk, Math.min(1, (activeWepDef.radCost ?? 0) / 10));
+          }
+          if (hasTB) {
+            selfDmgRisk *= 0.5;
+          }
+          emitEvent(state, { type: 'sfx', sound: 'sndMutant14Turn', x: player.x, y: player.y, volume: 0.7 });
+          if (selfDmgRisk > 0 && rng.chance(selfDmgRisk)) {
+            // Throne Butt also grants an extra chance to avoid taking HP loss on proc!
+            if (!hasTB || !rng.chance(0.35)) {
+              applyDamageToPlayer(state, 1, 'BLOOD GAMBLE', 'sprMutant14Idle', rng, {
+                ignoreIframes: true,
+                bypassShield: true,
+              });
+              emitEvent(state, { type: 'sfx', sound: 'sndBloodHurt', x: player.x, y: player.y });
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case 'frog': {
+      // Hold RMB: root Frog in place and emit growing Toxic Gas Cloud (2 dmg/tick; TB 2x speed/cadence; frog_b dense bursts!)
+      if (input.activeHeld || input.activePressed) {
+        player.frogRooted = true;
+        const dense = hasUltra(player, 'frog_b');
+        const cadence = hasTB ? 2 : 4;
+        if (input.activePressed) {
+          emitEvent(state, { type: 'sfx', sound: 'sndFrogStart', x: player.x, y: player.y });
+        }
+        if (input.activePressed || state.tick % cadence === 0) {
+          spawnFrogToxicGas(state, player.x, player.y, rng, {
+            count: dense ? (hasTB ? 5 : 4) : hasTB ? 3 : 2,
+            emitSound: state.tick % 8 === 0,
+          });
         }
       }
       break;
@@ -1573,14 +1701,44 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
   const player = state.player;
   if (!player.alive) return;
 
-  // 1. Open unopened chests on contact
+  // 0. [E] World Prop Interactions: Y.V.'s Crib exit car (`venuz_car_exit`) & Vault Proto Chest (`proto_chest`)
+  let propConsumedE = false;
+  if (input.pickupPressed) {
+    for (let i = 0; i < state.props.length; i++) {
+      const prop = state.props[i]!;
+      if (prop.kind === 'venuz_car_exit' && state.areaCode === '$$$') {
+        if (Math.hypot(player.x - prop.x, player.y - prop.y) <= 36) {
+          triggerCribExitPortal(state, prop.x, prop.y);
+          propConsumedE = true;
+          break;
+        }
+      } else if (prop.kind === 'proto_chest') {
+        if (Math.hypot(player.x - prop.x, player.y - prop.y) <= 34) {
+          interactProtoChest(state, prop);
+          propConsumedE = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // 1. Sync Crown of Life ammo_chest sprites dynamically (Bug #11) & open unopened chests on contact
+  const lifeNeedsHp = state.crown === 'life' && player.hp < player.maxHp;
   for (let i = 0; i < state.props.length; i++) {
     const prop = state.props[i]!;
     if (prop.opened || prop.mimic) continue;
+    if (prop.kind === 'ammo_chest' && state.crown === 'life') {
+      prop.sprite = lifeNeedsHp ? 'sprHealthChest' : 'sprAmmoChest';
+      prop.openSprite = lifeNeedsHp ? 'sprHealthChestOpen' : 'sprAmmoChestOpen';
+    }
     if (
       prop.kind === 'weapon_chest' ||
       prop.kind === 'big_weapon_chest' ||
+      prop.kind === 'giant_weapon_chest' ||
+      prop.kind === 'giant_ammo_chest' ||
       prop.kind === 'ammo_chest' ||
+      prop.kind === 'health_chest' ||
+      prop.kind === 'pizza_chest' ||
       prop.kind === 'idpd_canister'
     ) {
       if (circleOverlap(player.x, player.y, player.radius + 6, prop.x, prop.y, prop.radius)) {
@@ -1589,7 +1747,7 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
     }
   }
 
-  // 2. Collect non-weapon pickups automatically; weapon pickup on E (pickupPressed)
+  // 2. Collect non-weapon pickups automatically; Crown of Protection heals on walking over fresh weapons; weapon pickup on E
   let nearestWep: PickupEntity | null = null;
   let nearestWepDistSq = 28 * 28;
 
@@ -1600,6 +1758,17 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
     const dSq = dx * dx + dy * dy;
 
     if (pk.kind === 'weapon') {
+      // Crown of Protection: walking over a fresh ground weapon heals +1 HP (+2 with Second Stomach) once!
+      if (
+        state.crown === 'protection' &&
+        pk.value > 0 &&
+        player.hp < player.maxHp &&
+        dSq <= (player.radius + 10) * (player.radius + 10)
+      ) {
+        healPlayer(state, hasMutation(player, 'second_stomach') ? 2 : 1);
+        pk.value = 0;
+        emitEvent(state, { type: 'sfx', sound: 'sndHPPickup', x: pk.x, y: pk.y });
+      }
       if (dSq < nearestWepDistSq) {
         nearestWepDistSq = dSq;
         nearestWep = pk;
@@ -1614,20 +1783,31 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
       case 'big_rad':
         addRads(state, pk.value, rng);
         emitEvent(state, { type: 'sfx', sound: 'sndRadPickup', x: pk.x, y: pk.y, pitchJitter: 0.12 });
+        // Frog Ultra A (DISTANCE): 25% chance for rad pickups to spawn Toxic Gas Cloud!
+        if (player.mutant === 'frog' && hasUltra(player, 'frog_a') && rng.chance(0.25)) {
+          spawnFrogToxicGas(state, pk.x, pk.y, rng, { count: 3 });
+        }
         state.pickups.splice(i, 1);
         break;
 
-      case 'ammo': {
+      case 'ammo':
+      case 'cursed_ammo': {
         const aType = pk.ammoType ?? rng.pick(NON_MELEE_AMMO_TYPES);
         const gained = addAmmoToPool(state, aType, pk.value);
-        emitEvent(state, { type: 'sfx', sound: 'sndAmmoPickup', x: pk.x, y: pk.y, pitchJitter: 0.1 });
+        emitEvent(state, {
+          type: 'sfx',
+          sound: pk.kind === 'cursed_ammo' ? 'sndCursedPickup' : 'sndAmmoPickup',
+          x: pk.x,
+          y: pk.y,
+          pitchJitter: 0.1,
+        });
         if (gained > 0) {
           emitEvent(state, {
             type: 'pickup_text',
             x: pk.x,
             y: pk.y - 8,
             text: `+${gained} ${aType.toUpperCase()}`,
-            color: '#ffe066',
+            color: pk.kind === 'cursed_ammo' ? '#d966ff' : '#ffe066',
           });
         }
         state.pickups.splice(i, 1);
@@ -1664,7 +1844,7 @@ function collectPickupsAndChests(state: SimState, input: InputFrame, rng: Seeded
   }
 
   // Pick up nearest weapon when pressing E (pickupPressed) — resolve by reference so earlier splices never shift index!
-  if (input.pickupPressed && nearestWep !== null) {
+  if (input.pickupPressed && !propConsumedE && nearestWep !== null) {
     const pk = nearestWep;
     if (
       pk.weaponId &&
@@ -1864,6 +2044,29 @@ export function stepPlayerAndCombat(
     } else if (player.shielding && !hasUltra(player, 'crystal_b')) {
       moveDx = 0;
       moveDy = 0;
+    } else if (player.mutant === 'frog') {
+      // Frog Passive (CAN'T STAND STILL): continuously moves in last input direction unless rooted by Active RMB!
+      if (player.frogRooted) {
+        moveDx = 0;
+        moveDy = 0;
+      } else {
+        let dir = frogMoveDir.get(state);
+        if (!dir) {
+          dir = { x: 1, y: 0 };
+          frogMoveDir.set(state, dir);
+        }
+        const len = Math.hypot(input.moveX, input.moveY);
+        if (len > 0.01) {
+          dir.x = input.moveX / len;
+          dir.y = input.moveY / len;
+        }
+        const isSticky =
+          !hasExtraFeet &&
+          (state.biome === 'caves' || state.biome === 'cursed_caves' || state.biome === 'oasis');
+        const terrainSpeedMult = isSticky ? 0.84 : 1.0;
+        moveDx = dir.x * baseSpeed * terrainSpeedMult;
+        moveDy = dir.y * baseSpeed * terrainSpeedMult;
+      }
     } else {
       const len = Math.hypot(input.moveX, input.moveY);
       const isIce = !hasExtraFeet && state.biome === 'frozen_city';
@@ -1931,6 +2134,26 @@ export function stepPlayerAndCombat(
       player.y = mv.y;
       player.animFrame = (player.animFrame + 0.35) % 8;
 
+      // Frog bounces off walls & Ultra B (INTIMACY) leaves a continuous toxic gas trail while moving!
+      if (player.mutant === 'frog') {
+        const dir = frogMoveDir.get(state);
+        if (dir && mv.hitWall) {
+          if (mv.hitX) dir.x = -dir.x;
+          if (mv.hitY) dir.y = -dir.y;
+          if (!mv.hitX && !mv.hitY) {
+            dir.x = -dir.x;
+            dir.y = -dir.y;
+          }
+        }
+        if (hasUltra(player, 'frog_b') && state.tick % 5 === 0) {
+          spawnFrogToxicGas(state, player.x, player.y, rng, {
+            count: 1,
+            speedMult: 0.55,
+            lifeTicks: 42,
+          });
+        }
+      }
+
       // Biome & mutant-specific footstep SFX while walking
       const movedSq = player.vx * player.vx + player.vy * player.vy;
       if (!player.rolling && !player.shielding && movedSq > 1.4 && state.tick % 9 === 0) {
@@ -1974,10 +2197,11 @@ export function stepPlayerAndCombat(
     }
 
     // Gamma Guts: per-enemy 4-tick cadence (never skipped due to bullet hurtFlashTicks!)
-    // Cleanly finishes weak <=12 HP non-boss contact foes (1 HP Maggots, 7 HP Rats, 9 HP Scarier-Face Freaks) before contact damage!
+    // Snapshot enemies array because GammaBlast AOE kills can splice multiple enemies in one tick!
     if (hasMutation(player, 'gamma_guts')) {
-      for (let i = state.enemies.length - 1; i >= 0; i--) {
-        const e = state.enemies[i]!;
+      const gammaSnap = [...state.enemies];
+      for (let i = 0; i < gammaSnap.length; i++) {
+        const e = gammaSnap[i]!;
         if (
           e.friendly ||
           e.hp <= 0 ||
@@ -1994,7 +2218,9 @@ export function stepPlayerAndCombat(
         }
         if (circleOverlap(player.x, player.y, player.radius + 2, e.x, e.y, e.radius)) {
           gammaGutsLastTick.set(e, state.tick);
-          applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng);
+          applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng, {
+            fromGammaGuts: true,
+          });
           if (
             !e.isBoss &&
             e.hp > 0 &&
@@ -2002,7 +2228,9 @@ export function stepPlayerAndCombat(
             e.contactDamage > 0 &&
             circleOverlap(player.x, player.y, player.radius, e.x, e.y, e.radius)
           ) {
-            applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng);
+            applyDamageToEnemy(state, e, 6, (e.x - player.x) * 0.4, (e.y - player.y) * 0.4, rng, {
+              fromGammaGuts: true,
+            });
           }
         }
       }

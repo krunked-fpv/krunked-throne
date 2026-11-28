@@ -677,9 +677,10 @@ function test4_PortalVortexAndPhysics(): string {
     runA.pickupsRemaining === 2,
     `Portal should vacuum rads while preserving ammo/weapon pickups; got ${runA.pickupsRemaining} remaining`,
   );
-  assert(runA.chestsRemaining === 0, `Portal left ${runA.chestsRemaining} chests unvacuumed`);
-  assert(runA.chestSkipStreak === 1, `Expected chestSkipStreak=1, got ${runA.chestSkipStreak}`);
-  assert(runA.finalRads === 5 + 15 + 12, `Expected 32 vacuumed rads, got ${runA.finalRads}`);
+  // Authentic NT Wiki parity: portals NEVER auto-vacuum or break unopened chests or rad canisters!
+  assert(runA.chestsRemaining === 2, `Portal must preserve intact chests/canisters, got ${runA.chestsRemaining}`);
+  assert(runA.chestSkipStreak === 0, `stepPortal must not mutate chestSkipStreak directly, got ${runA.chestSkipStreak}`);
+  assert(runA.finalRads === 5 + 15, `Expected 20 vacuumed loose rads (intact canister untouched), got ${runA.finalRads}`);
   assert(runA.portalEntered, 'Portal did not capture player');
   assert(runA.phase === 'portal_transition', `Expected phase=portal_transition, got ${runA.phase}`);
   assert(runA.hash === runB.hash, `Portal determinism mismatch: ${runA.hash} vs ${runB.hash}`);

@@ -1,20 +1,23 @@
 import {
-  PLAYER_IFRAMES,
   type AmmoType,
   type CasingEntity,
   type CorpseEntity,
   type EnemyEntity,
+  type MutantId,
   type MutationId,
   type PickupEntity,
   type PickupKind,
   type PlayerState,
   type ProjectileEntity,
   type ProjectileKind,
+  type PropKind,
+  type SaveData,
   type SimState,
   type UltraId,
 } from '@/contracts';
 import {
   AMMO_PICKUP_AMOUNT,
+  DEFAULT_AMMO_MAX,
   ENEMIES,
   MUTANTS,
   WEAPONS,
@@ -38,6 +41,131 @@ export const NON_MELEE_AMMO_TYPES: readonly Exclude<AmmoType, 'melee'>[] = [
   'energy',
 ] as const;
 
+/** Canonical Nuclear Throne mini ammo pack sizes (used by Lucky Shot & Skeleton Blood Gamble). */
+export const MINI_AMMO_PACK_SIZE: Record<AmmoType, number> = {
+  melee: 0,
+  bullet: 12,
+  shell: 4,
+  bolt: 4,
+  explosive: 3,
+  energy: 6,
+};
+
+/** Authentic NT i-frame distinction: projectile hits grant 5 ticks vs contact/melee 11 ticks. */
+export const PLAYER_PROJECTILE_IFRAMES = 5;
+export const PLAYER_CONTACT_IFRAMES = 11;
+
+export type UnlockEventKind =
+  | 'bskin_fish'
+  | 'bskin_crystal'
+  | 'bskin_eyes'
+  | 'bskin_melting'
+  | 'bskin_plant'
+  | 'bskin_yv'
+  | 'bskin_steroids'
+  | 'bskin_robot'
+  | 'bskin_chicken'
+  | 'bskin_rebel'
+  | 'bskin_horror'
+  | 'bskin_rogue'
+  | 'bskin_skeleton'
+  | 'hard_mode'
+  | 'mutant_frog'
+  | 'mutant_skeleton'
+  | 'mutant_horror';
+
+const CORE_12_MUTANTS: readonly MutantId[] = [
+  'fish',
+  'crystal',
+  'eyes',
+  'melting',
+  'plant',
+  'yv',
+  'steroids',
+  'robot',
+  'chicken',
+  'rebel',
+  'horror',
+  'rogue',
+] as const;
+
+type SimStateWithMeta = SimState & {
+  protoChestWeaponId?: string | null;
+  pendingUnlocks?: UnlockEventKind[];
+};
+
+const INDESTRUCTIBLE_PROP_KINDS: ReadonlySet<PropKind> = new Set<PropKind>([
+  'weapon_chest',
+  'big_weapon_chest',
+  'ammo_chest',
+  'health_chest',
+  'giant_weapon_chest',
+  'giant_ammo_chest',
+  'pizza_chest',
+  'proto_chest',
+  'venuz_car_exit',
+  'yung_cuz',
+  'necro_revive_area',
+  'snare_trap',
+]);
+
+export function isIndestructiblePropKind(kind: PropKind): boolean {
+  return INDESTRUCTIBLE_PROP_KINDS.has(kind);
+}
+
+export function getProtoChestWeaponId(state: SimState): string | null {
+  const meta = state as SimStateWithMeta;
+  return meta.protoChestWeaponId ?? null;
+}
+
+export function setProtoChestWeaponId(state: SimState, weaponId: string | null): void {
+  const meta = state as SimStateWithMeta;
+  meta.protoChestWeaponId = weaponId && weaponId.trim().length > 0 ? weaponId.trim() : null;
+}
+
+export function getPendingUnlocks(state: SimState): readonly UnlockEventKind[] {
+  const meta = state as SimStateWithMeta;
+  return meta.pendingUnlocks ?? [];
+}
+
+export function drainPendingUnlocks(state: SimState): UnlockEventKind[] {
+  const meta = state as SimStateWithMeta;
+  const list = meta.pendingUnlocks ?? [];
+  meta.pendingUnlocks = [];
+  return list;
+}
+
+export function recordUnlock(state: SimState, unlock: UnlockEventKind): boolean {
+  const meta = state as SimStateWithMeta;
+  if (!meta.pendingUnlocks) {
+    meta.pendingUnlocks = [];
+  }
+  if (meta.pendingUnlocks.includes(unlock)) {
+    return false;
+  }
+  meta.pendingUnlocks.push(unlock);
+  emitEvent(state, {
+    type: 'pickup_text',
+    x: state.player.x,
+    y: state.player.y - 20,
+    text: `UNLOCKED: ${unlock.toUpperCase().replace(/_/g, ' ')}!`,
+    color: '#ffe066',
+  });
+  return true;
+}
+
+/** Evaluates cross-run global B-skin unlocks (Fish: all 12 looped; Y.V.: all 12 golden weapons). */
+export function checkSaveLevelUnlocks(save: SaveData): UnlockEventKind[] {
+  const unlocked: UnlockEventKind[] = [];
+  if (CORE_12_MUTANTS.every((id) => (save.mutants[id]?.bestLoop ?? 0) >= 1)) {
+    unlocked.push('bskin_fish');
+  }
+  if (CORE_12_MUTANTS.every((id) => Boolean(save.mutants[id]?.goldenWeapon))) {
+    unlocked.push('bskin_yv');
+  }
+  return unlocked;
+}
+
 export function hasMutation(player: PlayerState, id: MutationId): boolean {
   return player.mutations.includes(id);
 }
@@ -50,6 +178,80 @@ export function getPlayerMoveSpeed(player: PlayerState): number {
   const base = MUTANTS[player.mutant].moveSpeed;
   const extraFeetMult = hasMutation(player, 'extra_feet') ? 1.2 : 1.0;
   return base * extraFeetMult;
+}
+
+export interface SpawnFrogGasOptions {
+  count?: number;
+  speedMult?: number;
+  lifeTicks?: number;
+  team?: 'player' | 'enemy';
+  emitSound?: boolean;
+}
+
+/** Emits growing Frog Toxic Gas Cloud puffs (`sprFrogGas`, 2 dmg/tick; Throne Butt expands 2x faster). */
+export function spawnFrogToxicGas(
+  state: SimState,
+  x: number,
+  y: number,
+  rng: SeededRng,
+  opts: SpawnFrogGasOptions = {},
+): void {
+  const hasTB = state.player.mutant === 'frog' && hasMutation(state.player, 'throne_butt');
+  const team = opts.team ?? 'player';
+  const count = opts.count ?? 3;
+  const speedMult = (opts.speedMult ?? 1.0) * (team === 'player' && hasTB ? 2.0 : 1.0);
+  const lifeTicks = opts.lifeTicks ?? (team === 'player' && hasTB ? 68 : 50);
+
+  for (let k = 0; k < count; k++) {
+    const ang = (k / Math.max(1, count)) * Math.PI * 2 + rng.range(-0.45, 0.45);
+    const spd = rng.range(0.9, 2.2) * speedMult;
+    state.projectiles.push({
+      id: allocEntityId(state),
+      kind: 'flame',
+      team,
+      x,
+      y,
+      prevX: x,
+      prevY: y,
+      vx: Math.cos(ang) * spd,
+      vy: Math.sin(ang) * spd,
+      angle: ang,
+      radius: 9,
+      damage: 2,
+      lifeTicks,
+      maxLifeTicks: lifeTicks,
+      pierce: 99,
+      bounce: 0,
+      explosionRadius: 0,
+      sprite: 'sprFrogGas',
+      weaponId: 'frog_gas',
+      hitIds: [],
+      sourceCause: 'TOXIC GAS',
+      sourceSprite: 'sprFrogGas',
+    });
+    emitEvent(state, {
+      type: 'particle',
+      kind: 'toxic',
+      x,
+      y,
+      vx: Math.cos(ang) * spd * 0.7,
+      vy: Math.sin(ang) * spd * 0.7,
+      color: '#58e038',
+      size: 6,
+      life: 16,
+      sprite: 'sprFrogGas',
+    });
+  }
+  if (opts.emitSound) {
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndToxicBoltGas',
+      x,
+      y,
+      pitchJitter: 0.12,
+      volume: 0.65,
+    });
+  }
 }
 
 // Tracks rads absorbed into enemies by Horror's Rad Beam so killing them refunds rads (NT parity).
@@ -222,7 +424,7 @@ export function spawnPickup(
   const spreadAngle = rng ? rng.range(0, Math.PI * 2) : 0;
   const spreadSpeed = rng ? rng.range(0.8, 2.6) : 0;
   const haste = state.crown === 'haste';
-  const defaultLife =
+  const baseDefaultLife =
     kind === 'weapon'
       ? 0
       : haste
@@ -230,6 +432,9 @@ export function spawnPickup(
         : kind === 'rad' || kind === 'big_rad'
           ? 360
           : 420;
+  // Cursed Ammo fades 3x faster and explodes on expiry!
+  const defaultLife =
+    kind === 'cursed_ammo' ? Math.max(20, Math.round(baseDefaultLife / 3)) : baseDefaultLife;
 
   let value = opts.value ?? 1;
   if (kind === 'big_rad' && opts.value === undefined) value = 10;
@@ -278,7 +483,7 @@ export function spawnEnemyProjectile(
   state: SimState,
   opts: SpawnEnemyProjectileOptions,
 ): ProjectileEntity {
-  const euphoriaMult = hasMutation(state.player, 'euphoria') ? 0.72 : 1.0;
+  const euphoriaMult = hasMutation(state.player, 'euphoria') ? 0.8 : 1.0;
   const speed = opts.speed * euphoriaMult;
   const proj: ProjectileEntity = {
     id: allocEntityId(state),
@@ -323,6 +528,7 @@ export interface SpawnExplosionOptions {
   isBlood?: boolean;
   isRogue?: boolean;
   isRad?: boolean;
+  isToxic?: boolean;
   selfDamage?: boolean;
   detonateCorpses?: boolean;
   sound?: string;
@@ -487,12 +693,7 @@ export function spawnExplosion(
   for (let i = 0; i < propsSnapshot.length; i++) {
     const prop = propsSnapshot[i]!;
     if (!state.props.includes(prop) || prop.hp <= 0 || prop.opened) continue;
-    if (
-      prop.kind === 'weapon_chest' ||
-      prop.kind === 'big_weapon_chest' ||
-      prop.kind === 'ammo_chest' ||
-      prop.kind === 'snare_trap'
-    ) {
+    if (isIndestructiblePropKind(prop.kind)) {
       continue;
     }
     const dx = prop.x - x;
@@ -545,7 +746,7 @@ export function spawnExplosion(
         opts.cause ?? 'EXPLOSION',
         opts.killerSprite ?? 'sprExplosion',
         rng,
-        { isExplosion: true, isFire: opts.isFire ?? false },
+        { isExplosion: true, isFire: opts.isFire ?? false, isToxic: opts.isToxic ?? false, isProjectile: true },
       );
     }
   }
@@ -557,7 +758,7 @@ export function damageProp(
   damage: number,
   rng: SeededRng,
 ): void {
-  if (prop.hp <= 0 || prop.sprite === 'sprVenusCarFixed') return;
+  if (prop.hp <= 0 || prop.sprite === 'sprVenusCarFixed' || isIndestructiblePropKind(prop.kind)) return;
   prop.hp -= damage;
   prop.hurtFlashTicks = 3;
 
@@ -576,8 +777,13 @@ export function damageProp(
   if (idx !== -1) state.props.splice(idx, 1);
 
   switch (prop.kind) {
-    case 'rad_canister': {
-      const rads = prop.radsStored ?? 12;
+    case 'rad_canister':
+    case 'rad_maggot_canister': {
+      // Breaking any rad canister resets the Horror-spawn skip streak!
+      state.radCanisterSkipStreak = 0;
+      const isMaggotCanister = prop.kind === 'rad_maggot_canister';
+      const baseRads = prop.radsStored ?? 12;
+      const rads = isMaggotCanister ? Math.round(baseRads * 1.5) : baseRads;
       const bigCount = Math.floor(rads / 10);
       const smallCount = rads % 10;
       for (let i = 0; i < bigCount; i++) {
@@ -585,6 +791,55 @@ export function damageProp(
       }
       for (let i = 0; i < smallCount; i++) {
         spawnPickup(state, 'rad', prop.x, prop.y, { value: 1 }, rng);
+      }
+      if (isMaggotCanister) {
+        const maggotDef = ENEMIES.rad_maggot;
+        const maggotCount = rng.int(4, 6);
+        for (let m = 0; m < maggotCount; m++) {
+          const ang = (m / maggotCount) * Math.PI * 2 + rng.range(-0.3, 0.3);
+          const pos = findNearestFloor(state.map, prop.x + Math.cos(ang) * 10, prop.y + Math.sin(ang) * 10, 4);
+          state.enemies.push({
+            id: allocEntityId(state),
+            defId: 'rad_maggot',
+            x: pos.x,
+            y: pos.y,
+            prevX: pos.x,
+            prevY: pos.y,
+            vx: Math.cos(ang) * 1.6,
+            vy: Math.sin(ang) * 1.6,
+            radius: maggotDef?.radius ?? 4,
+            hp: maggotDef?.maxHp ?? 2,
+            maxHp: maggotDef?.maxHp ?? 2,
+            facing: Math.cos(ang) >= 0 ? 1 : -1,
+            aimAngle: ang,
+            hurtFlashTicks: 0,
+            snaredTicks: 0,
+            aiState: 'chase',
+            aiTimer: 8,
+            aiPhase: 0,
+            attackCooldown: 10,
+            targetX: state.player.x,
+            targetY: state.player.y,
+            animFrame: 0,
+            contactDamage: maggotDef?.contactDamage ?? 1,
+            radDrop: maggotDef?.radDrop ?? 2,
+          });
+        }
+      }
+      // Crown of Hatred: 1 LETHAL dmg + 16 rads when opening/breaking chests & canisters!
+      if (state.crown === 'hatred') {
+        applyDamageToPlayer(state, 1, 'CROWN OF HATRED', 'sprCrown6Idle', rng, {
+          ignoreIframes: true,
+          bypassShield: true,
+        });
+        spawnPickup(state, 'big_rad', prop.x, prop.y, { value: 10 }, rng);
+        for (let i = 0; i < 6; i++) {
+          spawnPickup(state, 'rad', prop.x, prop.y, { value: 1 }, rng);
+        }
+      }
+      // Frog Ultra A (DISTANCE): 25% chance for rad canisters to emit Toxic Gas Cloud!
+      if (state.player.mutant === 'frog' && hasUltra(state.player, 'frog_a') && rng.chance(0.25)) {
+        spawnFrogToxicGas(state, prop.x, prop.y, rng, { count: 4, emitSound: true });
       }
       emitEvent(state, { type: 'sfx', sound: 'sndEXPChest', x: prop.x, y: prop.y });
       break;
@@ -610,12 +865,41 @@ export function damageProp(
       });
       break;
     }
+    case 'gold_barrel': {
+      spawnExplosion(state, prop.x, prop.y, 38, 28, 'neutral', rng, {
+        cause: 'GOLD BARREL',
+        killerSprite: 'sprGoldBarrel',
+      });
+      break;
+    }
     case 'toxic_barrel': {
       spawnExplosion(state, prop.x, prop.y, 38, 16, 'neutral', rng, {
         isRad: true,
+        isToxic: true,
         sound: 'sndToxicBarrelGas',
         cause: 'TOXIC BARREL',
         killerSprite: 'sprToxicBarrel',
+      });
+      break;
+    }
+    case 'venuz_tv': {
+      for (let i = 0; i < state.props.length; i++) {
+        const p = state.props[i]!;
+        if (p.kind === 'yung_cuz') {
+          p.sprite = 'sprCuzCry';
+        }
+      }
+      emitEvent(state, { type: 'sfx', sound: 'sndHitMetal', x: prop.x, y: prop.y });
+      emitEvent(state, {
+        type: 'decal',
+        decal: {
+          kind: 'rubble',
+          x: prop.x,
+          y: prop.y,
+          angle: rng.range(0, Math.PI * 2),
+          scale: 1,
+          color: '#7a7266',
+        },
       });
       break;
     }
@@ -703,6 +987,7 @@ export interface DamageEnemyOptions {
   isCrit?: boolean;
   fromBullet?: boolean;
   fromHeavyBullet?: boolean;
+  fromGammaGuts?: boolean;
   suppressCorpse?: boolean;
 }
 
@@ -851,7 +1136,7 @@ export function applyDamageToEnemy(
     );
   }
 
-  // Boss defeat handling
+  // Boss defeat & unlock handling
   if (enemy.isBoss && enemy.bossId) {
     if (state.boss && state.boss.entityId === enemy.id) {
       state.boss.hp = 0;
@@ -859,6 +1144,52 @@ export function applyDamageToEnemy(
     }
     if (!state.stats.bossesDefeated.includes(enemy.bossId)) {
       state.stats.bossesDefeated.push(enemy.bossId);
+    }
+    if (enemy.bossId === 'mom' && player.mutant === 'rebel') {
+      recordUnlock(state, 'bskin_rebel');
+    } else if (enemy.bossId === 'hyper_crystal' && player.mutant === 'horror') {
+      recordUnlock(state, 'bskin_horror');
+    } else if (enemy.bossId === 'technomancer' && player.mutant === 'steroids') {
+      recordUnlock(state, 'bskin_steroids');
+    } else if (enemy.bossId === 'captain' && player.mutant === 'rogue') {
+      recordUnlock(state, 'bskin_rogue');
+    }
+  }
+  if (enemy.defId === 'enemy_horror') {
+    recordUnlock(state, 'mutant_horror');
+  }
+
+  // Gamma Guts GammaBlast: enemies killed by Gamma Guts detonate in an 8-dmg AOE blast!
+  if (opts.fromGammaGuts) {
+    emitEvent(state, {
+      type: 'particle',
+      kind: 'toxic',
+      x: enemy.x,
+      y: enemy.y,
+      vx: 0,
+      vy: 0,
+      color: '#6dff63',
+      size: 26,
+      life: 10,
+      sprite: 'sprGammaBlast',
+    });
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndMutGammaGuts',
+      x: enemy.x,
+      y: enemy.y,
+      pitchJitter: 0.1,
+    });
+    const blastSnap = [...state.enemies];
+    const blastRadSq = 48 * 48;
+    for (let b = 0; b < blastSnap.length; b++) {
+      const other = blastSnap[b]!;
+      if (other.friendly || other.hp <= 0 || other.invulnerable || other.aiState === 'disguised') continue;
+      const bdx = other.x - enemy.x;
+      const bdy = other.y - enemy.y;
+      if (bdx * bdx + bdy * bdy <= blastRadSq) {
+        applyDamageToEnemy(state, other, 8, bdx * 0.15, bdy * 0.15, rng, { isExplosion: true });
+      }
     }
   }
 
@@ -872,8 +1203,8 @@ export function applyDamageToEnemy(
     }
   }
 
-  // Bloodlust: chance to heal +1 HP on kill
-  if (hasMutation(player, 'bloodlust') && player.hp < player.maxHp && rng.chance(0.08)) {
+  // Bloodlust: 5.5% chance to heal +1 HP on kill (Wiki §4.2: 5-6%)
+  if (hasMutation(player, 'bloodlust') && player.hp < player.maxHp && rng.chance(0.055)) {
     healPlayer(state, 1);
     emitEvent(state, {
       type: 'sfx',
@@ -883,10 +1214,10 @@ export function applyDamageToEnemy(
     });
   }
 
-  // Lucky Shot: chance on kill to grant a FULL ammo pack for a random ammo type
-  if (hasMutation(player, 'lucky_shot') && rng.chance(0.1)) {
+  // Lucky Shot: ~11.76% (1/8.5) chance on kill to grant a mini ammo pack for a random ammo type
+  if (hasMutation(player, 'lucky_shot') && rng.chance(1 / 8.5)) {
     const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
-    const gained = addAmmoToPool(state, ammoType, AMMO_PICKUP_AMOUNT[ammoType]);
+    const gained = addAmmoToPool(state, ammoType, MINI_AMMO_PACK_SIZE[ammoType]);
     emitEvent(state, {
       type: 'sfx',
       sound: 'sndLuckyShotProc',
@@ -924,21 +1255,44 @@ export function applyDamageToEnemy(
     });
   }
 
-  // Horror Ultra A (Stalker): enemy explodes into rad burst on death
+  // Horror Ultra A (Stalker): killed enemy bursts into `raddrop` count of sprHorrorBullet pellets!
   if (player.mutant === 'horror' && hasUltra(player, 'horror_a')) {
-    spawnExplosion(state, enemy.x, enemy.y, 30, 14, 'player', rng, {
-      carveWalls: false,
-      isRad: true,
-      selfDamage: false,
-      sound: 'sndRadPickup',
-    });
+    const pelletCount = Math.min(40, Math.max(1, enemy.radDrop));
+    const pelletSprite = player.skin === 'b' ? 'sprHorrorBBullet' : 'sprHorrorBullet';
+    for (let k = 0; k < pelletCount; k++) {
+      const ang = (k / pelletCount) * Math.PI * 2 + rng.range(-0.25, 0.25);
+      const spd = rng.range(7.5, 11.5);
+      state.projectiles.push({
+        id: allocEntityId(state),
+        kind: 'rad_beam',
+        team: 'player',
+        x: enemy.x + Math.cos(ang) * 4,
+        y: enemy.y + Math.sin(ang) * 4,
+        prevX: enemy.x,
+        prevY: enemy.y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        angle: ang,
+        radius: 4,
+        damage: 2,
+        lifeTicks: 24,
+        maxLifeTicks: 24,
+        pierce: 1,
+        bounce: 0,
+        explosionRadius: 0,
+        sprite: pelletSprite,
+        weaponId: 'horror_stalker',
+        hitIds: [],
+      });
+    }
+    emitEvent(state, { type: 'sfx', sound: 'sndRadPickup', x: enemy.x, y: enemy.y, pitchJitter: 0.12 });
   }
 
-  // Rad drops (Melting gets +1 bonus rad per kill; Crown of Blood drops fewer; Horror refunds absorbed beam rads)
+  // Rad drops (Melting gets +1 bonus rad per kill; Crown of Blood -1 rad per enemy min 0; Horror refunds absorbed beam rads)
   const absorbedRads = horrorAbsorbedRads.get(enemy) ?? 0;
   let baseRads = enemy.radDrop;
   if (player.mutant === 'melting') baseRads += 1;
-  if (state.crown === 'blood') baseRads = Math.max(0, Math.floor(baseRads * 0.65));
+  if (state.crown === 'blood') baseRads = Math.max(0, baseRads - 1);
   const totalRads = baseRads + absorbedRads;
 
   const bigRads = Math.floor(totalRads / 10);
@@ -950,9 +1304,9 @@ export function applyDamageToEnemy(
     spawnPickup(state, 'rad', enemy.x, enemy.y, { value: 1 }, rng);
   }
 
-  // Drop rates modified by Rabbit Paw, Crown of Risk, Crown of Life, Crown of Guns, Heavy Heart
+  // Drop rates modified by Rabbit Paw (+40%), Crown of Risk, Crown of Life, Crown of Guns, Heavy Heart
   let dropMult = 1.0;
-  if (hasMutation(player, 'rabbit_paw')) dropMult *= 1.45;
+  if (hasMutation(player, 'rabbit_paw')) dropMult *= 1.4;
   if (state.crown === 'risk') {
     dropMult *= player.hp >= player.maxHp ? 1.6 : 0.55;
   }
@@ -964,7 +1318,8 @@ export function applyDamageToEnemy(
     spawnPickup(state, 'hp', enemy.x, enemy.y, { value: 2 }, rng);
   }
 
-  // Ammo drop (scales inversely with current active weapon ammo fullness, NT parity!)
+  // Ammo drop (scales inversely with active weapon fullness; holding 2 cursed weapons converts to cursed_ammo!)
+  const dualCursed = Boolean(player.weapons[0]?.cursed && player.weapons[1]?.cursed);
   if (state.crown !== 'guns') {
     const activeWep = getWeaponDef(player.weapons[player.activeSlot]?.weaponId ?? 'revolver');
     const ammoFill =
@@ -977,33 +1332,50 @@ export function applyDamageToEnemy(
         activeWep.ammoType !== 'melee' && rng.chance(0.65)
           ? activeWep.ammoType
           : rng.pick(NON_MELEE_AMMO_TYPES);
-      spawnPickup(
-        state,
-        'ammo',
-        enemy.x,
-        enemy.y,
-        { ammoType: chosenAmmo, value: AMMO_PICKUP_AMOUNT[chosenAmmo] },
-        rng,
-      );
+      if (dualCursed) {
+        spawnPickup(
+          state,
+          'cursed_ammo',
+          enemy.x,
+          enemy.y,
+          {
+            ammoType: chosenAmmo,
+            value: Math.round(AMMO_PICKUP_AMOUNT[chosenAmmo] * 1.5),
+            cursed: true,
+          },
+          rng,
+        );
+      } else {
+        spawnPickup(
+          state,
+          'ammo',
+          enemy.x,
+          enemy.y,
+          { ammoType: chosenAmmo, value: AMMO_PICKUP_AMOUNT[chosenAmmo] },
+          rng,
+        );
+      }
     }
   }
 
-  // Weapon drop (Crown of Guns / Heavy Heart / Boss drop) — uses authentic area weaponTierBase!
+  // Weapon drop (Crown of Guns / Heavy Heart / Boss drop) — uses difficulty + authentic area weaponTierBase!
   let wepDropChance = enemy.isBoss ? 1.0 : 0.025;
   if (state.crown === 'guns') wepDropChance = Math.max(wepDropChance, 0.22);
   if (hasMutation(player, 'heavy_heart')) wepDropChance *= 2.5;
   if (rng.chance(wepDropChance)) {
     const areaDef = getAreaDef(state.areaCode);
     const robotBonus = player.mutant === 'robot' ? 1 : 0;
-    const tier = Math.min(12, Math.max(1, areaDef.weaponTierBase + state.loop * 4 + robotBonus));
+    const diffTier = Math.max(areaDef.weaponTierBase + state.loop * 4, Math.min(12, state.difficulty ?? 1));
+    const tier = Math.min(12, Math.max(1, diffTier + robotBonus));
     let minTier = Math.max(0, tier - 4);
     if (player.mutant === 'robot' && hasUltra(player, 'robot_a')) {
       minTier = Math.min(tier, Math.max(minTier, 4));
     }
     const allowCursed = state.crown === 'curses' || state.biome === 'cursed_caves';
-    const pool = getWeaponsByTier(minTier, tier, allowCursed);
+    const dropCursed = allowCursed && rng.chance(0.35);
+    const maxRollTier = dropCursed ? Math.min(12, tier + 2) : tier;
+    const pool = getWeaponsByTier(minTier, maxRollTier, false, { hardMode: Boolean(state.hardMode) });
     const chosen = pool.length > 0 ? rng.pick(pool) : WEAPONS.revolver!;
-    const dropCursed = Boolean(chosen.cursed) || (allowCursed && rng.chance(0.35));
     spawnPickup(
       state,
       'weapon',
@@ -1040,6 +1412,9 @@ export function applyDamageToEnemy(
 export interface DamagePlayerOptions {
   isExplosion?: boolean;
   isFire?: boolean;
+  isToxic?: boolean;
+  isProjectile?: boolean;
+  isContact?: boolean;
   ignoreIframes?: boolean;
   bypassShield?: boolean;
 }
@@ -1054,6 +1429,8 @@ export function applyDamageToPlayer(
 ): boolean {
   const player = state.player;
   if (!player.alive || player.godMode || damage <= 0) return false;
+  // Frog Passive: 100% immune to all Toxic Gas damage!
+  if (opts.isToxic && player.mutant === 'frog') return false;
   if (!opts.ignoreIframes && player.iframes > 0) return false;
   if (!opts.bypassShield && player.shielding) return false;
 
@@ -1065,12 +1442,14 @@ export function applyDamageToPlayer(
     }
     if (player.hp - dmg < 4) {
       dmg = player.hp - 4;
+      if (dmg <= 0) return false;
     }
   }
 
   const alreadyHeadless = player.mutant === 'chicken' && player.headlessTicks > 0;
   player.hp = alreadyHeadless ? 0 : player.hp - dmg;
-  player.iframes = PLAYER_IFRAMES;
+  // Authentic NT i-frames: projectiles/explosions grant 5 ticks; contact/melee grant 11 ticks!
+  player.iframes = opts.isProjectile ? PLAYER_PROJECTILE_IFRAMES : PLAYER_CONTACT_IFRAMES;
   player.hurtFlashTicks = 6;
   player.lastDamageCause = cause;
   player.lastKillerSprite = killerSprite;
@@ -1162,6 +1541,66 @@ export function applyDamageToPlayer(
       return true;
     }
 
+    // Secret Mutant Skeleton: Melting dying inside a Necromancer revive circle resurrects as Skeleton!
+    if (player.mutant === 'melting') {
+      const reviveCircle = state.props.find((prop) => {
+        if (prop.kind !== 'necro_revive_area') return false;
+        const reach = Math.max(32, prop.radius) + player.radius + 8;
+        const rdx = player.x - prop.x;
+        const rdy = player.y - prop.y;
+        return rdx * rdx + rdy * rdy <= reach * reach;
+      });
+      if (reviveCircle) {
+        player.mutant = 'skeleton';
+        player.maxHp = MUTANTS.skeleton.maxHp;
+        player.hp = 1;
+        player.level = 1;
+        player.rads = 0;
+        player.radsToNextLevel = 60;
+        player.mutations = [];
+        player.ultra = null;
+        player.strongSpiritReady = false;
+        player.strongSpiritRecharging = false;
+        player.ammoMax = { ...DEFAULT_AMMO_MAX };
+        for (const ammoType of NON_MELEE_AMMO_TYPES) {
+          player.ammo[ammoType] = Math.min(player.ammo[ammoType], player.ammoMax[ammoType]);
+        }
+        player.skeletonTransformed = true;
+        player.iframes = 30;
+        state.pendingLevelUps = 0;
+        state.pendingMutations = [];
+        state.pendingUltras = [];
+        state.pendingPatiencePick = false;
+        emitEvent(state, {
+          type: 'sfx',
+          sound: 'sndMutant14Turn',
+          x: player.x,
+          y: player.y,
+        });
+        emitEvent(state, {
+          type: 'particle',
+          kind: 'spark',
+          x: player.x,
+          y: player.y,
+          vx: 0,
+          vy: 0,
+          color: '#e8e4d8',
+          size: 20,
+          life: 16,
+          sprite: 'sprMutant14Revive',
+        });
+        emitEvent(state, {
+          type: 'pickup_text',
+          x: player.x,
+          y: player.y - 16,
+          text: 'SKELETON!',
+          color: '#f2f2e0',
+        });
+        recordUnlock(state, 'mutant_skeleton');
+        return true;
+      }
+    }
+
     // Chicken passive: enter 5-second headless state if not already headless
     if (player.mutant === 'chicken' && player.headlessTicks === 0 && player.maxHp > 2) {
       player.hp = 0;
@@ -1181,6 +1620,37 @@ export function applyDamageToPlayer(
         color: '#ff4444',
       });
       return true;
+    }
+
+    // Frog passive: burst into 20 bouncing venom projectiles on death!
+    if (player.mutant === 'frog') {
+      for (let v = 0; v < 20; v++) {
+        const ang = (v / 20) * Math.PI * 2 + rng.range(-0.1, 0.1);
+        const spd = rng.range(8, 12);
+        state.projectiles.push({
+          id: allocEntityId(state),
+          kind: 'bullet',
+          team: 'player',
+          x: player.x + Math.cos(ang) * 4,
+          y: player.y + Math.sin(ang) * 4,
+          prevX: player.x,
+          prevY: player.y,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd,
+          angle: ang,
+          radius: 3,
+          damage: 2,
+          lifeTicks: 50,
+          maxLifeTicks: 50,
+          pierce: 0,
+          bounce: 2,
+          explosionRadius: 0,
+          sprite: 'sprBouncerBullet',
+          weaponId: 'frog_venom',
+          hitIds: [],
+        });
+      }
+      spawnFrogToxicGas(state, player.x, player.y, rng, { count: 6, emitSound: true });
     }
 
     // True death

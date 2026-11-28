@@ -318,9 +318,11 @@ function runTest2All12MutantActives(): void {
     if (mutantId === 'rebel') assert(state.enemies.some((e) => e.friendly && e.defId === 'rebel_ally'), 'Rebel did not spawn ally');
     if (mutantId === 'horror') assert(state.player.rads < preRads && state.projectiles.some((p) => p.kind === 'rad_beam'), 'Horror did not fire rad beam');
     if (mutantId === 'rogue') assert(state.player.portalStrikes === preStrikes - 1, 'Rogue did not launch Portal Strike');
+    if (mutantId === 'skeleton') assert(state.stats.shotsFired >= preShots + 1, 'Skeleton Blood Gamble did not fire weapon');
+    if (mutantId === 'frog') assert(state.player.frogRooted && state.projectiles.some((p) => p.weaponId === 'frog_gas'), 'Frog did not root and emit toxic gas');
   }
 
-  console.log('[PASS 2/5] All 12 Mutants instantiated and executed RMB actives cleanly with verified mechanics');
+  console.log('[PASS 2/5] All 14 Mutants (incl. Frog & Skeleton) instantiated and executed RMB actives cleanly with verified mechanics');
 }
 
 function runTest3All29Mutations(): void {
@@ -510,10 +512,14 @@ function runTest5LevelUpUltraPortalAndDeterminism(): void {
     const gained1 = addRads(state, 65, rng);
     assert(gained1 === 1 && state.player.level === 2 && state.pendingLevelUps === 1, 'Level 1->2 failed');
 
-    // Kill enemy -> portal opens
+    // Kill enemy -> portal opens after authentic 30-tick spawn delay
     applyDamageToEnemy(state, foe, 10, 2, 0, rng);
     stepCorpses(state);
-    const triggerRes = checkPortalTrigger(state, rng);
+    let triggerRes: ReturnType<typeof checkPortalTrigger> = 'none';
+    for (let d = 0; d < 35; d++) {
+      triggerRes = checkPortalTrigger(state, rng);
+      if (triggerRes === 'portal_opened') break;
+    }
     assert(triggerRes === 'portal_opened' && state.portal.active, 'Portal did not open after killing last enemy');
 
     // Move player onto portal center and step portal until portal_transition triggers mutation_select
@@ -537,23 +543,26 @@ function runTest5LevelUpUltraPortalAndDeterminism(): void {
     assert(picked && state.areaCode === '1-2' && state.phase === 'playing', `Expected area 1-2 playing after mutation pick, got ${state.areaCode} / ${state.phase}`);
     assert(state.player.mutations.length === 1, 'Player should have 1 mutation after pick');
 
-    // Level up all the way to Level 10 -> Ultra selection!
-    addRads(state, 3000, rng);
+    // Level up all the way to Level 10 -> Ultra selection (Horror offers 3 Ultras incl. MELTDOWN)!
+    addRads(state, 3500, rng);
     assert(state.player.level === 10, `Expected level 10, got ${state.player.level}`);
+    assert(state.player.rads <= 600, `Expected base Level 10 rad cap <= 600, got ${state.player.rads}`);
     // Clear pending regular picks until ultra_select appears
     let sawUltra = false;
     for (let guard = 0; guard < 15 && state.pendingLevelUps > 0; guard++) {
       openPendingLevelUp(state, rng);
       if (state.phase === 'ultra_select') {
         sawUltra = true;
-        assert(state.pendingUltras.length === 2, 'Ultra selection must offer 2 ultras');
-        applyMutationSelection(state, 0, rng);
+        assert(state.pendingUltras.length === 3, `Horror ultra selection must offer 3 ultras, got ${state.pendingUltras.length}`);
+        applyMutationSelection(state, 2, rng); // Pick horror_c MELTDOWN
         break;
       } else if (state.phase === 'mutation_select') {
         applyMutationSelection(state, 0, rng);
       }
     }
-    assert(sawUltra && state.player.ultra === 'horror_a', `Expected horror_a ultra, got ${state.player.ultra}`);
+    assert(sawUltra && state.player.ultra === 'horror_c', `Expected horror_c ultra, got ${state.player.ultra}`);
+    addRads(state, 2000, rng);
+    assert(state.player.rads === 1200, `Expected MELTDOWN Level 10 rad cap 1200, got ${state.player.rads}`);
 
     // Verify 7-3 -> 0-1 -> 1-1 Loop 1 via loadAreaIntoState
     loadAreaIntoState(state, '7-3', 0);

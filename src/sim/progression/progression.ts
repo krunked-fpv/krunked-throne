@@ -10,14 +10,18 @@ import {
   type SimState,
   type UltraId,
   type WeaponSlotState,
+  type WorldMap,
 } from '@/contracts';
 import {
   AMMO_PICKUP_AMOUNT,
   AREAS,
   BACK_MUSCLE_AMMO_MAX,
+  CROWNS,
   DEFAULT_AMMO_MAX,
   MUTANTS,
   MUTATION_IDS,
+  POST_LOOP_CROWN_IDS,
+  PRE_LOOP_CROWN_IDS,
   ULTRAS,
   WEAPONS,
   WEAPON_SPECIFIC_MUTATIONS,
@@ -27,32 +31,255 @@ import {
   getWeaponsByTier,
 } from '@/data';
 import {
+  MELTDOWN_RAD_CAP,
   SeededRng,
+  ULTRA_RAD_CAP,
   allocEntityId,
   emitEvent,
   findNearestFloor,
   generateWorldMap,
+  getPlayerRadCap,
   getTile,
   isWalkableTile,
   rolloverPlayerRads,
   tileToWorldCenter,
 } from '@/sim/core';
+import { getRunRuntime } from '@/sim/entities/runtime';
 import {
+  MINI_AMMO_PACK_SIZE,
   NON_MELEE_AMMO_TYPES,
   addAmmoToPool,
   applyDamageToPlayer,
+  drainPendingUnlocks,
+  getPendingUnlocks,
+  getProtoChestWeaponId,
   hasMutation,
   hasUltra,
   healPlayer,
+  recordUnlock,
+  setProtoChestWeaponId,
   spawnFriendlyUnit,
   spawnPickup,
+  type UnlockEventKind,
 } from '@/sim/combat/helpers';
+
+export const PORTAL_SPAWN_DELAY_TICKS = 30;
+export const PORTAL_WARP_TICKS = 18;
 
 // Tracks players who have already consumed Patience in the current run (once-per-run NT rule).
 const patienceConsumedPlayers = new WeakSet<PlayerState>();
 
-// Tracks Y.V. players who picked an Ultra during portal transition and should receive Crib chests on arrival.
+// Tracks Y.V. players who picked an Ultra directly outside a portal transition.
 const yvCribPendingPlayers = new WeakSet<PlayerState>();
+
+// Tracks Skeleton -> Melting REDEMPTION picks until Melting's Ultra is selected.
+const redemptionPendingMeltingUltra = new WeakSet<PlayerState>();
+
+// Tracks the 30-tick portal spawn delay after final kill or Horror Anomaly trigger.
+interface PendingPortalDelay {
+  mapRef: WorldMap;
+  delayTicks: number;
+  anchorX: number;
+  anchorY: number;
+  triggeredByAnomaly: boolean;
+}
+const pendingPortalDelays = new WeakMap<SimState, PendingPortalDelay>();
+
+// Tracks total starting enemy HP per floor for Horror Anomaly high-loop 10% rule.
+const levelStartTotalHpMap = new WeakMap<SimState, { mapRef: WorldMap; totalHp: number }>();
+
+// Tracks destination loop saved when Y.V. warps to $$$ Crib mid-transition.
+const cribReturnLoopMap = new WeakMap<SimState, number>();
+
+export {
+  MELTDOWN_RAD_CAP,
+  ULTRA_RAD_CAP,
+  drainPendingUnlocks,
+  getPendingUnlocks,
+  getPlayerRadCap,
+  getProtoChestWeaponId,
+  recordUnlock,
+  setProtoChestWeaponId,
+  type UnlockEventKind,
+};
+
+/** Pre-Loop (Loop 0) vs Post-Loop (Loop >= 1) Crown Vault pool split (Wiki §4.3). */
+export function getVaultCrownPool(loop: number): readonly CrownId[] {
+  return loop === 0 ? PRE_LOOP_CROWN_IDS : POST_LOOP_CROWN_IDS;
+}
+
+export function getVaultSelectableCrowns(loop: number): readonly CrownId[] {
+  return ['none', ...getVaultCrownPool(loop)];
+}
+
+/** Selects a Crown inside the Crown Vault, enforcing Loop 0 vs Loop 1+ pool & stat hooks. */
+export function selectVaultCrown(state: SimState, crown: CrownId): boolean {
+  if (crown !== 'none' && !getVaultCrownPool(state.loop).includes(crown)) {
+    return false;
+  }
+  const player = state.player;
+  const runRt = getRunRuntime(state);
+  const prevCrown = state.crown;
+
+  if (prevCrown === 'death' && runRt.crownDeathPenalty > 0) {
+    player.maxHp += runRt.crownDeathPenalty;
+    runRt.crownDeathPenalty = 0;
+  }
+
+  state.crown = crown;
+
+  if (crown === 'death') {
+    const penalty = player.maxHp > 1 ? 1 : 0;
+    player.maxHp -= penalty;
+    player.hp = Math.min(player.hp, player.maxHp);
+    runRt.crownDeathPenalty = penalty;
+  } else if (crown === 'destiny' && !runRt.destinyMutationGranted) {
+    runRt.destinyMutationGranted = true;
+    state.pendingLevelUps += 1;
+    emitEvent(state, {
+      type: 'pickup_text',
+      x: player.x,
+      y: player.y - 24,
+      text: 'DESTINY MUTATION!',
+      color: '#ffd700',
+    });
+  }
+
+  emitEvent(state, { type: 'sfx', sound: 'sndCrownAppear', x: player.x, y: player.y });
+  emitEvent(state, {
+    type: 'pickup_text',
+    x: player.x,
+    y: player.y - 16,
+    text: CROWNS[crown].name,
+    color: '#ffd700',
+  });
+  return true;
+}
+
+/** Cleanses cursed flags from all currently held weapons (Vault entry, Last Wish, etc.). */
+export function cleanseCursedWeapons(state: SimState): number {
+  let cleansed = 0;
+  for (let s = 0; s < 2; s++) {
+    const slot = state.player.weapons[s];
+    if (slot && slot.cursed) {
+      slot.cursed = false;
+      cleansed += 1;
+    }
+  }
+  if (cleansed > 0) {
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndSwapCursed',
+      x: state.player.x,
+      y: state.player.y,
+    });
+    emitEvent(state, {
+      type: 'pickup_text',
+      x: state.player.x,
+      y: state.player.y - 14,
+      text: 'CURSE CLEANSED!',
+      color: '#a8e8ff',
+    });
+  }
+  return cleansed;
+}
+
+/**
+ * [E] interaction with the Crown Vault Proto Chest (`proto_chest`).
+ * Swaps the player's held active weapon with `state.protoChestWeaponId`.
+ * Authentic NT secret: retrieving a stored `frog_pistol` converts it into `golden_frog_pistol`!
+ */
+export function interactProtoChest(state: SimState, prop: PropEntity): boolean {
+  const player = state.player;
+  const activeSlot = player.weapons[player.activeSlot];
+  if (activeSlot?.cursed) {
+    emitEvent(state, { type: 'sfx', sound: 'sndSwapCursed', x: player.x, y: player.y });
+    emitEvent(state, {
+      type: 'pickup_text',
+      x: player.x,
+      y: player.y - 12,
+      text: 'CURSED!',
+      color: '#cc55ff',
+    });
+    return false;
+  }
+
+  const storedId = getProtoChestWeaponId(state);
+  const heldId = activeSlot?.weaponId ?? null;
+
+  if (storedId && WEAPONS[storedId]) {
+    const retrievedId = storedId === 'frog_pistol' ? 'golden_frog_pistol' : storedId;
+    const retrievedDef = getWeaponDef(retrievedId);
+    setProtoChestWeaponId(state, heldId);
+    player.weapons[player.activeSlot] = createWeaponSlot(retrievedDef.id, false);
+    prop.sprite = heldId ? 'sprProtoChest' : 'sprProtoChestEmpty';
+    emitEvent(state, { type: 'sfx', sound: 'sndWeaponPickup', x: prop.x, y: prop.y });
+    emitEvent(state, {
+      type: 'pickup_text',
+      x: prop.x,
+      y: prop.y - 14,
+      text: retrievedId === 'golden_frog_pistol' ? 'GOLDEN FROG PISTOL!' : retrievedDef.name,
+      color: retrievedDef.golden ? '#ffe066' : '#88eeff',
+    });
+    return true;
+  }
+
+  // Proto Chest is empty: store currently held weapon inside it!
+  if (!heldId) return false;
+  const storedDef = getWeaponDef(heldId);
+  setProtoChestWeaponId(state, heldId);
+  const otherSlot: 0 | 1 = player.activeSlot === 0 ? 1 : 0;
+  const other = player.weapons[otherSlot];
+  if (other) {
+    player.weapons[0] = other;
+    player.weapons[1] = null;
+    player.activeSlot = 0;
+  } else {
+    player.weapons[0] = createWeaponSlot('revolver', false);
+    player.weapons[1] = null;
+    player.activeSlot = 0;
+  }
+  prop.sprite = 'sprProtoChest';
+  emitEvent(state, { type: 'sfx', sound: 'sndWeaponChest', x: prop.x, y: prop.y });
+  emitEvent(state, {
+    type: 'pickup_text',
+    x: prop.x,
+    y: prop.y - 14,
+    text: `STORED ${storedDef.name}`,
+    color: '#88eeff',
+  });
+  return true;
+}
+
+/** Triggers clean exit portal warp out of Y.V.'s Crib (`$$$`) back to `cribReturnArea`. */
+export function triggerCribExitPortal(state: SimState, originX?: number, originY?: number): boolean {
+  if (state.areaCode !== '$$$' || state.portal.entered) return false;
+  const target: AreaCode = state.cribReturnArea ?? '1-1';
+  const nextLoop = cribReturnLoopMap.get(state) ?? state.loop;
+  state.portal.active = true;
+  state.portal.x = originX ?? state.player.x;
+  state.portal.y = originY ?? state.player.y;
+  state.portal.targetArea = target;
+  state.portal.nextLoop = nextLoop;
+  state.portal.entered = true;
+  state.portal.enterTicks = PORTAL_WARP_TICKS;
+  state.portal.carved = true;
+  state.phase = 'portal_transition';
+  state.portalTransitionTicks = PORTAL_WARP_TICKS;
+  emitEvent(state, { type: 'sfx', sound: 'sndPortalClose', x: state.portal.x, y: state.portal.y });
+  return true;
+}
+
+/** Immediate helper for direct callers/tests to exit Y.V.'s Crib back to `cribReturnArea`. */
+export function exitCribToReturnArea(state: SimState, populateFn?: PopulateAreaFn): boolean {
+  if (state.areaCode !== '$$$') return false;
+  const target: AreaCode = state.cribReturnArea ?? '1-1';
+  const nextLoop = cribReturnLoopMap.get(state) ?? state.loop;
+  state.cribReturnArea = null;
+  cribReturnLoopMap.delete(state);
+  loadAreaIntoState(state, target, nextLoop, populateFn);
+  return true;
+}
 
 // Authentic Nuclear Throne per-mutation pick SFX (verified against Steam manifest).
 const MUTATION_SOUNDS: Record<MutationId, string> = {
@@ -182,11 +409,13 @@ export interface CreateInitialSimOptions {
   crown?: CrownId;
   skin?: 'a' | 'b';
   goldenWeapon?: string | null;
+  hardMode?: boolean;
+  protoChestWeaponId?: string | null;
   populateFn?: PopulateAreaFn;
 }
 
-export function radsRequiredForLevel(level: number): number {
-  if (level >= 10) return 9999;
+export function radsRequiredForLevel(level: number, ultra?: UltraId | null): number {
+  if (level >= 10) return ultra === 'horror_c' ? MELTDOWN_RAD_CAP : ULTRA_RAD_CAP;
   return Math.max(1, level) * 60;
 }
 
@@ -287,60 +516,173 @@ function findRiskRewardChestSpot(
   return findNearestFloor(map, avoidX + 64, avoidY, 16);
 }
 
+interface RollWeaponOptions {
+  forceCursed?: boolean;
+  minTierOverride?: number;
+  difficultyBonus?: number;
+  allowGunGun?: boolean;
+}
+
 function rollTierWeapon(
   state: SimState,
   rng: SeededRng,
   bonusTier = 0,
+  opts: RollWeaponOptions = {},
 ): { weaponId: string; cursed: boolean } {
   const areaDef = getAreaDef(state.areaCode);
   const player = state.player;
   const robotBonus = player.mutant === 'robot' ? 1 : 0;
-  const maxTier = Math.min(
-    12,
-    Math.max(1, areaDef.weaponTierBase + state.loop * 4 + robotBonus + bonusTier),
-  );
-  let minTier = Math.max(0, maxTier - 4);
+
+  // Gun Gun rare drop: Crown of Guns + L1 1-2+ (or L2+)
+  const gunGunEligible =
+    opts.allowGunGun !== false &&
+    state.crown === 'guns' &&
+    (state.loop >= 2 || (state.loop === 1 && state.areaCode !== '1-1'));
+  if (gunGunEligible && rng.chance(0.06)) {
+    return { weaponId: 'gun_gun', cursed: Boolean(opts.forceCursed) };
+  }
+
+  const diffScore = (state.difficulty ?? 1) + (opts.difficultyBonus ?? 0);
+  const baseTier = Math.max(areaDef.weaponTierBase + state.loop * 4, Math.min(12, diffScore));
+  const maxTier = Math.min(12, Math.max(1, baseTier + robotBonus + bonusTier));
+  let minTier = opts.minTierOverride !== undefined ? Math.min(maxTier, opts.minTierOverride) : Math.max(0, maxTier - 4);
   if (player.mutant === 'robot' && hasUltra(player, 'robot_a')) {
     minTier = Math.min(maxTier, Math.max(minTier, 4));
   }
 
   const allowCursed = state.crown === 'curses' || state.biome === 'cursed_caves';
-  if (allowCursed && rng.chance(state.crown === 'curses' ? 0.55 : 0.45)) {
-    // Crown of Curses / Cursed Crystal Caves: roll elevated-tier cursed weapons on ANY floor!
+  const makeCursed =
+    opts.forceCursed === true ||
+    (opts.forceCursed !== false && allowCursed && rng.chance(state.crown === 'curses' ? 0.55 : 0.45));
+
+  if (makeCursed) {
+    // Authentic NT dynamic curse: bump max tier by +2 (or +5 on cursed_caves large chest) and tag any rolled weapon cursed!
     const cursedMax = Math.min(12, maxTier + 2);
     const cursedMin = Math.min(cursedMax, Math.max(minTier, maxTier - 1));
-    const elevatedPool = getWeaponsByTier(cursedMin, cursedMax, true);
+    const elevatedPool = getWeaponsByTier(cursedMin, cursedMax, false, { hardMode: Boolean(state.hardMode) });
     if (elevatedPool.length > 0) {
-      const intrinsicCursed = elevatedPool.filter((w) => w.cursed);
-      const chosen =
-        intrinsicCursed.length > 0 && rng.chance(0.6)
-          ? rng.pick(intrinsicCursed)
-          : rng.pick(elevatedPool);
+      const chosen = rng.pick(elevatedPool);
       return { weaponId: chosen.id, cursed: true };
     }
   }
 
-  const pool = getWeaponsByTier(minTier, maxTier, allowCursed);
-  if (pool.length === 0) return { weaponId: 'revolver', cursed: false };
+  const pool = getWeaponsByTier(minTier, maxTier, false, { hardMode: Boolean(state.hardMode) });
+  if (pool.length === 0) return { weaponId: 'revolver', cursed: Boolean(opts.forceCursed) };
 
   const chosen = rng.pick(pool);
-  return { weaponId: chosen.id, cursed: Boolean(chosen.cursed) };
+  return { weaponId: chosen.id, cursed: Boolean(opts.forceCursed) };
 }
 
 export function pickTierWeaponId(state: SimState, rng: SeededRng, bonusTier = 0): string {
   return rollTierWeapon(state, rng, bonusTier).weaponId;
 }
 
+/** Gun Gun rolls a random weapon at `difficulty + 10` (clamped to Tier 12, min Tier 4). */
+export function rollGunGunWeapon(state: SimState, rng: SeededRng): { weaponId: string; cursed: boolean } {
+  return rollTierWeapon(state, rng, 0, {
+    difficultyBonus: 10,
+    minTierOverride: Math.min(10, Math.max(4, (state.difficulty ?? 1) + 4)),
+    allowGunGun: false,
+    forceCursed: false,
+  });
+}
+
+function rollIsCursedWeaponChest(state: SimState, rng: SeededRng): boolean {
+  if (state.biome === 'cursed_caves') return true;
+  if (state.crown === 'curses') return rng.chance(2 / 3);
+  if (state.crown !== 'none') return rng.chance(1 / 7);
+  return false;
+}
+
+function spawnRadOrLifeOrLoveCanister(
+  state: SimState,
+  x: number,
+  y: number,
+  lifeHealthChests: boolean,
+  rng: SeededRng,
+): void {
+  const player = state.player;
+  if (state.crown === 'love') {
+    // Crown of Love converts rad canisters into ammo chests too (Wiki §4.3)!
+    state.props.push({
+      id: allocEntityId(state),
+      kind: 'ammo_chest',
+      x,
+      y,
+      radius: 8,
+      hp: 10,
+      maxHp: 10,
+      solid: false,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: lifeHealthChests ? 'sprHealthChest' : 'sprAmmoChest',
+      openSprite: lifeHealthChests ? 'sprHealthChestOpen' : 'sprAmmoChestOpen',
+    });
+    return;
+  }
+  if (state.crown === 'life' && rng.chance(2 / 3)) {
+    // Crown of Life: 2/3 of rad canisters become Big Health Chests!
+    state.props.push({
+      id: allocEntityId(state),
+      kind: 'health_chest',
+      x,
+      y,
+      radius: 8,
+      hp: 10,
+      maxHp: 10,
+      solid: false,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprHealthChest',
+      openSprite: 'sprHealthChestOpen',
+    });
+    return;
+  }
+  if (player.mutant === 'rogue') {
+    state.props.push({
+      id: allocEntityId(state),
+      kind: 'idpd_canister',
+      x,
+      y,
+      radius: 8,
+      hp: 6,
+      maxHp: 6,
+      solid: false,
+      opened: false,
+      hurtFlashTicks: 0,
+      sprite: 'sprRogueAmmoChest',
+      openSprite: 'sprRogueAmmoChestOpen',
+    });
+    return;
+  }
+  state.props.push({
+    id: allocEntityId(state),
+    kind: 'rad_canister',
+    x,
+    y,
+    radius: 8,
+    hp: 6,
+    maxHp: 6,
+    solid: false,
+    opened: false,
+    hurtFlashTicks: 0,
+    sprite: 'sprRadChest',
+    radsStored: 14 + state.loop * 8,
+  });
+}
+
 export function spawnLevelChests(state: SimState, rng: SeededRng): void {
   const player = state.player;
   const isBossArena = state.areaCode === '0-1';
 
-  // 1. Weapon chest (converts to Big Weapon Chest if chestSkipStreak >= 1, or Ammo Chest with Crown of Love)
-  const cursedChests = state.crown === 'curses' || state.biome === 'cursed_caves';
   const lifeHealthChests = state.crown === 'life' && player.hp < player.maxHp;
 
-  if (!isBossArena && state.areaCode !== '7-3' && state.areaCode !== 'vault') {
+  if (!isBossArena && state.areaCode !== '7-3' && state.areaCode !== 'vault' && state.areaCode !== '$$$') {
     const pos1 = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 96, true, rng);
+    const skipStreak = Math.max(state.weaponChestSkipStreak ?? 0, state.chestSkipStreak);
+    const spawnBigWep = skipStreak >= 1 && rng.chance(Math.min(1, skipStreak * 0.25));
+    const isCursedChest = rollIsCursedWeaponChest(state, rng);
+
     if (state.crown === 'love') {
       state.props.push({
         id: allocEntityId(state),
@@ -356,7 +698,10 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
         sprite: lifeHealthChests ? 'sprHealthChest' : 'sprAmmoChest',
         openSprite: lifeHealthChests ? 'sprHealthChestOpen' : 'sprAmmoChestOpen',
       });
-    } else if (state.chestSkipStreak >= 1) {
+    } else if (spawnBigWep) {
+      // Big Weapon Chest spawned -> reset weapon chest skip streak (Wiki §6.2)!
+      state.weaponChestSkipStreak = 0;
+      state.chestSkipStreak = 0;
       state.props.push({
         id: allocEntityId(state),
         kind: 'big_weapon_chest',
@@ -370,7 +715,7 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
         hurtFlashTicks: 0,
         sprite: 'sprWeaponChestBig',
         openSprite: 'sprWeaponChestBigOpen',
-        cursed: cursedChests || undefined,
+        cursed: isCursedChest || undefined,
       });
     } else {
       state.props.push({
@@ -384,9 +729,9 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
         solid: false,
         opened: false,
         hurtFlashTicks: 0,
-        sprite: cursedChests ? 'sprCursedChest' : 'sprWeaponChest',
-        openSprite: cursedChests ? 'sprCursedChestOpen' : 'sprWeaponChestOpen',
-        cursed: cursedChests || undefined,
+        sprite: isCursedChest ? 'sprCursedChest' : 'sprWeaponChest',
+        openSprite: isCursedChest ? 'sprCursedChestOpen' : 'sprWeaponChestOpen',
+        cursed: isCursedChest || undefined,
       });
     }
 
@@ -407,78 +752,19 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
       openSprite: lifeHealthChests ? 'sprHealthChestOpen' : 'sprAmmoChestOpen',
     });
 
-    // 3. Rad canister (or IDPD Portal Strike canister for Rogue!) tucked in an outer risk-reward nook
+    // 3. Rad canister (or IDPD canister for Rogue, or Health Chest under Crown of Life, or Ammo under Crown of Love)
     const pos3 = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 108, true, rng);
-    if (player.mutant === 'rogue') {
-      state.props.push({
-        id: allocEntityId(state),
-        kind: 'idpd_canister',
-        x: pos3.x,
-        y: pos3.y,
-        radius: 8,
-        hp: 6,
-        maxHp: 6,
-        solid: false,
-        opened: false,
-        hurtFlashTicks: 0,
-        sprite: 'sprRogueAmmoChest',
-        openSprite: 'sprRogueAmmoChestOpen',
-      });
-    } else {
-      state.props.push({
-        id: allocEntityId(state),
-        kind: 'rad_canister',
-        x: pos3.x,
-        y: pos3.y,
-        radius: 8,
-        hp: 6,
-        maxHp: 6,
-        solid: false,
-        opened: false,
-        hurtFlashTicks: 0,
-        sprite: 'sprRadChest',
-        radsStored: 14 + state.loop * 8,
-      });
-    }
+    spawnRadOrLifeOrLoveCanister(state, pos3.x, pos3.y, lifeHealthChests, rng);
 
     // 4. Open Mind extra chest (equal 1/3 chance: weapon chest, ammo chest, or rad/IDPD canister)
     if (hasMutation(player, 'open_mind')) {
       const posExtra = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 88, true, rng);
       const roll = rng.int(0, 2);
       if (roll === 2) {
-        if (player.mutant === 'rogue') {
-          state.props.push({
-            id: allocEntityId(state),
-            kind: 'idpd_canister',
-            x: posExtra.x,
-            y: posExtra.y,
-            radius: 8,
-            hp: 6,
-            maxHp: 6,
-            solid: false,
-            opened: false,
-            hurtFlashTicks: 0,
-            sprite: 'sprRogueAmmoChest',
-            openSprite: 'sprRogueAmmoChestOpen',
-          });
-        } else {
-          state.props.push({
-            id: allocEntityId(state),
-            kind: 'rad_canister',
-            x: posExtra.x,
-            y: posExtra.y,
-            radius: 8,
-            hp: 6,
-            maxHp: 6,
-            solid: false,
-            opened: false,
-            hurtFlashTicks: 0,
-            sprite: 'sprRadChest',
-            radsStored: 14 + state.loop * 8,
-          });
-        }
+        spawnRadOrLifeOrLoveCanister(state, posExtra.x, posExtra.y, lifeHealthChests, rng);
       } else {
         const extraWeapon = roll === 0 && state.crown !== 'love';
+        const extraCursed = extraWeapon && rollIsCursedWeaponChest(state, rng);
         state.props.push({
           id: allocEntityId(state),
           kind: extraWeapon ? 'weapon_chest' : 'ammo_chest',
@@ -491,29 +777,30 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
           opened: false,
           hurtFlashTicks: 0,
           sprite: extraWeapon
-            ? cursedChests
+            ? extraCursed
               ? 'sprCursedChest'
               : 'sprWeaponChest'
             : lifeHealthChests
               ? 'sprHealthChest'
               : 'sprAmmoChest',
           openSprite: extraWeapon
-            ? cursedChests
+            ? extraCursed
               ? 'sprCursedChestOpen'
               : 'sprWeaponChestOpen'
             : lifeHealthChests
               ? 'sprHealthChestOpen'
               : 'sprAmmoChestOpen',
-          cursed: extraWeapon && cursedChests ? true : undefined,
+          cursed: extraCursed ? true : undefined,
         });
       }
     }
 
-    // 5. Y.V. Ultra B (Back 2 Bizniz): extra Crib weapon chests (or ammo chests with Crown of Love)
+    // 5. Y.V. Ultra B (Back 2 Bizniz): extra weapon chests (or ammo chests with Crown of Love)
     if (player.mutant === 'yv' && hasUltra(player, 'yv_b')) {
       const cribAmmoOnly = state.crown === 'love';
       for (let c = 0; c < 2; c++) {
         const posCrib = findRiskRewardChestSpot(state, state.map.spawnX, state.map.spawnY, 56, false, rng);
+        const bonusCursed = !cribAmmoOnly && rollIsCursedWeaponChest(state, rng);
         state.props.push({
           id: allocEntityId(state),
           kind: cribAmmoOnly ? 'ammo_chest' : 'weapon_chest',
@@ -529,23 +816,23 @@ export function spawnLevelChests(state: SimState, rng: SeededRng): void {
             ? lifeHealthChests
               ? 'sprHealthChest'
               : 'sprAmmoChest'
-            : cursedChests
+            : bonusCursed
               ? 'sprCursedChest'
               : 'sprWeaponChest',
           openSprite: cribAmmoOnly
             ? lifeHealthChests
               ? 'sprHealthChestOpen'
               : 'sprAmmoChestOpen'
-            : cursedChests
+            : bonusCursed
               ? 'sprCursedChestOpen'
               : 'sprWeaponChestOpen',
-          cursed: !cribAmmoOnly && cursedChests ? true : undefined,
+          cursed: bonusCursed ? true : undefined,
         });
       }
     }
   }
 
-  // 6. Y.V. Ultra Crib bonanza queued from portal Ultra selection (both yv_a and yv_b!)
+  // 6. Direct-call Y.V. Ultra fallback chests (when grantUltraById was called outside portal transition)
   if (yvCribPendingPlayers.has(player)) {
     yvCribPendingPlayers.delete(player);
     spawnYvCribChests(state, rng);
@@ -561,24 +848,27 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
 
   const player = state.player;
 
-  // Crown of Hatred: opening any chest damages player by 1 (bypassing shield/iframes) and yields 14 rads
+  // Crown of Hatred: opening any chest deals 1 LETHAL dmg (bypassing shield/iframes) and yields 16 rads!
   if (state.crown === 'hatred') {
     applyDamageToPlayer(state, 1, 'CROWN OF HATRED', 'sprCrown6Idle', rng, {
       ignoreIframes: true,
       bypassShield: true,
     });
-    for (let i = 0; i < 4; i++) {
+    spawnPickup(state, 'big_rad', prop.x, prop.y, { value: 10 }, rng);
+    for (let i = 0; i < 6; i++) {
       spawnPickup(state, 'rad', prop.x, prop.y, { value: 1 }, rng);
     }
-    spawnPickup(state, 'big_rad', prop.x, prop.y, { value: 10 }, rng);
   }
 
   if (prop.kind === 'weapon_chest') {
     state.chestSkipStreak = 0;
+    state.weaponChestSkipStreak = 0;
     const count = player.mutant === 'steroids' && hasUltra(player, 'steroids_a') ? 2 : 1;
-    let anyCursed = false;
+    let anyCursed = Boolean(prop.cursed);
     for (let i = 0; i < count; i++) {
-      const rolled = rollTierWeapon(state, rng, 0);
+      const rolled = rollTierWeapon(state, rng, prop.cursed ? 2 : 0, {
+        forceCursed: prop.cursed ? true : undefined,
+      });
       if (rolled.cursed) anyCursed = true;
       spawnPickup(
         state,
@@ -600,10 +890,14 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
 
   if (prop.kind === 'big_weapon_chest') {
     state.chestSkipStreak = 0;
+    state.weaponChestSkipStreak = 0;
     const count = player.mutant === 'steroids' && hasUltra(player, 'steroids_a') ? 6 : 3;
-    let anyCursed = false;
+    const isLargeCursed = Boolean(prop.cursed) && state.biome === 'cursed_caves';
+    let anyCursed = Boolean(prop.cursed);
     for (let i = 0; i < count; i++) {
-      const rolled = rollTierWeapon(state, rng, 1);
+      const rolled = rollTierWeapon(state, rng, isLargeCursed ? 5 : 1, {
+        forceCursed: prop.cursed ? true : undefined,
+      });
       if (rolled.cursed) anyCursed = true;
       spawnPickup(
         state,
@@ -623,15 +917,81 @@ export function openChest(state: SimState, prop: PropEntity, rng: SeededRng): bo
     return true;
   }
 
+  if (prop.kind === 'giant_weapon_chest') {
+    prop.sprite = 'sprGiantWepChestOpen';
+    prop.openSprite = 'sprGiantWepChestOpen';
+    const count = rng.int(12, 13);
+    for (let i = 0; i < count; i++) {
+      const rolled = rollTierWeapon(state, rng, 0, {
+        difficultyBonus: 3,
+        minTierOverride: 4,
+        forceCursed: prop.cursed ? true : false,
+      });
+      spawnPickup(
+        state,
+        'weapon',
+        prop.x,
+        prop.y,
+        { weaponId: rolled.weaponId, cursed: rolled.cursed, value: 1 },
+        rng,
+      );
+    }
+    emitEvent(state, { type: 'sfx', sound: 'sndBigWeaponChest', x: prop.x, y: prop.y });
+    return true;
+  }
+
+  if (prop.kind === 'giant_ammo_chest') {
+    prop.sprite = 'sprGiantAmmoChestOpen';
+    prop.openSprite = 'sprGiantAmmoChestOpen';
+    for (let i = 0; i < 16; i++) {
+      const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
+      spawnPickup(
+        state,
+        'ammo',
+        prop.x,
+        prop.y,
+        { ammoType, value: MINI_AMMO_PACK_SIZE[ammoType] },
+        rng,
+      );
+    }
+    emitEvent(state, { type: 'sfx', sound: 'sndAmmoChest', x: prop.x, y: prop.y });
+    return true;
+  }
+
+  if (prop.kind === 'health_chest') {
+    prop.sprite = 'sprHealthChestOpen';
+    prop.openSprite = 'sprHealthChestOpen';
+    healPlayer(state, hasMutation(player, 'second_stomach') ? 8 : 4);
+    emitEvent(state, { type: 'sfx', sound: 'sndHealthChestBig', x: prop.x, y: prop.y });
+    return true;
+  }
+
+  if (prop.kind === 'pizza_chest') {
+    prop.sprite = 'sprPizzaChestOpen';
+    prop.openSprite = 'sprPizzaChestOpen';
+    if ((player.hp < player.maxHp || player.headlessTicks > 0) && state.crown !== 'life') {
+      spawnPickup(state, 'hp', prop.x, prop.y, { value: 2 }, rng);
+    }
+    for (let i = 0; i < 2; i++) {
+      const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
+      spawnPickup(state, 'ammo', prop.x, prop.y, { ammoType, value: MINI_AMMO_PACK_SIZE[ammoType] }, rng);
+    }
+    emitEvent(state, { type: 'sfx', sound: 'sndAmmoChest', x: prop.x, y: prop.y });
+    return true;
+  }
+
   if (prop.kind === 'ammo_chest') {
-    // Check Crown of Life BEFORE Steroids Ultra B so Crown of Life + Get Loaded NEVER softlocks healing!
+    // Bug #11 Fix: always sync sprite & openSprite with actual reward so visual NEVER mismatches payout!
     if (state.crown === 'life' && player.hp < player.maxHp) {
       prop.sprite = 'sprHealthChest';
       prop.openSprite = 'sprHealthChestOpen';
       healPlayer(state, hasMutation(player, 'second_stomach') ? 8 : 4);
       emitEvent(state, { type: 'sfx', sound: 'sndHealthChestBig', x: prop.x, y: prop.y });
       return true;
-    } else if (player.mutant === 'steroids' && hasUltra(player, 'steroids_b')) {
+    }
+    prop.sprite = 'sprAmmoChestOpen';
+    prop.openSprite = 'sprAmmoChestOpen';
+    if (player.mutant === 'steroids' && hasUltra(player, 'steroids_b')) {
       // Get Loaded: refill ALL 5 ammo pools simultaneously!
       for (const ammoType of NON_MELEE_AMMO_TYPES) {
         addAmmoToPool(state, ammoType, AMMO_PICKUP_AMOUNT[ammoType]);
@@ -725,6 +1085,15 @@ export function givePlayerWeapon(
 
   const prev = player.weapons[targetSlot];
   if (prev && dropPrevious) {
+    // Track Chicken dropping Chicken Sword on L0 1-1 for L1 1-1 Black Sword unlock!
+    if (
+      player.mutant === 'chicken' &&
+      state.loop === 0 &&
+      state.areaCode === '1-1' &&
+      prev.weaponId === 'chicken_sword'
+    ) {
+      state.chickenDroppedSwordOn1_1 = true;
+    }
     // Dropped player weapons have value: 0 so picking them back up cannot farm infinite ammo or HP!
     spawnPickup(state, 'weapon', player.x, player.y, {
       weaponId: prev.weaponId,
@@ -740,10 +1109,10 @@ export function givePlayerWeapon(
     player.activeSlot = 1;
   }
 
-  // Only fresh unlooted weapons grant starter ammo (or HP with Crown of Protection)
+  // Only fresh unlooted weapons grant starter ammo (or +1 HP with Crown of Protection; +2 w/ Second Stomach)
   if (grantBonus) {
     if (state.crown === 'protection') {
-      healPlayer(state, hasMutation(player, 'second_stomach') ? 4 : 2);
+      healPlayer(state, hasMutation(player, 'second_stomach') ? 2 : 1);
     } else if (def.ammoType !== 'melee') {
       addAmmoToPool(state, def.ammoType, Math.max(2, Math.round(AMMO_PICKUP_AMOUNT[def.ammoType] * 0.5)));
     }
@@ -775,7 +1144,7 @@ export function addRads(state: SimState, amount: number, rng?: SeededRng): numbe
   while (player.level < 10 && player.rads >= player.radsToNextLevel) {
     player.rads -= player.radsToNextLevel;
     player.level += 1;
-    player.radsToNextLevel = radsRequiredForLevel(player.level);
+    player.radsToNextLevel = radsRequiredForLevel(player.level, player.ultra);
     state.pendingLevelUps += 1;
     levelsGained += 1;
     const isUltra = player.level === 10;
@@ -786,6 +1155,14 @@ export function addRads(state: SimState, amount: number, rng?: SeededRng): numbe
       x: player.x,
       y: player.y,
     });
+  }
+
+  if (player.level >= 10) {
+    const cap = getPlayerRadCap(player);
+    player.radsToNextLevel = cap;
+    if (player.rads > cap) {
+      player.rads = cap;
+    }
   }
 
   if (rng) {
@@ -827,9 +1204,10 @@ export function drawUltraChoices(state: SimState): UltraId[] {
 export function openPendingLevelUp(state: SimState, rng: SeededRng): boolean {
   if (state.pendingLevelUps <= 0) return false;
   const player = state.player;
+  const needsUltra = !player.ultra || redemptionPendingMeltingUltra.has(player);
 
-  // Trigger Ultra selection at level 10 when Ultra hasn't been picked yet
-  if (player.level >= 10 && !player.ultra && state.pendingLevelUps === 1) {
+  // Trigger Ultra selection at level 10 when Ultra hasn't been picked yet (or after Skeleton REDEMPTION's 9 picks!)
+  if (player.level >= 10 && needsUltra && state.pendingLevelUps === 1) {
     drawUltraChoices(state);
     state.pendingMutations = [];
     state.phase = 'ultra_select';
@@ -843,7 +1221,7 @@ export function openPendingLevelUp(state: SimState, rng: SeededRng): boolean {
     return true;
   }
 
-  if (player.level >= 10 && !player.ultra) {
+  if (player.level >= 10 && needsUltra) {
     drawUltraChoices(state);
     state.phase = 'ultra_select';
     return true;
@@ -881,6 +1259,8 @@ export function grantMutationById(
       for (const ammoType of NON_MELEE_AMMO_TYPES) {
         player.ammo[ammoType] = player.ammoMax[ammoType];
       }
+      // Authentic NT: Last Wish cleanses all held cursed weapons!
+      cleanseCursedWeapons(state);
       break;
     case 'strong_spirit':
       player.strongSpiritReady = true;
@@ -898,6 +1278,9 @@ export function grantMutationById(
           }
         }
       }
+      break;
+    case 'patience':
+      state.pendingPatiencePick = true;
       break;
     case 'hammerhead':
       player.hammerheadTicks = Math.max(player.hammerheadTicks, 24);
@@ -927,6 +1310,9 @@ export function grantUltraById(
   const def = ULTRAS[ultraId];
   if (!def) return false;
   const player = state.player;
+  if (redemptionPendingMeltingUltra.has(player) && ultraId !== 'skeleton_a') {
+    redemptionPendingMeltingUltra.delete(player);
+  }
   player.ultra = ultraId;
 
   switch (ultraId) {
@@ -944,9 +1330,14 @@ export function grantUltraById(
       break;
     case 'yv_a':
     case 'yv_b':
-      // Both Y.V. Ultras grant an immediate Crib-style giant weapon chest bonanza!
+      // Y.V. Ultra redirects portal into Y.V.'s Crib ($$$), saving cribReturnArea!
+      state.visitedCrib = true;
       if (state.portal.entered) {
-        yvCribPendingPlayers.add(player);
+        if (state.portal.targetArea !== '$$$') {
+          state.cribReturnArea = state.portal.targetArea;
+          cribReturnLoopMap.set(state, state.portal.nextLoop);
+        }
+        state.portal.targetArea = '$$$';
       } else {
         const cribRng = rng ?? SeededRng.fromState(state.rngState);
         spawnYvCribChests(state, cribRng);
@@ -955,6 +1346,35 @@ export function grantUltraById(
         }
       }
       break;
+    case 'horror_c':
+      // MELTDOWN: doubles Level 10 rad capacity from 600 -> 1,200!
+      player.radsToNextLevel = MELTDOWN_RAD_CAP;
+      break;
+    case 'skeleton_a': {
+      // REDEMPTION: transform back into Melting (2 base HP), strip Skeleton mutations,
+      // keep `player.ultra = 'skeleton_a'` until Melting's Ultra is selected, queue 9 picks + Melting Ultra!
+      player.mutant = 'melting';
+      player.maxHp = MUTANTS.melting.maxHp;
+      player.hp = Math.min(Math.max(1, player.hp), player.maxHp);
+      player.mutations = [];
+      player.strongSpiritReady = false;
+      player.strongSpiritRecharging = false;
+      player.ammoMax = { ...DEFAULT_AMMO_MAX };
+      for (const ammoType of NON_MELEE_AMMO_TYPES) {
+        player.ammo[ammoType] = Math.min(player.ammo[ammoType], player.ammoMax[ammoType]);
+      }
+      player.skeletonTransformed = false;
+      redemptionPendingMeltingUltra.add(player);
+      state.pendingLevelUps += 10; // 9 fresh mutations + 1 Melting Ultra!
+      emitEvent(state, {
+        type: 'pickup_text',
+        x: player.x,
+        y: player.y - 16,
+        text: 'REDEMPTION! BACK IN THE FLESH',
+        color: '#ffaa66',
+      });
+      break;
+    }
     case 'rogue_a':
       player.portalStrikes = Math.min(6, player.portalStrikes + 2);
       break;
@@ -1029,17 +1449,42 @@ export function loadAreaIntoState(
   populateFn?: PopulateAreaFn,
 ): void {
   const rng = SeededRng.fromState(state.rngState);
-  const areaDef = getAreaDef(areaCode);
+  const prevArea = state.areaCode;
   const targetLoop = loop ?? state.loop;
   const isTransition = state.tick > 0;
+  const carryingCursed = Boolean(state.player.weapons[0]?.cursed || state.player.weapons[1]?.cursed);
 
-  const map = generateWorldMap(areaCode, areaDef.biome, targetLoop, rng, {
+  // Entering 4-1 while carrying any cursed weapon automatically redirects to 4-? Cursed Crystal Caves!
+  const effectiveAreaCode: AreaCode = areaCode === '4-1' && carryingCursed ? '4-?' : areaCode;
+  const areaDef = getAreaDef(effectiveAreaCode);
+  const runRt = getRunRuntime(state);
+
+  pendingPortalDelays.delete(state);
+
+  // Bug #22b Fix: preserve true vaultReturnArea on Crown Vault entry & trigger Vault exit ambush + extra difficulty!
+  if (effectiveAreaCode === 'vault') {
+    cleanseCursedWeapons(state);
+    if (!runRt.vaultReturnArea && prevArea !== 'vault') {
+      runRt.vaultReturnArea = getNextAreaTransition(prevArea, targetLoop).areaCode;
+    }
+  } else if (isTransition && prevArea === 'vault') {
+    runRt.vaultReturnArea = null;
+    state.vaultAmbushPending = true;
+    state.difficulty = (state.difficulty ?? 1) + 1; // Extra +1 difficulty on Crown Vault exit!
+  }
+
+  // Increment internal difficulty (+1 per normal portal transition; Crib exit does not bump difficulty)
+  if (isTransition && prevArea !== '$$$') {
+    state.difficulty = (state.difficulty ?? 1) + 1;
+  }
+
+  const map = generateWorldMap(effectiveAreaCode, areaDef.biome, targetLoop, rng, {
     targetFloors: areaDef.targetFloors,
     walkerCount: areaDef.walkerCount,
     darkness: areaDef.darkness,
   });
 
-  state.areaCode = areaCode;
+  state.areaCode = effectiveAreaCode;
   state.biome = areaDef.biome;
   state.loop = targetLoop;
   state.map = map;
@@ -1062,7 +1507,7 @@ export function loadAreaIntoState(
   state.levelKills = 0;
   state.portalTransitionTicks = 0;
   state.floorClearTrigger = true;
-  state.generatorsRemaining = areaCode === '7-3' ? 4 : 0;
+  state.generatorsRemaining = effectiveAreaCode === '7-3' ? 4 : 0;
 
   // Place player safely on map spawn
   const player = state.player;
@@ -1082,6 +1527,7 @@ export function loadAreaIntoState(
   player.hammerheadTicks = 24;
   player.hammerheadWallTicks = 0;
   player.allyCount = 0;
+  player.frogRooted = false;
 
   // Chicken headless: entering portal regrows head (-2 max HP)
   if (isTransition && player.mutant === 'chicken' && player.headlessTicks > 0) {
@@ -1132,28 +1578,113 @@ export function loadAreaIntoState(
     player.hp = 1;
   }
 
-  // Reset portal state
-  const next = getNextAreaTransition(areaCode, targetLoop);
+  // Reset portal state (preserving true vaultReturnArea on Vault and cribReturnArea on $$$!)
+  const next = getNextAreaTransition(effectiveAreaCode, targetLoop);
+  const initialTargetArea: AreaCode =
+    effectiveAreaCode === 'vault' && runRt.vaultReturnArea
+      ? runRt.vaultReturnArea
+      : effectiveAreaCode === '$$$' && state.cribReturnArea
+        ? state.cribReturnArea
+        : next.areaCode;
+  const initialNextLoop =
+    effectiveAreaCode === '$$$' ? (cribReturnLoopMap.get(state) ?? targetLoop) : next.loop;
   state.portal = {
     active: false,
     x: map.spawnX,
     y: map.spawnY,
     radius: 18,
     timer: 0,
-    targetArea: next.areaCode,
-    nextLoop: next.loop,
+    targetArea: initialTargetArea,
+    nextLoop: initialNextLoop,
     entered: false,
     enterTicks: 0,
     carved: false,
   };
 
-  // Spawn standard chests/canisters & invoke Wave 2C entity populator if provided
+  // Spawn standard chests/canisters & invoke entity populator if provided
   spawnLevelChests(state, rng);
   if (populateFn) {
     populateFn(state, rng);
   }
 
-  // Apply Scarier Face (-20% enemy HP + sync Boss HUD!) & Crown of Luck (chance enemy spawns at 1 HP)
+  // Y.V.'s Crib ($$$): enforce Crown of Love conversion, Open Mind +1 Giant Chest, and fallback props if no populator
+  if (effectiveAreaCode === '$$$') {
+    const hasAnyGiant = state.props.some(
+      (p) => p.kind === 'giant_weapon_chest' || p.kind === 'giant_ammo_chest',
+    );
+    if (!hasAnyGiant) {
+      const cribOffsets: ReadonlyArray<[number, number, 'giant_weapon_chest' | 'giant_ammo_chest']> = [
+        [-28, -16, 'giant_weapon_chest'],
+        [28, -16, 'giant_weapon_chest'],
+        [0, -28, 'giant_ammo_chest'],
+      ];
+      for (const [ox, oy, kind] of cribOffsets) {
+        const spot = findNearestFloor(state.map, map.spawnX + ox, map.spawnY + oy, 8);
+        const isWep = kind === 'giant_weapon_chest';
+        state.props.push({
+          id: allocEntityId(state),
+          kind,
+          x: spot.x,
+          y: spot.y,
+          radius: 12,
+          hp: 999,
+          maxHp: 999,
+          solid: false,
+          opened: false,
+          hurtFlashTicks: 0,
+          sprite: isWep ? 'sprGiantWepChest' : 'sprGiantAmmoChest',
+          openSprite: isWep ? 'sprGiantWepChestOpen' : 'sprGiantAmmoChestOpen',
+        });
+      }
+    }
+    if (hasMutation(player, 'open_mind')) {
+      const extraSpot = findNearestFloor(state.map, map.spawnX + 36, map.spawnY + 12, 8);
+      const isAmmo = state.crown === 'love';
+      state.props.push({
+        id: allocEntityId(state),
+        kind: isAmmo ? 'giant_ammo_chest' : 'giant_weapon_chest',
+        x: extraSpot.x,
+        y: extraSpot.y,
+        radius: 12,
+        hp: 999,
+        maxHp: 999,
+        solid: false,
+        opened: false,
+        hurtFlashTicks: 0,
+        sprite: isAmmo ? 'sprGiantAmmoChest' : 'sprGiantWepChest',
+        openSprite: isAmmo ? 'sprGiantAmmoChestOpen' : 'sprGiantWepChestOpen',
+      });
+    }
+    if (state.crown === 'love') {
+      for (let i = 0; i < state.props.length; i++) {
+        const p = state.props[i]!;
+        if (p.kind === 'giant_weapon_chest') {
+          p.kind = 'giant_ammo_chest';
+          p.sprite = 'sprGiantAmmoChest';
+          p.openSprite = 'sprGiantAmmoChestOpen';
+        }
+      }
+    }
+    if (!state.props.some((p) => p.kind === 'venuz_car_exit')) {
+      const carSpot = findNearestFloor(state.map, map.spawnX, map.spawnY + 26, 8);
+      state.props.push({
+        id: allocEntityId(state),
+        kind: 'venuz_car_exit',
+        x: carSpot.x,
+        y: carSpot.y,
+        radius: 12,
+        hp: 999,
+        maxHp: 999,
+        solid: false,
+        opened: false,
+        hurtFlashTicks: 0,
+        sprite: 'sprVenusCarFixed',
+        interactPrompt: '[E] LEAVE CRIB',
+      });
+    }
+  }
+
+  // Apply Scarier Face (-20% enemy HP + sync Boss HUD!) & Crown of Luck (10% chance enemy spawns at 1 HP)
   const scarier = hasMutation(player, 'scarier_face');
   const luck = state.crown === 'luck';
   if (scarier || luck) {
@@ -1169,24 +1700,57 @@ export function loadAreaIntoState(
           activeBoss.hp = e.hp;
         }
       }
-      if (luck && !e.isBoss && rng.chance(0.25)) {
+      if (luck && !e.isBoss && rng.chance(0.1)) {
         e.hp = 1;
       }
     }
   }
 
+  let startTotalHp = 0;
+  for (let i = 0; i < state.enemies.length; i++) {
+    const e = state.enemies[i]!;
+    if (!e.friendly && e.hp > 0 && e.aiState !== 'disguised') {
+      startTotalHp += e.hp;
+    }
+  }
+  levelStartTotalHpMap.set(state, { mapRef: state.map, totalHp: startTotalHp });
   state.levelStartEnemyCount = countHostileEnemies(state);
   state.rngState = rng.getState();
 
+  // Emit authentic Wiki B-Skin & Hard Mode unlock events!
+  if (effectiveAreaCode === '4-?' && player.mutant === 'crystal') {
+    recordUnlock(state, 'bskin_crystal');
+  }
+  if (effectiveAreaCode === '2-?' && player.mutant === 'eyes') {
+    recordUnlock(state, 'bskin_eyes');
+  }
+  if (
+    effectiveAreaCode === '7-3' &&
+    player.mutant === 'melting' &&
+    !hasMutation(player, 'rhino_skin') &&
+    !hasMutation(player, 'strong_spirit')
+  ) {
+    recordUnlock(state, 'bskin_melting');
+  }
+  if (effectiveAreaCode === '7-3' && player.mutant === 'plant' && state.stats.timeTicks < 18000) {
+    recordUnlock(state, 'bskin_plant');
+  }
+  if (effectiveAreaCode === '2-1' && player.mutant === 'chicken' && state.hardMode) {
+    recordUnlock(state, 'bskin_chicken');
+  }
+  if (targetLoop >= 2) {
+    recordUnlock(state, 'hard_mode');
+  }
+
   emitEvent(state, {
     type: 'area_change',
-    areaCode,
+    areaCode: effectiveAreaCode,
     biome: areaDef.biome,
     loop: targetLoop,
   });
   // Never emit mus/Boss4A while 7-3 Throne sleeps (prevents double-fetch before Boss4Silence routing!)
   const initialTrack =
-    areaCode === '7-3'
+    effectiveAreaCode === '7-3'
       ? 'mus/Boss4Silence'
       : targetLoop > 0 && areaDef.musicTrackB
         ? areaDef.musicTrackB
@@ -1195,16 +1759,21 @@ export function loadAreaIntoState(
     type: 'music',
     track: initialTrack,
     ambience: areaDef.ambienceTrack,
-    boss: areaCode === '0-1',
+    boss: effectiveAreaCode === '0-1',
   });
 }
 
 export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
   const seed = (opts.seed ?? 1337) >>> 0;
   const rng = new SeededRng(seed);
-  const mutantDef = MUTANTS[opts.mutant];
+  // Secret Mutant Frog: starting a run on 1-1 carrying Golden Frog Pistol transforms player into Frog!
+  const frogTransform = opts.goldenWeapon === 'golden_frog_pistol' && opts.mutant !== 'frog';
+  const effectiveMutant: MutantId = frogTransform ? 'frog' : opts.mutant;
+  const mutantDef = MUTANTS[effectiveMutant];
   const crown: CrownId = opts.crown ?? 'none';
   const skin: 'a' | 'b' = opts.skin ?? 'a';
+  const hardMode = Boolean(opts.hardMode);
+  const startLoop = hardMode ? 1 : 0;
 
   let maxHp = mutantDef.maxHp;
   if (crown === 'death') {
@@ -1249,7 +1818,7 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
     spawnY: 128,
     biome: 'desert' as const,
     areaCode: '1-1' as const,
-    loop: 0,
+    loop: startLoop,
     darkness: 0,
     walkableCount: 256,
   };
@@ -1261,12 +1830,12 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
     phase: 'playing',
     areaCode: '1-1',
     biome: 'desert',
-    loop: 0,
+    loop: startLoop,
     crown,
     map: placeholderMap,
     player: {
       id: 1,
-      mutant: opts.mutant,
+      mutant: effectiveMutant,
       skin,
       x: 128,
       y: 128,
@@ -1304,7 +1873,7 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
       headlessTicks: 0,
       headlessDeaths: 0,
       gunWarrantTicks: 0,
-      portalStrikes: opts.mutant === 'rogue' ? 3 : 0,
+      portalStrikes: effectiveMutant === 'rogue' ? 3 : 0,
       portalStrikeAim: null,
       hammerheadTicks: 24,
       hammerheadWallTicks: 0,
@@ -1314,8 +1883,8 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
       alive: true,
       lastDamageCause: '',
       lastKillerSprite: '',
-      frogRooted: false, // Wave 2B
-      skeletonTransformed: false, // Wave 2B
+      frogRooted: false,
+      skeletonTransformed: false,
     },
     enemies: [],
     projectiles: [],
@@ -1332,7 +1901,7 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
       radius: 18,
       timer: 0,
       targetArea: '1-2',
-      nextLoop: 0,
+      nextLoop: startLoop,
       entered: false,
       enterTicks: 0,
       carved: false,
@@ -1348,7 +1917,7 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
     pendingLevelUps: crown === 'destiny' ? 1 : 0,
     chestSkipStreak: 0,
     generatorsRemaining: 0,
-    idpdHeat: opts.mutant === 'rogue' ? 1 : 0,
+    idpdHeat: effectiveMutant === 'rogue' ? 1 : 0,
     levelStartEnemyCount: 0,
     levelKills: 0,
     stats: {
@@ -1364,18 +1933,31 @@ export function createInitialSimState(opts: CreateInitialSimOptions): SimState {
     nextEntityId: 10,
     portalTransitionTicks: 0,
     floorClearTrigger: true,
-    visitedCrib: false, // Wave 2B
-    cribReturnArea: null, // Wave 2B
-    radCanisterSkipStreak: 0, // Wave 2B
-    weaponChestSkipStreak: 0, // Wave 2B
-    difficulty: 1, // Wave 2B
-    hardMode: false, // Wave 2B
-    vaultAmbushPending: false, // Wave 2B
-    pendingPatiencePick: false, // Wave 2B
-    chickenDroppedSwordOn1_1: false, // Wave 2B
+    visitedCrib: false,
+    cribReturnArea: null,
+    radCanisterSkipStreak: 0,
+    weaponChestSkipStreak: 0,
+    difficulty: hardMode ? 8 : 1,
+    hardMode,
+    vaultAmbushPending: false,
+    pendingPatiencePick: false,
+    chickenDroppedSwordOn1_1: false,
   };
 
-  loadAreaIntoState(state, '1-1', 0, opts.populateFn);
+  if (opts.protoChestWeaponId !== undefined) {
+    setProtoChestWeaponId(state, opts.protoChestWeaponId);
+  }
+
+  loadAreaIntoState(state, '1-1', startLoop, opts.populateFn);
+  if (frogTransform) {
+    recordUnlock(state, 'mutant_frog');
+    emitEvent(state, {
+      type: 'sfx',
+      sound: 'sndFrogStart',
+      x: state.player.x,
+      y: state.player.y,
+    });
+  }
   // Crown of Destiny grants an immediate free mutation choice at run start
   if (crown === 'destiny' && state.pendingLevelUps > 0) {
     const destinyRng = SeededRng.fromState(state.rngState);
@@ -1390,13 +1972,13 @@ export function checkPortalTrigger(
   rng: SeededRng,
   populateFn?: PopulateAreaFn,
 ): 'none' | 'portal_opened' | 'selection_opened' | 'area_loaded' {
-  // 1. Complete portal transition once player has been pulled inside for 24 ticks
+  // 1. Complete portal transition once player has warped for PORTAL_WARP_TICKS (~18 ticks)
   if (state.phase === 'portal_transition' && state.portal.entered) {
-    if (state.portalTransitionTicks >= 24) {
+    if (state.portalTransitionTicks >= PORTAL_WARP_TICKS) {
       const player = state.player;
       const hasTB = hasMutation(player, 'throne_butt');
 
-      // Sweep any remaining loose floor rads & unopened rad canisters into player XP
+      // Sweep ONLY loose floor rads into player XP (NEVER auto-vacuum unopened rad canisters!)
       let sweptRads = 0;
       for (let i = state.pickups.length - 1; i >= 0; i--) {
         const pk = state.pickups[i]!;
@@ -1407,22 +1989,21 @@ export function checkPortalTrigger(
           state.pickups.splice(i, 1);
         }
       }
+
+      let leftIntactCanister = false;
       for (let i = state.props.length - 1; i >= 0; i--) {
         const prop = state.props[i]!;
         if (prop.opened || prop.mimic) continue;
-        if (prop.kind === 'rad_canister') {
-          const stored = prop.radsStored ?? 10;
-          if (stored > 0) {
-            player.rads += stored;
-            state.stats.radsCollected += stored;
-            sweptRads += stored;
-          }
-          prop.opened = true;
+        if (prop.kind === 'rad_canister' || prop.kind === 'rad_maggot_canister') {
+          leftIntactCanister = true;
         } else if (prop.kind === 'weapon_chest' || prop.kind === 'big_weapon_chest') {
-          // Any unopened weapon chest left behind on exit counts toward Big Weapon Chest streak!
           state.chestSkipStreak += 1;
+          state.weaponChestSkipStreak = (state.weaponChestSkipStreak ?? 0) + 1;
           prop.opened = true;
         }
+      }
+      if (leftIntactCanister) {
+        state.radCanisterSkipStreak = (state.radCanisterSkipStreak ?? 0) + 1;
       }
       if (sweptRads > 0) {
         rolloverPlayerRads(state);
@@ -1461,8 +2042,11 @@ export function checkPortalTrigger(
 
       // Consume Patience deferred mutation on portal transition (once per run!)
       const patienceIdx = player.mutations.indexOf('patience');
-      if (patienceIdx !== -1) {
-        player.mutations.splice(patienceIdx, 1);
+      if (patienceIdx !== -1 || state.pendingPatiencePick) {
+        if (patienceIdx !== -1) {
+          player.mutations.splice(patienceIdx, 1);
+        }
+        state.pendingPatiencePick = false;
         patienceConsumedPlayers.add(player);
         state.pendingLevelUps += 1;
       }
@@ -1471,7 +2055,13 @@ export function checkPortalTrigger(
         return 'selection_opened';
       }
 
-      state.stats.areasCleared += 1;
+      const exitingCrib = state.areaCode === '$$$';
+      if (!exitingCrib) {
+        state.stats.areasCleared += 1;
+      } else {
+        state.cribReturnArea = null;
+        cribReturnLoopMap.delete(state);
+      }
       loadAreaIntoState(state, state.portal.targetArea, state.portal.nextLoop, populateFn);
       return 'area_loaded';
     }
@@ -1483,18 +2073,90 @@ export function checkPortalTrigger(
     return 'none';
   }
 
-  const hostileCount = countHostileEnemies(state);
+  const pendingDelay = pendingPortalDelays.get(state);
+  if (pendingDelay && pendingDelay.mapRef === state.map) {
+    pendingDelay.delayTicks -= 1;
+    if (pendingDelay.delayTicks > 0) {
+      return 'none';
+    }
+    pendingPortalDelays.delete(state);
+    const safe = findNearestFloor(state.map, pendingDelay.anchorX, pendingDelay.anchorY, 10);
+    const next = getNextAreaTransition(state.areaCode, state.loop);
+    const runRt = getRunRuntime(state);
+    const carryingCursed = Boolean(state.player.weapons[0]?.cursed || state.player.weapons[1]?.cursed);
+    let targetArea: AreaCode =
+      state.areaCode === 'vault' && runRt.vaultReturnArea
+        ? runRt.vaultReturnArea
+        : state.areaCode === '$$$' && state.cribReturnArea
+          ? state.cribReturnArea
+          : next.areaCode;
+    if (targetArea === '4-1' && carryingCursed) {
+      targetArea = '4-?';
+    }
+    const nextLoop = state.areaCode === '$$$' ? (cribReturnLoopMap.get(state) ?? state.loop) : next.loop;
+
+    state.portal.active = true;
+    state.portal.x = safe.x;
+    state.portal.y = safe.y;
+    state.portal.timer = 0;
+    state.portal.entered = false;
+    state.portal.enterTicks = 0;
+    state.portal.carved = false;
+    state.portal.targetArea = targetArea;
+    state.portal.nextLoop = nextLoop;
+
+    emitEvent(state, {
+      type: 'particle',
+      kind: 'portal_swirl',
+      x: safe.x,
+      y: safe.y,
+      vx: 0,
+      vy: 0,
+      color: '#a8ff8a',
+      size: 64,
+      life: 12,
+      sprite: 'sprPortalClear',
+    });
+    emitEvent(state, {
+      type: 'portal_open',
+      x: safe.x,
+      y: safe.y,
+      targetArea,
+    });
+    emitEvent(state, {
+      type: 'sfx',
+      sound: pendingDelay.triggeredByAnomaly ? 'sndHorrorPortal' : 'sndPortalOpen',
+      x: safe.x,
+      y: safe.y,
+    });
+    return 'portal_opened';
+  }
+
   const bossAlive = Boolean(state.boss && !state.boss.defeated);
   if (bossAlive) return 'none';
 
-  const anomalyThreshold =
-    state.player.mutant === 'horror' && hasUltra(state.player, 'horror_b') && state.levelStartEnemyCount >= 4
-      ? Math.max(1, Math.floor(state.levelStartEnemyCount * 0.25))
-      : 0;
+  let hostileCount = 0;
+  let remainingHostileHp = 0;
+  for (let i = 0; i < state.enemies.length; i++) {
+    const e = state.enemies[i]!;
+    if (!e.friendly && e.hp > 0 && e.aiState !== 'disguised') {
+      hostileCount += 1;
+      remainingHostileHp += e.hp;
+    }
+  }
+
+  const isHorrorAnomaly = state.player.mutant === 'horror' && hasUltra(state.player, 'horror_b');
+  const startHpRec = levelStartTotalHpMap.get(state);
+  const startTotalHp = startHpRec && startHpRec.mapRef === state.map ? startHpRec.totalHp : 0;
+  const anomalyHpThreshold =
+    state.loop >= 2 && startTotalHp > 0 ? Math.max(140, Math.round(startTotalHp * 0.1)) : 140;
+  const hasProgress = state.levelKills > 0 || (state.levelStartEnemyCount > 0 && hostileCount < state.levelStartEnemyCount);
+  const triggeredByAnomaly =
+    isHorrorAnomaly && hostileCount > 0 && hasProgress && remainingHostileHp <= anomalyHpThreshold;
 
   const clearedByKills =
-    hostileCount <= anomalyThreshold &&
-    (state.levelStartEnemyCount > 0 || state.levelKills > 0 || Boolean(state.boss?.defeated));
+    triggeredByAnomaly ||
+    (hostileCount === 0 && (state.levelStartEnemyCount > 0 || state.levelKills > 0 || Boolean(state.boss?.defeated)));
 
   if (!clearedByKills) {
     return 'none';
@@ -1504,17 +2166,16 @@ export function checkPortalTrigger(
   const lastCorpse = state.corpses[state.corpses.length - 1];
   const anchorX = lastCorpse ? lastCorpse.x : state.player.x + 28;
   const anchorY = lastCorpse ? lastCorpse.y : state.player.y;
-  const safe = findNearestFloor(state.map, anchorX, anchorY, 10);
 
-  // If Horror Anomaly triggered early, consume remaining enemies into the portal (crediting kills & rads!)
-  if (hostileCount > 0 && anomalyThreshold > 0) {
+  // If Horror Anomaly triggered early, consume remaining enemies immediately (crediting kills & rads!)
+  if (triggeredByAnomaly) {
     for (let i = state.enemies.length - 1; i >= 0; i--) {
       const e = state.enemies[i]!;
       if (!e.friendly && e.hp > 0 && e.aiState !== 'disguised') {
         state.stats.kills += 1;
         state.levelKills += 1;
         let totalRads = e.radDrop;
-        if (state.crown === 'blood') totalRads = Math.max(0, Math.floor(totalRads * 0.65));
+        if (state.crown === 'blood') totalRads = Math.max(0, totalRads - 1);
         const bigRads = Math.floor(totalRads / 10);
         const smallRads = totalRads % 10;
         for (let r = 0; r < bigRads; r++) {
@@ -1539,34 +2200,15 @@ export function checkPortalTrigger(
     }
   }
 
-  const next = getNextAreaTransition(state.areaCode, state.loop);
-  const carryingCursed = Boolean(state.player.weapons[0]?.cursed || state.player.weapons[1]?.cursed);
-  const targetArea: AreaCode =
-    state.areaCode === '3-3' && carryingCursed ? '4-?' : next.areaCode;
-
-  state.portal.active = true;
-  state.portal.x = safe.x;
-  state.portal.y = safe.y;
-  state.portal.timer = 0;
-  state.portal.entered = false;
-  state.portal.enterTicks = 0;
-  state.portal.carved = false;
-  state.portal.targetArea = targetArea;
-  state.portal.nextLoop = next.loop;
-
-  emitEvent(state, {
-    type: 'portal_open',
-    x: safe.x,
-    y: safe.y,
-    targetArea,
+  // Authentic ~30-tick portal spawn delay (1.0s pause after final kill before sprPortalClear blast!)
+  pendingPortalDelays.set(state, {
+    mapRef: state.map,
+    delayTicks: PORTAL_SPAWN_DELAY_TICKS - 1,
+    anchorX,
+    anchorY,
+    triggeredByAnomaly,
   });
-  emitEvent(state, {
-    type: 'sfx',
-    sound: state.player.mutant === 'horror' && anomalyThreshold > 0 ? 'sndHorrorPortal' : 'sndPortalOpen',
-    x: safe.x,
-    y: safe.y,
-  });
-  return 'portal_opened';
+  return 'none';
 }
 
 export { AREAS };
