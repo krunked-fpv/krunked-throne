@@ -1,5 +1,10 @@
-import type { AreaCode, InputFrame, SimState } from '@/contracts';
-import { CROWNS, CROWN_IDS } from '@/data';
+import type { AreaCode, CrownId, InputFrame, SimState } from '@/contracts';
+import {
+  AMMO_PICKUP_AMOUNT,
+  CROWNS,
+  POST_LOOP_CROWN_IDS,
+  PRE_LOOP_CROWN_IDS,
+} from '@/data';
 import {
   SeededRng,
   emitEvent,
@@ -10,15 +15,21 @@ import {
   stepPickups,
   stepPortal,
 } from '@/sim/core';
-import { stepPlayerAndCombat } from '@/sim/combat';
+import { NON_MELEE_AMMO_TYPES, spawnPickup, stepPlayerAndCombat } from '@/sim/combat';
 import {
   applyMutationSelection,
   checkPortalTrigger,
   loadAreaIntoState,
+  pickTierWeaponId,
 } from '@/sim/progression';
-import { getAreaRuntime, getRunRuntime, populateAreaEntities } from '@/sim/entities';
+import {
+  getAreaRuntime,
+  getEffectiveLoop,
+  getRunRuntime,
+  populateAreaEntities,
+} from '@/sim/entities';
 import { openBossPortal, triggerThroneVictory } from './bosses';
-import { stepEntitiesAndAi } from './enemies';
+import { stepEntitiesAndAi, wakeVaultStatues } from './enemies';
 
 /**
  * Syncs prevX/prevY to current x/y across all interpolated entities so 60/120 FPS rendering
@@ -57,10 +68,87 @@ function syncPrevPositions(state: SimState): void {
  * - Crown Vault pedestal (after Crown Guardians cleared) -> cycle active Crown & apply/revert immediate hooks
  * - 7-3 Broken Throne (`sprThroneCorpseIdle`) -> sit on Throne (`victory_throne`)
  */
+function openSpecialChestFallback(state: SimState, rng: SeededRng): void {
+  const player = state.player;
+  if (!player.alive) return;
+
+  for (let i = 0; i < state.props.length; i++) {
+    const p = state.props[i]!;
+    if (p.opened) continue;
+    if (
+      p.kind !== 'giant_weapon_chest' &&
+      p.kind !== 'giant_ammo_chest' &&
+      p.kind !== 'pizza_chest' &&
+      p.kind !== 'health_chest'
+    ) {
+      continue;
+    }
+    const touchDist = player.radius + p.radius + 6;
+    if (Math.hypot(player.x - p.x, player.y - p.y) > touchDist) continue;
+
+    p.opened = true;
+    p.interactPrompt = undefined;
+    if (p.openSprite) p.sprite = p.openSprite;
+    emitEvent(state, { type: 'sfx', sound: 'sndWeaponChest', x: p.x, y: p.y });
+
+    if (p.kind === 'giant_weapon_chest') {
+      for (let k = 0; k < 12; k++) {
+        const ang = (k / 12) * Math.PI * 2 + rng.range(-0.12, 0.12);
+        const r = rng.range(14, 34);
+        const wId = pickTierWeaponId(state, rng);
+        spawnPickup(state, 'weapon', p.x + Math.cos(ang) * r, p.y + Math.sin(ang) * r, { weaponId: wId }, rng);
+      }
+      emitEvent(state, { type: 'pickup_text', x: p.x, y: p.y - 18, text: 'GIANT WEAPON CHEST!', color: '#ffd700' });
+    } else if (p.kind === 'giant_ammo_chest') {
+      for (let k = 0; k < 16; k++) {
+        const ang = (k / 16) * Math.PI * 2 + rng.range(-0.15, 0.15);
+        const r = rng.range(12, 32);
+        const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
+        spawnPickup(
+          state,
+          'ammo',
+          p.x + Math.cos(ang) * r,
+          p.y + Math.sin(ang) * r,
+          { ammoType, value: AMMO_PICKUP_AMOUNT[ammoType] },
+          rng,
+        );
+      }
+      emitEvent(state, { type: 'pickup_text', x: p.x, y: p.y - 18, text: 'GIANT AMMO CHEST!', color: '#ffe066' });
+    } else if (p.kind === 'pizza_chest') {
+      for (let k = 0; k < 2; k++) {
+        const ammoType = rng.pick(NON_MELEE_AMMO_TYPES);
+        spawnPickup(state, 'ammo', p.x + (k === 0 ? -8 : 8), p.y, { ammoType, value: AMMO_PICKUP_AMOUNT[ammoType] }, rng);
+      }
+      if (state.crown !== 'life') {
+        spawnPickup(state, 'hp', p.x, p.y - 6, { value: 2 }, rng);
+      }
+    } else if (p.kind === 'health_chest') {
+      for (let k = 0; k < 2; k++) {
+        spawnPickup(state, 'hp', p.x + (k === 0 ? -7 : 7), p.y, { value: 2 }, rng);
+      }
+    }
+  }
+}
+
 function handleSecretInteractions(state: SimState, input: InputFrame, rng: SeededRng): boolean {
   if (!input.pickupPressed || !state.player.alive) return false;
   const player = state.player;
   const rt = getAreaRuntime(state);
+
+  // 0A. Y.V.'s Crib (`$$$`): [E] on any parked Golden Car (`venuz_car_exit`) returns to cribReturnArea!
+  if (state.areaCode === '$$$') {
+    for (let i = 0; i < state.props.length; i++) {
+      const p = state.props[i]!;
+      if (p.kind !== 'venuz_car_exit') continue;
+      if (Math.hypot(player.x - p.x, player.y - p.y) <= 38) {
+        const target = state.cribReturnArea ?? '1-1';
+        state.cribReturnArea = null;
+        emitEvent(state, { type: 'sfx', sound: 'sndPortalEnter', x: p.x, y: p.y });
+        loadAreaIntoState(state, target, state.loop, populateAreaEntities);
+        return true;
+      }
+    }
+  }
 
   // 0. 7-3 Broken Throne -> sit on Throne to claim victory!
   if (state.areaCode === '7-3' && rt.brokenThronePropId !== null) {
@@ -117,8 +205,8 @@ function handleSecretInteractions(state: SimState, input: InputFrame, rng: Seede
     }
   }
 
-  // 3. Loop 1+ Open IDPD Van -> hijack to I.D.P.D. HQ (hq-1)
-  if (!state.portal.entered && state.loop > 0) {
+  // 3. Loop 1+ / Hard Mode Open IDPD Van -> hijack to I.D.P.D. HQ (hq-1)
+  if (!state.portal.entered && getEffectiveLoop(state) > 0) {
     for (let i = 0; i < state.enemies.length; i++) {
       const e = state.enemies[i]!;
       if (e.defId === 'idpd_van' && e.hp > 0 && e.aiState === 'open') {
@@ -137,7 +225,7 @@ function handleSecretInteractions(state: SimState, input: InputFrame, rng: Seede
     }
   }
 
-  // 4. Crown Vault pedestal -> select/cycle active Crown & apply/revert immediate Crown stat hooks
+  // 4. Crown Vault pedestal -> select/cycle Pre-Loop (L0) vs Post-Loop (L1+) Crowns & wake dormant Vault Statues!
   if (state.areaCode === 'vault') {
     const guardiansAlive = state.enemies.some((e) => !e.friendly && e.hp > 0);
     if (!guardiansAlive) {
@@ -145,8 +233,10 @@ function handleSecretInteractions(state: SimState, input: InputFrame, rng: Seede
       if (pedestal && Math.hypot(player.x - pedestal.x, player.y - pedestal.y) <= 36) {
         const runRt = getRunRuntime(state);
         const prevCrown = state.crown;
-        const curIdx = CROWN_IDS.indexOf(prevCrown);
-        const nextCrown = CROWN_IDS[(curIdx + 1) % CROWN_IDS.length]!;
+        const vaultPool: readonly CrownId[] =
+          state.loop === 0 ? ['none', ...PRE_LOOP_CROWN_IDS] : ['none', ...POST_LOOP_CROWN_IDS];
+        const curIdx = vaultPool.indexOf(prevCrown);
+        const nextCrown = vaultPool[(curIdx + 1) % vaultPool.length]!;
 
         // Revert previous Crown immediate effects (e.g. Crown of Death +1 maxHp restore)
         if (prevCrown === 'death' && runRt.crownDeathPenalty > 0) {
@@ -173,6 +263,9 @@ function handleSecretInteractions(state: SimState, input: InputFrame, rng: Seede
             color: '#ffd700',
           });
         }
+
+        // Picking a Crown wakes any dormant Vault Statues into Crown Guardians!
+        wakeVaultStatues(state, rng);
 
         emitEvent(state, { type: 'sfx', sound: 'sndCrownAppear', x: pedestal.x, y: pedestal.y });
         emitEvent(state, {
@@ -284,9 +377,10 @@ export function stepSimulation(state: SimState, input: InputFrame): void {
         rng,
       );
 
-      // Hostile enemies, all 5 Bosses, special death payoffs, destructible props, IDPD waves & contact damage
+      // Hostile enemies, all 9 Bosses, special death payoffs, destructible props, IDPD waves & contact damage
       // (stepFriendlies=false because stepPlayerAndCombat already stepped Rebel Allies & Plant Saplings!)
       stepEntitiesAndAi(state, rng, { stepFriendlies: false });
+      openSpecialChestFallback(state, rng);
 
       // Catch [E] interactions if player stepped into range during this tick
       if (!secretConsumedE && state.phase === 'playing') {
@@ -312,10 +406,16 @@ export function stepSimulation(state: SimState, input: InputFrame): void {
   rolloverPlayerRads(state);
 
   // 5. Persist RNG state BEFORE checkPortalTrigger (which may invoke loadAreaIntoState!)
-  // Skip checkPortalTrigger while waiting for player to sit on 7-3 broken Throne (prevents unintended 0-1 portal!)
+  // Skip checkPortalTrigger while waiting for player to sit on 7-3 broken Throne, inside Y.V.'s Crib (`$$$`),
+  // inside HQ-3 Captain's Office (`hq-3`), or while dormant Vault Statues await awakening in `vault`!
   state.rngState = rng.getState();
   const awaitingThroneSit = getAreaRuntime(state).brokenThronePropId !== null;
-  const portalOutcome = awaitingThroneSit
+  const skipNormalPortal =
+    awaitingThroneSit ||
+    state.areaCode === '$$$' ||
+    state.areaCode === 'hq-3' ||
+    (state.areaCode === 'vault' && state.props.some((p) => p.kind === 'vault_statue'));
+  const portalOutcome = skipNormalPortal
     ? 'none'
     : checkPortalTrigger(state, rng, populateAreaEntities);
   if (portalOutcome !== 'area_loaded') {

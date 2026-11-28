@@ -348,10 +348,9 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
     expect(state.portal.active).toBe(true);
     expect(state.portal.targetArea).toBe('vault');
 
-    // Enter Crown Vault -> 2 Crown Guardians spawn
+    // Enter Crown Vault -> 2 dormant Vault Statues spawn and wake into 2 Crown Guardians on Crown pick!
     loadAreaIntoState(state, 'vault', state.loop, populateAreaEntities);
-    const guardians = state.enemies.filter((e) => e.defId === 'crown_guardian');
-    expect(guardians.length).toBe(2);
+    expect(state.props.filter((p) => p.kind === 'vault_statue').length).toBe(2);
 
     // Vault pedestal must survive stray combat damage so Crown cycling can never be softlocked
     const pedestal = state.props.find((p) => p.kind === 'proto_statue')!;
@@ -361,15 +360,18 @@ describe('secret exits & Crown Vault end-to-end parity', () => {
     damageProp(state, pedestal, 500, pedRng);
     state.rngState = pedRng.getState();
 
-    // Clear guardians -> Vault pedestal stays indestructible, cycles Crown via [E], and Vault exit returns to 3-3!
-    state.enemies = [];
+    // Pick Crown via [E] -> wakes 2 Crown Guardians!
     state.player.x = pedestal.x;
     state.player.y = pedestal.y;
     const crownBefore = state.crown;
-
     stepSimulation(state, makeInput({ pickupPressed: true }));
     expect(pedestal.hp).toBe(pedestal.maxHp);
     expect(state.crown).not.toBe(crownBefore);
+    expect(state.enemies.filter((e) => e.defId === 'crown_guardian').length).toBe(2);
+
+    // Clear guardians -> Vault exit returns to 3-3!
+    state.enemies = [];
+    stepSimulation(state, makeInput());
     expect(state.portal.active).toBe(true);
     expect(state.portal.targetArea).toBe('3-3');
   });
@@ -516,14 +518,14 @@ describe('enemy AI & roster 1:1 NT parity', () => {
 
     for (let t = 0; t < 6; t++) stepSimulation(state, makeInput());
 
-    expect(state.enemies.filter((e) => e.defId === 'maggot').length).toBe(3);
+    expect(state.enemies.filter((e) => e.defId === 'maggot').length).toBe(6);
     expect(state.projectiles.filter((p) => p.team === 'enemy' && p.sprite === 'sprScorpionBullet').length).toBeGreaterThanOrEqual(6);
     expect(state.pickups.filter((p) => p.kind === 'ammo').length).toBeGreaterThanOrEqual(2);
     expect(state.pickups.filter((p) => p.kind === 'hp').length).toBeGreaterThanOrEqual(1);
     expect(state.pickups.filter((p) => p.kind === 'weapon').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('Big Rat vomits live Green Rats, Buff Gator shoots splitting Flak, Assassin destroys (not reflects) shots', () => {
+  it('Big Rat vomits live Green Rats, Buff Gator shoots splitting Flak, Assassin reflects shots', () => {
     const state = createRunState({ mutant: 'fish', seed: 4414 });
     state.player.godMode = true;
     carveOpenRoom(state, 10);
@@ -555,8 +557,8 @@ describe('enemy AI & roster 1:1 NT parity', () => {
       const slash = state.projectiles.find((p) => p.team === 'enemy' && p.kind === 'melee_slash');
       if (slash) {
         sawAssassinSlash = true;
-        expect(slash.deflectsProjectiles).toBe(false);
-        expect(slash.destroysProjectiles).toBe(true);
+        expect(slash.deflectsProjectiles).toBe(true);
+        expect(slash.destroysProjectiles).toBe(false);
       }
     }
 
@@ -932,10 +934,8 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
     const pedestal = state.props.find((p) => p.kind === 'proto_statue')!;
     expect(pedestal).toBeDefined();
     expect(pedestal.sprite).toBe('sprCrownPedIdle');
-    // Prompt stays hidden while Crown Guardians are still alive!
-    expect(pedestal.interactPrompt).toBeUndefined();
-    stepSimulation(state, makeInput());
-    expect(pedestal.interactPrompt).toBeUndefined();
+    // Dormant vault_statue props wake into Crown Guardians when a Crown is picked!
+    expect(state.props.filter((p) => p.kind === 'vault_statue').length).toBe(2);
     // Zero stray sprPillar props in Crown Vault!
     expect(state.props.some((p) => p.sprite === 'sprPillar')).toBe(false);
     // Vault never spawns stray regular chests (excluded per 64c073e); any vault chest present uses sprProtoChest!
@@ -947,11 +947,17 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
       expect(c.sprite).toBe('sprProtoChest');
     }
 
+    // Wake Vault Guardians by picking a Crown -> prompt hides while guardians live!
+    state.player.x = pedestal.x;
+    state.player.y = pedestal.y;
+    stepSimulation(state, makeInput({ pickupPressed: true }));
+    expect(state.enemies.filter((e) => e.defId === 'crown_guardian').length).toBe(2);
+    stepSimulation(state, makeInput());
+    expect(pedestal.interactPrompt).toBeUndefined();
+
     // Clear guardians -> prompt appears, exit portal opens in alcove >= 110px away from pedestal and emits '5-3' on portal_open!
     drainEvents(state);
     state.enemies = [];
-    state.player.x = pedestal.x;
-    state.player.y = pedestal.y;
     stepSimulation(state, makeInput());
     expect(pedestal.interactPrompt).toBe('[E] SWITCH CROWN');
     expect(state.portal.active).toBe(true);
@@ -964,15 +970,15 @@ describe('Wave 2 worldgen, secrets, Vault, AI & boss polish regressions', () => 
     const distFromPed = Math.hypot(state.portal.x - pedestal.x, state.portal.y - pedestal.y);
     expect(distFromPed).toBeGreaterThanOrEqual(110);
 
-    // Cycle Crowns via [E]: verify Crown of Death -1/+1 maxHp and Crown of Destiny once-per-run pendingLevelUps!
-    const baseMaxHp = state.player.maxHp;
+    // Cycle Loop-0 Pre-Loop Crowns via [E]: verify Crown of Death -1/+1 maxHp and Crown of Destiny once-per-run pendingLevelUps!
+    const baseMaxHp = state.crown === 'death' ? state.player.maxHp + 1 : state.player.maxHp;
     const basePending = state.pendingLevelUps;
-    let sawDeathPenalty = false;
+    let sawDeathPenalty = state.crown === 'death';
     let sawDeathRevert = false;
-    let destinyGrants = 0;
+    let destinyGrants = state.crown === 'destiny' ? 1 : 0;
 
-    // Cycle through ALL 13 crowns twice to prove Destiny only grants ONCE and Death cleanly reverts!
-    for (let step = 0; step < 26; step++) {
+    // Cycle through Loop-0 Pre-Loop crowns twice (7 states * 2 = 14 steps) to prove Destiny only grants ONCE and Death cleanly reverts!
+    for (let step = 0; step < 14; step++) {
       const prevCrown = state.crown;
       const prevPending = state.pendingLevelUps;
       stepSimulation(state, makeInput({ pickupPressed: true }));

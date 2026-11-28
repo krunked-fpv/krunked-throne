@@ -641,9 +641,7 @@ export function getDefaultAreaGenParams(
         roundedRooms: true,
       };
       break;
-    case 'hq-1': // IDPD HQ
-    case 'hq-2': // Wave 2B
-    case 'hq-3': // Wave 2B
+    case 'hq-1': // IDPD HQ 1
       base = {
         width: 66,
         height: 66,
@@ -669,30 +667,82 @@ export function getDefaultAreaGenParams(
         pillarChance: 0.72,
       };
       break;
-    case '$$$': // Wave 2B: Y.V.'s Crib safe treasure room
+    case 'hq-2': // IDPD HQ 2: rectilinear office corridors & rooms
       base = {
-        width: 44,
-        height: 44,
-        targetFloors: 140,
-        walkerCount: 2,
-        darkness: 0,
-        turnChance: 0.25,
-        reverseChance: 0.04,
-        stamp2Chance: 0.6,
-        stamp3Chance: 0.3,
-        stamp4Chance: 0.1,
-        spawnChance: 0.04,
-        despawnChance: 0.02,
-        carpetChance: 0.35,
+        width: 64,
+        height: 64,
+        targetFloors: 260,
+        walkerCount: 3,
+        darkness: 0.1,
+        turnChance: 0.22,
+        reverseChance: 0.03,
+        stamp2Chance: 0.44,
+        stamp3Chance: 0.34,
+        stamp4Chance: 0.06,
+        spawnChance: 0.07,
+        despawnChance: 0.04,
+        carpetChance: 0,
         rectilinear: true,
-        minRunLen: 3,
-        maxRunLen: 5,
+        minRunLen: 4,
+        maxRunLen: 8,
         corridorWidth: 3,
-        roomChance: 0.65,
-        roomMinSize: 5,
-        roomMaxSize: 7,
-        alcoveChance: 0.2,
-        pillarChance: 0.15,
+        roomChance: 0.56,
+        roomMinSize: 4,
+        roomMaxSize: 6,
+        alcoveChance: 0.24,
+        pillarChance: 0.66,
+      };
+      break;
+    case 'hq-3': // IDPD HQ 3: fixed symmetrical Captain's Office setpiece
+      base = {
+        width: 32,
+        height: 38,
+        targetFloors: 460,
+        walkerCount: 1,
+        darkness: 0.08,
+        turnChance: 0,
+        reverseChance: 0,
+        stamp2Chance: 0,
+        stamp3Chance: 0,
+        stamp4Chance: 0,
+        spawnChance: 0,
+        despawnChance: 0,
+        carpetChance: 0,
+        rectilinear: true,
+        minRunLen: 4,
+        maxRunLen: 4,
+        corridorWidth: 3,
+        roomChance: 0,
+        roomMinSize: 4,
+        roomMaxSize: 4,
+        alcoveChance: 0,
+        pillarChance: 0,
+      };
+      break;
+    case '$$$': // Y.V.'s Crib: fixed safe Living Room + North Garage setpiece
+      base = {
+        width: 30,
+        height: 36,
+        targetFloors: 430,
+        walkerCount: 1,
+        darkness: 0,
+        turnChance: 0,
+        reverseChance: 0,
+        stamp2Chance: 0,
+        stamp3Chance: 0,
+        stamp4Chance: 0,
+        spawnChance: 0,
+        despawnChance: 0,
+        carpetChance: 0,
+        rectilinear: true,
+        minRunLen: 4,
+        maxRunLen: 4,
+        corridorWidth: 3,
+        roomChance: 0,
+        roomMinSize: 4,
+        roomMaxSize: 4,
+        alcoveChance: 0,
+        pillarChance: 0,
       };
       break;
   }
@@ -707,7 +757,13 @@ export function getDefaultAreaGenParams(
     base.darkness = Math.max(base.darkness, 0.45);
   }
 
-  if (areaCode !== '7-3' && areaCode !== 'vault' && areaCode !== '0-1') {
+  if (
+    areaCode !== '7-3' &&
+    areaCode !== 'vault' &&
+    areaCode !== '0-1' &&
+    areaCode !== '$$$' &&
+    areaCode !== 'hq-3'
+  ) {
     const scaledFloors = Math.round(base.targetFloors * loopScale);
     const maxPlayableArea = (base.width - OUTER_MARGIN * 2) * (base.height - OUTER_MARGIN * 2);
     if (scaledFloors > maxPlayableArea * 0.52) {
@@ -1565,6 +1621,58 @@ function recountWalkable(map: WorldMap): void {
  * - 100% 4-connected BFS flood-fill connectivity
  * - Accurate walkableCount and wallMask autotiling
  */
+/**
+ * Generates Y.V.'s Crib (`$$$`): fixed safe setpiece (no random walker).
+ * - South Living Room (~18x14 tiles) for TV, Couch, Yung Cuz, Rug & Giant Chests.
+ * - Wide central doorway connecting north.
+ * - North Garage (~16x10 tiles) for parked Golden Cars.
+ */
+function buildYvCrib(map: WorldMap, _rng: SeededRng): { spawnTx: number; spawnTy: number } {
+  const cx = Math.floor(map.width / 2);
+
+  // North Garage: 16x10 tiles (cx-8..cx+7, y=4..13)
+  carveRectSafe(map, cx - 8, 4, cx + 7, 13, TileType.Floor);
+
+  // Wide connecting doorway: 6 tiles wide (cx-3..cx+2, y=14..16)
+  carveRectSafe(map, cx - 3, 14, cx + 2, 16, TileType.Floor);
+
+  // South Living Room: 18x14 tiles (cx-9..cx+8, y=17..30)
+  carveRectSafe(map, cx - 9, 17, cx + 8, 30, TileType.Floor);
+
+  return { spawnTx: cx, spawnTy: 28 };
+}
+
+/**
+ * Generates I.D.P.D. HQ-3 (`hq-3`): fixed symmetrical Captain's Office chamber (~22x28 tiles).
+ * - South entry antechamber with 2 flanking office alcoves (HQ props + weapon/ammo chests).
+ * - Wide central open arena for Captain's Fist Charges & destructible cover.
+ * - North executive dais for Big TV, Captain's Desk, Last Chair, Messenger & Captain.
+ */
+function buildIdpdHq3(map: WorldMap, _rng: SeededRng): { spawnTx: number; spawnTy: number } {
+  const cx = Math.floor(map.width / 2);
+
+  // North Executive Dais: 16x8 tiles (cx-8..cx+7, y=5..12)
+  carveRectSafe(map, cx - 8, 5, cx + 7, 12, TileType.Floor);
+
+  // Central Open Arena: 22x12 tiles (cx-11..cx+10, y=13..24)
+  carveRectSafe(map, cx - 11, 13, cx + 10, 24, TileType.Floor);
+
+  // Wide central throat from antechamber to arena (cx-3..cx+2, y=25..26)
+  carveRectSafe(map, cx - 3, 25, cx + 2, 26, TileType.Floor);
+
+  // South Entry Antechamber: 10x6 tiles (cx-5..cx+4, y=27..32)
+  carveRectSafe(map, cx - 5, 27, cx + 4, 32, TileType.Floor);
+
+  // West & East flanking office alcoves (5x6 tiles each) with 3-tile side doorways
+  carveRectSafe(map, cx - 11, 27, cx - 7, 32, TileType.Floor);
+  carveRectSafe(map, cx - 6, 28, cx - 6, 30, TileType.Floor);
+
+  carveRectSafe(map, cx + 6, 27, cx + 10, 32, TileType.Floor);
+  carveRectSafe(map, cx + 5, 28, cx + 5, 30, TileType.Floor);
+
+  return { spawnTx: cx, spawnTy: 30 };
+}
+
 export function generateWorldMap(
   areaCode: AreaCode,
   biome: BiomeId,
@@ -1575,7 +1683,12 @@ export function generateWorldMap(
   const loopSafe = Math.max(0, Math.floor(loop));
   const loopScale = Math.min(1.6, 1 + loopSafe * 0.18);
   const loopWalkers = Math.min(3, loopSafe);
-  const isFixedLayout = areaCode === '7-3' || areaCode === 'vault' || areaCode === '0-1';
+  const isFixedLayout =
+    areaCode === '7-3' ||
+    areaCode === 'vault' ||
+    areaCode === '0-1' ||
+    areaCode === '$$$' ||
+    areaCode === 'hq-3';
 
   const profile = getDefaultAreaGenParams(areaCode, biome, loop);
   if (opts?.targetFloors !== undefined) {
@@ -1619,6 +1732,10 @@ export function generateWorldMap(
     spawn = buildCrownVault(map, rng);
   } else if (areaCode === '2-?') {
     spawn = buildPizzaSewers(map, rng);
+  } else if (areaCode === '$$$') {
+    spawn = buildYvCrib(map, rng);
+  } else if (areaCode === 'hq-3') {
+    spawn = buildIdpdHq3(map, rng);
   } else {
     spawn = runDrunkenWalkers(map, profile, rng);
   }
