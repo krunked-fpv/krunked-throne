@@ -821,11 +821,16 @@ function spawnBiomeProps(
   if (areaCode === 'vault') {
     const cx = Math.floor(map.width / 2);
     const pedPos = tileToWorldCenter(cx, 17, ts);
+    let protoCount = 0;
+    let hasWestChest = false;
+    let hasWeaponChest = false;
     for (let i = 0; i < state.props.length; i++) {
       const p = state.props[i]!;
       if (p.kind === 'weapon_chest' || p.kind === 'big_weapon_chest' || p.kind === 'ammo_chest') {
         p.sprite = 'sprProtoChest';
         p.openSprite = 'sprProtoChestOpen';
+        protoCount += 1;
+        if (p.kind === 'weapon_chest' || p.kind === 'big_weapon_chest') hasWeaponChest = true;
       }
       if (
         (p.kind === 'weapon_chest' ||
@@ -840,6 +845,26 @@ function spawnBiomeProps(
         p.x = reloc.x;
         p.y = reloc.y;
       }
+      if (
+        (p.kind === 'weapon_chest' || p.kind === 'big_weapon_chest' || p.kind === 'ammo_chest') &&
+        p.x < pedPos.x
+      ) {
+        hasWestChest = true;
+      }
+    }
+    // Crown Vault supplies its own symmetrical Proto Chests (excluded from generic spawnLevelChests)
+    while (protoCount < 2) {
+      const offsetSide = !hasWestChest ? -6 : 6;
+      const wantWeapon = !hasWeaponChest && state.crown !== 'love';
+      const kind: PropKind = wantWeapon ? 'weapon_chest' : 'ammo_chest';
+      const target = tileToWorldCenter(cx + offsetSide, 20, ts);
+      const pos = findNearestFloor(map, target.x, target.y, 6);
+      addProp(state, kind, pos.x, pos.y, 'sprProtoChest', 10, 8, false, {
+        openSprite: 'sprProtoChestOpen',
+      });
+      protoCount += 1;
+      if (offsetSide < 0) hasWestChest = true;
+      if (wantWeapon) hasWeaponChest = true;
     }
   } else if (areaCode === '3-?') {
     let goldCount = 0;
@@ -1520,7 +1545,7 @@ export function populateAreaEntities(state: SimState, rng: SeededRng): void {
       p.kind === 'rad_canister' ||
       p.kind === 'idpd_canister',
   );
-  if (!hasChest && state.areaCode !== '0-1' && state.areaCode !== '7-3') {
+  if (!hasChest && state.areaCode !== '0-1' && state.areaCode !== '7-3' && state.areaCode !== 'vault') {
     spawnLevelChests(state, rng);
   }
 
