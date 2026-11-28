@@ -685,6 +685,58 @@ export class PxCanvas {
   }
 
   /**
+   * Stamps a crisp 1x integer ASCII pixel-art grid directly into this PxCanvas.
+   * '.' and ' ' leave destination pixels untouched.
+   */
+  grid(x: number, y: number, rows: readonly string[], palette: Record<string, string>): void {
+    const ox = Math.round(x);
+    const oy = Math.round(y);
+    for (let r = 0; r < rows.length; r++) {
+      const py = oy + r;
+      if (py < 0 || py >= this.h) continue;
+      const line = rows[r]!;
+      const rowOff = py * this.w;
+      for (let c = 0; c < line.length; c++) {
+        const ch = line[c]!;
+        if (ch === '.' || ch === ' ') continue;
+        const px = ox + c;
+        if (px < 0 || px >= this.w) continue;
+        const col = palette[ch];
+        if (col) {
+          this.pixels[rowOff + px] = this.idx(col);
+        }
+      }
+    }
+  }
+
+  /** Draws a crisp 1px integer midpoint circle ring into this PxCanvas. */
+  pixelRing(cx: number, cy: number, radius: number, color: string): void {
+    const icx = Math.round(cx);
+    const icy = Math.round(cy);
+    const r = Math.max(1, Math.round(radius));
+    let x = r;
+    let y = 0;
+    let err = 1 - r;
+    while (x >= y) {
+      this.set(icx + x, icy + y, color);
+      this.set(icx + y, icy + x, color);
+      this.set(icx - y, icy + x, color);
+      this.set(icx - x, icy + y, color);
+      this.set(icx - x, icy - y, color);
+      this.set(icx - y, icy - x, color);
+      this.set(icx + y, icy - x, color);
+      this.set(icx + x, icy - y, color);
+      y += 1;
+      if (err < 0) {
+        err += 2 * y + 1;
+      } else {
+        x -= 1;
+        err += 2 * (y - x + 1);
+      }
+    }
+  }
+
+  /**
    * POST-PROCESS: Wraps the ENTIRE assembled opaque silhouette in ONE clean 1px
    * pixel-art outline (with selective lighter outline on top-lit edges when `topOutlineColor` is provided!).
    * Eliminates internal overlapping-oval outlines forever!
