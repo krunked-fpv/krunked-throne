@@ -329,52 +329,62 @@ function drawMutant1x(
 
     case 7: {
       // STEROIDS: Iconic buff warm-tan shirtless bodybuilder!
-      // Broad muscular shoulders, bare pecs & abs, bald head + round glasses (A) or brown cowboy hat (B), blue-gray shorts!
-      // Chunky muscular bare arms on both sides
-      p.rect(cx - 7, ty - 2, 3, 6, body);
-      p.rect(cx - 7, ty - 2, 2, 3, bodyHi);
-      p.rect(cx - 7, ty + 2, 3, 2, bodyDark);
-      p.rect(cx + 4, ty - 2, 3, 6, body);
-      p.rect(cx + 5, ty - 2, 2, 3, bodyHi);
-      p.rect(cx + 4, ty + 2, 3, 2, bodyDark);
+      // Broad muscular shoulders, bare pecs & abs, bald head + compact dark-rimmed glasses (A) or brown cowboy hat (B), blue shorts!
+      const skinMid = hurtPureWhite ? '#ffffff' : hurtPink ? '#ffd4d4' : '#e49f68';
+      const skinHi = hurtPureWhite ? '#ffffff' : hurtPink ? '#ffffff' : '#fad0a0';
+      const skinShade = hurtPureWhite ? '#e8e8e8' : hurtPink ? '#e08088' : '#b86c3c';
+      const muscleLine = hurtPureWhite ? '#d8d8d8' : hurtPink ? '#c86870' : '#8c4c28';
+      // Broad flexed bare muscular arms on both sides
+      p.rect(cx - 7, ty - 2, 3, 6, skinMid);
+      p.rect(cx - 7, ty - 2, 2, 2, skinHi);
+      p.rect(cx - 7, ty + 2, 3, 2, skinShade);
+      p.rect(cx + 4, ty - 2, 3, 6, skinMid);
+      p.rect(cx + 5, ty - 2, 2, 2, skinHi);
+      p.rect(cx + 4, ty + 2, 3, 2, skinShade);
       // Huge muscular shirtless torso
-      p.rect(cx - 5, ty - 3, 10, 7, body);
-      // Sculpted sunlit pecs & dark muscle crease
-      p.rect(cx - 4, ty - 2, 3, 2, bodyHi);
-      p.rect(cx + 1, ty - 2, 3, 2, bodyHi);
-      p.rect(cx - 4, ty, 8, 1, det); // pec under-line
-      p.rect(cx, ty - 2, 1, 5, det); // sternum / ab center line
-      p.rect(cx - 3, ty + 2, 2, 1, bodyDark);
-      p.rect(cx + 1, ty + 2, 2, 1, bodyDark);
-      // Blue-gray shorts + belt buckle
+      p.rect(cx - 5, ty - 3, 10, 7, skinMid);
+      // Sculpted sunlit pecs & warm shadow muscle crease
+      p.rect(cx - 4, ty - 2, 3, 2, skinHi);
+      p.rect(cx + 1, ty - 2, 3, 2, skinHi);
+      p.rect(cx - 4, ty, 3, 1, muscleLine);
+      p.rect(cx + 1, ty, 3, 1, muscleLine);
+      p.rect(cx, ty - 2, 1, 5, muscleLine);
+      p.rect(cx - 3, ty + 2, 2, 1, skinShade);
+      p.rect(cx + 1, ty + 2, 2, 1, skinShade);
+      // Blue shorts + brass/gold belt buckle
       p.rect(cx - 5, ty + 3, 10, 3, shorts);
-      p.rect(cx - 1, ty + 3, 2, 2, isB ? det : '#98a6bc');
-      // Bald muscular head
-      p.rect(cx - 4, ty - 7, 8, 5, body);
-      p.rect(cx - 3, ty - 8, 6, 2, bodyHi);
+      p.rect(cx - 4, ty + 3, 3, 1, hurtPureWhite ? '#ffffff' : '#5878b4');
+      p.rect(cx - 1, ty + 3, 2, 2, isB ? det : '#e8c448');
+      // Compact muscular bald cranium (warm sunlit tan — never a white owl face!)
+      p.rect(cx - 4, ty - 7, 8, 5, skinMid);
+      p.rect(cx - 3, ty - 8, 6, 2, skinHi);
+      p.rect(cx - 4, ty - 3, 8, 1, skinShade);
       if (isB && !hurtPureWhite) {
-        // Iconic brown cowboy hat from the reference video!
+        // Iconic brown cowboy hat from 21_paused.png / 11a_levelup.png!
         p.rect(cx - 6, ty - 7, 12, 2, acc);
         p.rect(cx - 4, ty - 9, 8, 3, acc);
         p.rect(cx - 3, ty - 9, 5, 1, accHi);
         p.rect(cx - 4, ty - 7, 8, 1, '#4c301c');
-        // Squinting fierce shades/eyes under brim
-        p.rect(cx - 3, ty - 5, 2, 2, INK);
-        p.rect(cx + 1, ty - 5, 2, 2, INK);
+        // Fierce dark squinting brow under hat brim
+        p.rect(cx - 3, ty - 5, 2, 1, INK);
+        p.rect(cx + 1, ty - 5, 2, 1, INK);
+        p.rect(cx - 2, ty - 4, 4, 1, skinHi);
       } else {
-        // Classic Steroids round white/black glasses!
-        p.rect(cx - 4, ty - 6, 3, 3, INK);
-        p.rect(cx + 1, ty - 6, 3, 3, INK);
-        p.rect(cx - 3, ty - 5, 2, 2, eye);
-        p.rect(cx + 1, ty - 5, 2, 2, eye);
-        p.set(cx - 2, ty - 4, pupil);
-        p.set(cx + 2, ty - 4, pupil);
-        p.set(cx - 3, ty - 5, accHi);
-        p.set(cx + 1, ty - 5, accHi);
-        p.rect(cx - 1, ty - 5, 2, 1, INK); // glasses bridge
+        // Classic Steroids compact dark-rimmed 2x2 spectacles with crisp 1px lens glint!
+        p.rect(cx - 3, ty - 6, 2, 2, INK);
+        p.rect(cx + 1, ty - 6, 2, 2, INK);
+        p.set(cx - 1, ty - 6, INK); // thin bridge
+        p.set(cx, ty - 6, INK);
+        if (!hurtPureWhite) {
+          p.set(cx - 3, ty - 6, '#d8f4ff'); // subtle 1px glass lens glint
+          p.set(cx + 1, ty - 6, '#d8f4ff');
+          p.set(cx - 2, ty - 5, '#465a70');
+          p.set(cx + 2, ty - 5, '#465a70');
+        }
+        // Stern furrowed brow & compact jaw shadow
+        p.rect(cx - 3, ty - 7, 6, 1, skinShade);
+        p.rect(cx - 1, ty - 4, 2, 1, muscleLine);
       }
-      // Gritty determined jaw grin
-      p.rect(cx - 2, ty - 3, 4, 1, '#f4efe6');
       break;
     }
 
